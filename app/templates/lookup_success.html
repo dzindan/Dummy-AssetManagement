@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Hand-Over Form Generated - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>Hand-Over Form Generated</h1>
+
+<div class="panel">
+  <p><span class="badge badge-added">Success</span></p>
+  <p>
+    User: <strong>{{ record['receiving_name'] }}</strong> ({{ record['user_no'] }}) &middot;
+    Type: {{ record['ho_type'] }} &middot;
+    Reason: {{ record['reason'] }}
+  </p>
+  <a class="btn" href="{{ url_for('history.download', record_id=record['id']) }}">Download .docx</a>
+  <a class="btn secondary" href="{{ url_for('lookup.index', q=record['user_no']) }}">Back to Lookup</a>
+  <a class="btn secondary" href="{{ url_for('history.index') }}">View History</a>
+</div>
+{% endblock %}

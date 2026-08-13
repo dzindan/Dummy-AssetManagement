@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Manage Assets - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>Manage Assets</h1>
+<p class="muted">
+  Every currently-assigned asset across all branches, in one filterable, editable list.
+  <a href="{{ url_for('asset_edit.duplicates') }}">Check Duplicates</a>
+</p>
+
+<div class="panel">
+  <form method="get" action="{{ url_for('asset_edit.index') }}">
+    <div class="field-row">
+      <div>
+        <label>Branch</label>
+        <div class="multiselect">
+          <button type="button" class="multiselect-toggle">
+            <span>{% if filters.branch_no %}{{ filters.branch_no | length }} selected{% else %}All branches{% endif %}</span>
+            <span class="nav-caret">&#9662;</span>
+          </button>
+          <div class="multiselect-panel">
+            {% for b in branches %}
+            <label><input type="checkbox" name="branch_no" value="{{ b['branch_no'] }}" {{ 'checked' if b['branch_no'] in filters.branch_no else '' }}> {{ b['eng_name'] }}</label>
+            {% endfor %}
+            {% if show_unresolved_option %}
+            <label><input type="checkbox" name="branch_no" value="{{ unresolved_value }}" {{ 'checked' if unresolved_value in filters.branch_no else '' }}> (Unresolved / unmatched)</label>
+            {% endif %}
+          </div>
+        </div>
+        <p class="muted" style="margin-top:0.3rem;">Only branches with at least one current asset are listed.</p>
+      </div>
+      <div>
+        <label>Device</label>
+        <div class="multiselect">
+          <button type="button" class="multiselect-toggle">
+            <span>{% if filters.device_name %}{{ filters.device_name | length }} selected{% else %}All devices{% endif %}</span>
+            <span class="nav-caret">&#9662;</span>
+          </button>
+          <div class="multiselect-panel">
+            {% for d in device_names %}
+            <label><input type="checkbox" name="device_name" value="{{ d }}" {{ 'checked' if d in filters.device_name else '' }}> {{ d }}</label>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      <div>
+        <label>Status</label>
+        <div class="multiselect">
+          <button type="button" class="multiselect-toggle">
+            <span>{% if filters.status %}{{ filters.status | length }} selected{% else %}All statuses{% endif %}</span>
+            <span class="nav-caret">&#9662;</span>
+          </button>
+          <div class="multiselect-panel">
+            {% for s in status_options %}
+            <label><input type="checkbox" name="status" value="{{ s }}" {{ 'checked' if s in filters.status else '' }}> {{ s }}</label>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      <div>
+        <label for="q">Search (serial, model, name, user ID, dept)</label>
+        <input type="text" id="q" name="q" value="{{ filters.q }}" placeholder="e.g. NGO LE GIANG">
+      </div>
+      <div style="flex: 0 0 auto; align-self: flex-end;"><button type="submit">Filter</button></div>
+      {% if filters.branch_no or filters.device_name or filters.status or filters.q %}
+      <div style="flex: 0 0 auto; align-self: flex-end;"><a class="btn secondary" href="{{ url_for('asset_edit.index') }}">Clear</a></div>
+      {% endif %}
+    </div>
+  </form>
+</div>
+
+{% if selected_branch %}
+<p class="muted">
+  Filtered to <strong>{{ selected_branch['eng_name'] }}</strong>
+  {% if selected_branch['branch_no'] %}
+  &middot; <a href="{{ url_for('branch_detail.detail', branch_no=selected_branch['branch_no']) }}">View trend chart &amp; Excel export for this branch</a>
+  {% else %}
+  &middot; these rows have no branch match - fix with an alias in <a href="{{ url_for('settings.index') }}">Settings</a>, or edit each row's Branch/Dept text directly below.
+  {% endif %}
+</p>
+{% endif %}
+
+<div class="panel">
+  <p class="muted">{{ total }} asset(s) match these filters &middot; page {{ page }} of {{ total_pages }}.</p>
+  {% if rows %}
+  <div class="actions" style="margin-top:0;">
+    <button type="button" class="danger" data-bulk-delete-trigger
+      data-bulk-delete-url="{{ url_for('asset_edit.bulk_delete') }}"
+      data-bulk-delete-checkbox-class="asset-row-checkbox"
+      data-bulk-delete-next="{{ request.full_path }}">Delete Selected</button>
+  </div>
+  {% endif %}
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr>
+        <th><input type="checkbox" data-select-all="asset-row-checkbox"></th>
+        <th>Branch</th><th>Device</th><th>Model</th><th>Serial/Tag</th><th>Status</th><th>Full Name</th><th>User ID</th><th>Handover Date</th><th>Period</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in rows %}
+      <tr>
+        <td><input type="checkbox" class="asset-row-checkbox" value="{{ a['id'] }}"></td>
+        <td>{{ a['branch_eng_name'] or a['branch_dept'] }}</td>
+        <td>{{ a['device_name'] }}</td>
+        <td>{{ a['model_device'] }}</td>
+        <td>{{ a['serial_tag'] }}</td>
+        <td>{{ a['status'] }}</td>
+        <td>{{ a['full_name'] }}</td>
+        <td>{{ a['user_id_raw'] }}</td>
+        <td>{{ a['handover_date'] }}</td>
+        <td>{{ a['period'] }}</td>
+        <td><a class="btn secondary" href="{{ url_for('asset_edit.edit', asset_id=a['id'], next=request.full_path) }}">Edit</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="11" class="muted">No assets match these filters.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+
+  {% if total_pages > 1 %}
+  <div class="field-row" style="margin-top:0.75rem; align-items:center;">
+    {% if page > 1 %}
+    <div style="flex: 0 0 auto;"><a class="btn secondary" href="{{ url_for('asset_edit.index', branch_no=filters.branch_no, device_name=filters.device_name, status=filters.status, q=filters.q, page=page-1) }}">&laquo; Previous</a></div>
+    {% endif %}
+    <div style="flex: 0 0 auto;"><span class="muted">Page {{ page }} of {{ total_pages }}</span></div>
+    {% if page < total_pages %}
+    <div style="flex: 0 0 auto;"><a class="btn secondary" href="{{ url_for('asset_edit.index', branch_no=filters.branch_no, device_name=filters.device_name, status=filters.status, q=filters.q, page=page+1) }}">Next &raquo;</a></div>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

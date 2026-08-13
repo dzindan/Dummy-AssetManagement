@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}Lookup & Hand-Over - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>Lookup &amp; Hand-Over</h1>
+
+<div class="panel">
+  <form method="get" action="{{ url_for('lookup.index') }}">
+    <label>Search by</label>
+    <div class="field-row" style="margin-bottom:0.6rem;">
+      <label style="display:flex; align-items:center; gap:0.35rem; font-weight:normal;">
+        <input type="radio" name="search_by" value="user" {{ 'checked' if search_by != 'serial' else '' }}> User ID
+      </label>
+      <label style="display:flex; align-items:center; gap:0.35rem; font-weight:normal;">
+        <input type="radio" name="search_by" value="serial" {{ 'checked' if search_by == 'serial' else '' }}> Serial / Service Tag
+      </label>
+    </div>
+    <label for="q">{{ 'Serial / Service Tag' if search_by == 'serial' else 'User ID' }}</label>
+    <div class="field-row">
+      <div><input type="text" id="q" name="q" value="{{ q }}" placeholder="{{ 'e.g. ABC12345' if search_by == 'serial' else 'e.g. 14501864' }}" autofocus></div>
+      <div style="flex: 0 0 auto;"><button type="submit">Search</button></div>
+    </div>
+  </form>
+</div>
+
+{% if q and search_by == 'serial' %}
+  <div class="panel">
+    {% if serial_matches %}
+      <h2>{{ serial_matches | length }} asset(s) matching "{{ q }}"</h2>
+      <p class="muted">Pick a row to open the normal hand-over builder for that person.</p>
+      <div class="table-scroll">
+      <table>
+        <thead><tr><th>Device</th><th>Model</th><th>Serial / Service Tag</th><th>Branch</th><th>Current Holder</th><th>Handover Date</th><th></th></tr></thead>
+        <tbody>
+          {% for m in serial_matches %}
+          <tr>
+            <td>{{ m['device_name'] }}</td>
+            <td>{{ m['model_device'] }}</td>
+            <td>{{ m['serial_tag'] }}</td>
+            <td>{{ m['branch_dept'] }}</td>
+            <td>{{ m['full_name'] or m['user_id_raw'] or '-' }}</td>
+            <td>{{ m['handover_date'] }}</td>
+            <td>
+              {% if m['user_id_raw'] %}
+              <a class="btn secondary" href="{{ url_for('lookup.index', q=m['user_id_raw'], search_by='user') }}">Build Hand-Over</a>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    {% else %}
+      <p><span class="badge badge-changed">No assets found with a serial number matching "{{ q }}"</span></p>
+    {% endif %}
+  </div>
+{% elif q %}
+  <div class="panel">
+    {% if user %}
+      <h2>{{ user['user_name'] }}</h2>
+      <p class="muted">
+        User No: <strong>{{ user['user_no'] }}</strong> &middot;
+        Branch: <strong>{{ branch['eng_name'] if branch else user['branch_no'] }}</strong> &middot;
+        Status: {{ user['status'] or '-' }}
+      </p>
+    {% else %}
+      <p><span class="badge badge-changed">No user found in the user master list for "{{ q }}"</span> - you can still build a hand-over form manually below if assets were found.</p>
+    {% endif %}
+
+    {% if not assets %}
+      <p class="muted">No assets currently assigned to this user ID.</p>
+    {% endif %}
+  </div>
+{% endif %}
+
+{% if assets %}
+<form method="post" action="{{ url_for('lookup.review') }}">
+  <input type="hidden" name="user_no" value="{{ user['user_no'] if user else q }}">
+
+  <div class="panel">
+    <h2>Hand-Over Date</h2>
+    <label for="ho_date">Date of hand-over</label>
+    <input type="date" id="ho_date" name="ho_date" value="{{ today }}" required>
+  </div>
+
+  <div class="panel">
+    <h2>Assets currently assigned</h2>
+    <div class="table-scroll">
+    <table>
+      <thead>
+        <tr><th></th><th>Device</th><th>Model</th><th>Serial / Service Tag</th><th>Status</th><th>Branch</th><th>Last Handover Date</th><th>Hand-Over Condition</th></tr>
+      </thead>
+      <tbody>
+        {% for a in assets %}
+        <tr>
+          <td><input type="checkbox" name="asset_id" value="{{ a['id'] }}" checked></td>
+          <td>{{ a['device_name'] }}</td>
+          <td>{{ a['model_device'] }}</td>
+          <td>{{ a['serial_tag'] }}</td>
+          <td>{{ a['status'] }}</td>
+          <td>{{ a['branch_dept'] }}</td>
+          <td>{{ a['handover_date'] }}</td>
+          <td>
+            <select name="condition_{{ a['id'] }}">
+              {% for c in asset_conditions %}<option value="{{ c }}" {{ 'selected' if c == 'WAREHOUSE' else '' }}>{{ c }}</option>{% endfor %}
+            </select>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    <p class="muted">"Hand-Over Condition" is what's printed on the form (NEW / WAREHOUSE) - independent of the asset's operational status shown above.</p>
+  </div>
+
+  <div class="grid grid-2">
+    <div class="panel">
+      <h2>Hand-Over Details</h2>
+      <label for="ho_type">Type of hand-over</label>
+      <select id="ho_type" name="ho_type">
+        {% for value, label in ho_types %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+      </select>
+
+      <label for="temp_due_date">Temp assignment due date (if applicable)</label>
+      <input type="text" id="temp_due_date" name="temp_due_date" placeholder="dd/mm/yyyy">
+
+      <label for="other_type_text">Other type - description (if applicable)</label>
+      <input type="text" id="other_type_text" name="other_type_text" class="uc">
+
+      <label for="reason">Reason for hand-over</label>
+      <select id="reason" name="reason">
+        {% for r in reasons %}<option value="{{ r }}">{{ r }}</option>{% endfor %}
+      </select>
+
+      <label for="other_reason_text">Other reason - description (if applicable)</label>
+      <input type="text" id="other_reason_text" name="other_reason_text" class="uc">
+    </div>
+
+    <div class="panel">
+      <h2>Receiving Party</h2>
+      <label for="receiving_name">Full name</label>
+      <input type="text" id="receiving_name" name="receiving_name" value="{{ user['user_name'] if user else '' }}" class="uc" required>
+
+      <label for="receiving_title">Title</label>
+      <input type="text" id="receiving_title" name="receiving_title" class="uc">
+
+      <label for="receiving_dept">Department / Branch</label>
+      <input type="text" id="receiving_dept" name="receiving_dept" value="{{ default_receiving_dept }}" class="uc">
+
+      <label for="receiving_id">Employee ID</label>
+      <input type="text" id="receiving_id" name="receiving_id" value="{{ user['user_no'] if user else q }}" class="uc">
+
+      <h2 style="margin-top:1.5rem;">ICT Representative</h2>
+      <label for="ict_rep_name">Full name</label>
+      <input type="text" id="ict_rep_name" name="ict_rep_name" value="{{ default_ict_name }}" class="uc">
+
+      <label for="ict_rep_id">Employee ID</label>
+      <input type="text" id="ict_rep_id" name="ict_rep_id" value="{{ default_ict_id }}" class="uc">
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Signatures</h2>
+    <p class="muted">Defaults to the names entered above; edit if the actual signer is someone else.</p>
+    <div class="field-row">
+      <div>
+        <label for="signature_receiving_name">Hand-Over / Receiving Party signature name</label>
+        <input type="text" id="signature_receiving_name" name="signature_receiving_name" value="{{ user['user_name'] if user else '' }}" class="uc">
+      </div>
+      <div>
+        <label for="signature_prepared_by">Prepared By signature name</label>
+        <input type="text" id="signature_prepared_by" name="signature_prepared_by" value="{{ default_ict_name }}" class="uc">
+      </div>
+    </div>
+  </div>
+
+  <button type="submit">Review Hand-Over Form</button>
+</form>
+{% endif %}
+{% endblock %}

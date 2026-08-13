@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Already Imported This Period? - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>Already Imported This Period?</h1>
+<p class="muted">
+  The branch(es) below already have an import recorded for the period shown - most often because the Reporting
+  Month field got left at today's date instead of being changed to match the report. If that's what happened, go
+  back and set the correct month. If this is intentional (e.g. a corrected re-upload for the same month), you can
+  import anyway - it adds a new import on top of the existing one; nothing already in the database gets overwritten
+  or deleted.
+</p>
+
+<div class="panel">
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr><th>File</th><th>Branch</th><th>Period</th><th>Already Imported</th><th>Existing Rows</th></tr>
+    </thead>
+    <tbody>
+      {% for c in conflicts %}
+      <tr>
+        <td>{{ c.filename }}</td>
+        <td>{{ c.branch_matched }}</td>
+        <td>{{ c.period }}</td>
+        <td>{{ c.existing_imported_at }} ({{ c.existing_label }})</td>
+        <td>{{ c.existing_row_count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<form method="post" action="{{ url_for('import_data.confirm_period_import') }}">
+  <input type="hidden" name="period" value="{{ period }}">
+  <input type="hidden" name="source" value="{{ source }}">
+  {% for item in files %}
+  <input type="hidden" name="files" value="{{ item.path }}::{{ item.filename }}">
+  {% endfor %}
+  <button type="submit">Import Anyway</button>
+  <a class="btn secondary" href="{{ url_for('import_data.index') }}">Cancel</a>
+</form>
+{% endblock %}

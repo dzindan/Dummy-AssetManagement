@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Duplicate Check - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>Duplicate Check</h1>
+<p class="muted">
+  Serial numbers that appear more than once among currently-assigned assets, across every branch - broader than the
+  check shown right after an import, which only looks within that one file's own rows.
+</p>
+
+{% if dupes %}
+<div class="panel">
+  <p><span class="badge badge-changed">{{ dupes | length }} duplicate serial(s) found</span></p>
+  <div class="actions" style="margin-top:0;">
+    <a class="btn" href="{{ url_for('asset_edit.export_duplicates') }}">Export to Excel</a>
+    <button type="button" class="danger" data-bulk-delete-trigger
+      data-bulk-delete-url="{{ url_for('asset_edit.bulk_delete') }}"
+      data-bulk-delete-checkbox-class="dupe-row-checkbox"
+      data-bulk-delete-next="{{ url_for('asset_edit.duplicates') }}">Delete Selected</button>
+    <label style="font-weight:normal;"><input type="checkbox" data-select-all="dupe-row-checkbox"> Select all rows on this page</label>
+  </div>
+</div>
+{% for d in dupes %}
+<div class="panel">
+  <h2>Serial: {{ d.serial }}</h2>
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr><th></th><th>Branch</th><th>Device</th><th>Model</th><th>Full Name</th><th>User ID</th><th>Status</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for row in d.rows %}
+      <tr>
+        <td><input type="checkbox" class="dupe-row-checkbox" value="{{ row['id'] }}"></td>
+        <td>{{ row['branch_eng_name'] or row['branch_dept'] }}</td>
+        <td>{{ row['device_name'] }}</td>
+        <td>{{ row['model_device'] }}</td>
+        <td>{{ row['full_name'] }}</td>
+        <td>{{ row['user_id_raw'] }}</td>
+        <td>{{ row['status'] }}</td>
+        <td>
+          <a class="btn secondary" href="{{ url_for('asset_edit.edit', asset_id=row['id'], next=url_for('asset_edit.duplicates')) }}">Edit #{{ row['id'] }}</a>
+          <form method="post" action="{{ url_for('asset_edit.delete', asset_id=row['id']) }}" style="display:inline;" onsubmit="return confirm('Delete asset #{{ row['id'] }} ({{ row['device_name'] }}, {{ d.serial }})? This cannot be undone.');">
+            <input type="hidden" name="next" value="{{ url_for('asset_edit.duplicates') }}">
+            <button type="submit" class="danger">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endfor %}
+{% else %}
+<div class="panel">
+  <p class="muted">No duplicate serials found among current assets.</p>
+</div>
+{% endif %}
+
+<a class="btn secondary" href="{{ url_for('asset_edit.index') }}">Back to Manage Assets</a>
+{% endblock %}

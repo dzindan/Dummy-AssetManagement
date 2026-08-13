@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Network Check - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>Network Check</h1>
+<p class="muted">
+  Pings every IP address recorded against a branch's current assets, pulls each live machine's PC serial, monitor
+  serial, and currently logged-on user over the network, and compares that against what was imported - so a wrong
+  serial or a mismatched user surfaces without walking the branch in person. When a value is mismatched, click
+  Update on that row to write the live-scanned value into the database, or use Update All / Ignore All below once
+  you've reviewed every mismatch. <a href="{{ url_for('network_check.log') }}">View Update Log</a>
+</p>
+<p class="muted">
+  This only works for machines this app's computer can actually reach on the network (same LAN/VPN, WMI/RPC not
+  blocked by firewall, and an account with admin rights on the target machines). A branch that can't be reached
+  will simply show every IP as "No response" - that's a network/permissions issue, not a data problem.
+</p>
+
+<div class="panel">
+  <form id="scan-form">
+    <div class="field-row">
+      <div>
+        <label for="branch_no">Branch</label>
+        <select id="branch_no" name="branch_no" required>
+          <option value="">-- Select a branch --</option>
+          {% for b in branches %}
+          <option value="{{ b['branch_no'] }}">{{ b['eng_name'] }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="actions" style="margin-top: 1rem;">
+      <button type="submit" id="scan-btn">Start Scan</button>
+      <button type="button" id="stop-btn" style="display:none">Stop</button>
+      <span id="progress" class="muted"></span>
+      <a id="export-link" href="#" class="btn secondary" style="display:none">Download Excel</a>
+    </div>
+  </form>
+  <div id="error" class="flash flash-error" style="display:none; margin-top: 1rem;"></div>
+  <div id="bulk-actions" class="actions" style="display:none; margin-top: 1rem;">
+    <button type="button" id="update-all-btn">Update All Mismatches</button>
+    <button type="button" id="ignore-all-btn" class="btn secondary">Ignore All</button>
+    <span id="bulk-status" class="muted"></span>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="table-scroll">
+  <table id="results-table" style="display:none">
+    <thead>
+      <tr>
+        <th>IP</th>
+        <th>Alive</th>
+        <th>Hostname</th>
+        <th>MAC Address</th>
+        <th>PC Serial (Live)</th>
+        <th>PC Serial (Imported)</th>
+        <th>PC Match</th>
+        <th>Monitor Serial (Live)</th>
+        <th>Monitor Serial (Imported)</th>
+        <th>Monitor Match</th>
+        <th>Logged-on User (Live)</th>
+        <th>User (Imported)</th>
+        <th>User Match</th>
+      </tr>
+    </thead>
+    <tbody id="results-body"></tbody>
+  </table>
+  <p id="empty-hint" class="muted">Select a branch and click Start Scan.</p>
+  </div>
+</div>
+
+<a class="btn secondary" href="{{ url_for('asset_edit.index') }}">Back to Manage Assets</a>
+
+<script src="{{ url_for('static', filename='network_check.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# PyInstaller build output
+build/
+dist/
+
+# Packaged release artifacts - rebuild via build.spec
+release/
+
+# Local app data (DB, exports, uploads) lives outside the repo in
+# %LOCALAPPDATA%\AssetManagementTool, never actually appears here, but
+# just in case someone runs from a copied-in data dir
+*.db
+
+# Real branch/company asset data - not meant for version control
+Asset reports/
+IDFromAither/
+Total Asset*.xlsx
+HAND OVER FORM*.docx
+
+# Claude Code local-only files
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
+# Editor/OS cruft
+.DS_Store
+Thumbs.db

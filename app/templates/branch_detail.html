@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}{{ branch['eng_name'] }} - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>{{ branch['eng_name'] }}</h1>
+<p class="muted">Branch No: {{ branch['branch_no'] }} &middot; {{ assets | length }} assets currently on record</p>
+
+<div class="panel">
+  <h2>Item Count Trend (by month)</h2>
+  <p class="muted">Each line is a device type; counts come from this branch's most recent import for each month.</p>
+  {{ chart_html }}
+
+  {% if trend_periods %}
+  <p class="muted" style="margin-top:1rem;">
+    Each cell is that device type's count for the month. The most recent month also shows its change vs. the month
+    before it - <span style="color:var(--ok);">+added</span> / <span style="color:var(--danger);">-removed</span>,
+    matched by actual asset identity (not just a count difference).
+  </p>
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr>
+        <th>Device</th>
+        {% for p in trend_periods %}<th>{{ p }}{% if loop.last %} (vs prev.){% endif %}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in trend_rows %}
+      <tr>
+        <td>{{ row.item }}</td>
+        {% for cell in row.cells %}
+        <td>
+          {% if cell %}
+            {{ cell.count }}
+            {% if cell.added is not none %}
+            <br><span style="font-size:0.75rem;">
+              {% if cell.added %}<span style="color:var(--ok);">+{{ cell.added }}</span>{% endif %}
+              {% if cell.added and cell.removed %} / {% endif %}
+              {% if cell.removed %}<span style="color:var(--danger);">-{{ cell.removed }}</span>{% endif %}
+              {% if not cell.added and not cell.removed %}<span class="muted">no change</span>{% endif %}
+            </span>
+            {% endif %}
+          {% else %}-{% endif %}
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr>
+        <td><strong>Total</strong></td>
+        {% for c in trend_column_totals %}
+        <td>
+          <strong>{{ c }}</strong>
+          {% if loop.last %}
+          <br><span style="font-size:0.75rem;">
+            <span style="color:var(--ok);">+{{ trend_latest_added }}</span> /
+            <span style="color:var(--danger);">-{{ trend_latest_removed }}</span>
+          </span>
+          {% endif %}
+        </td>
+        {% endfor %}
+      </tr>
+    </tfoot>
+  </table>
+  </div>
+  {% endif %}
+</div>
+
+<div class="grid grid-2">
+  <div class="panel">
+    <h2>Device Type Breakdown</h2>
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>Device</th><th>Count</th></tr></thead>
+      <tbody>
+        {% for name, count in device_counts %}
+        <tr><td>{{ name }}</td><td>{{ count }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Export</h2>
+    <p class="muted">Download this branch's current asset list as an Excel file.</p>
+    <a class="btn" href="{{ url_for('branch_detail.export', branch_no=branch['branch_no']) }}">Export to Excel</a>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Current Assets</h2>
+  <p class="muted"><a href="{{ url_for('asset_edit.index', branch_no=branch['branch_no']) }}">Open in Manage Assets</a> for more filters and pagination.</p>
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr><th>Device</th><th>Model</th><th>Serial/Tag</th><th>Status</th><th>Full Name</th><th>User ID</th><th>Position</th><th>Handover Date</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for a in assets %}
+      <tr>
+        <td>{{ a['device_name'] }}</td>
+        <td>{{ a['model_device'] }}</td>
+        <td>{{ a['serial_tag'] }}</td>
+        <td>{{ a['status'] }}</td>
+        <td>{{ a['full_name'] }}</td>
+        <td>{{ a['user_id_raw'] }}</td>
+        <td>{{ a['position'] }}</td>
+        <td>{{ a['handover_date'] }}</td>
+        <td><a class="btn secondary" href="{{ url_for('asset_edit.edit', asset_id=a['id'], next=request.path) }}">Edit</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="9" class="muted">No assets on record for this branch.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<a class="btn secondary" href="{{ url_for('dashboard.index') }}">Back to Dashboard</a>
+{% endblock %}

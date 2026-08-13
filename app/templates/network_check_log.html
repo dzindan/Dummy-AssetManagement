@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Network Check Log - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>Network Check Log</h1>
+<p class="muted">Every value written into the database from Network Check's "Update" actions - what changed, from what, to what, and when - newest first.</p>
+
+<div class="panel">
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>When</th><th>Branch</th><th>IP</th><th>Asset ID</th><th>Field</th><th>Old Value</th><th>New Value</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r['applied_at'] }}</td>
+        <td>{{ r['branch_eng_name'] or r['branch_no'] }}</td>
+        <td>{{ r['ip'] }}</td>
+        <td><a href="{{ url_for('asset_edit.edit', asset_id=r['asset_id']) }}">#{{ r['asset_id'] }}</a></td>
+        <td>{{ r['field'] }}</td>
+        <td>{{ r['old_value'] or '-' }}</td>
+        <td>{{ r['new_value'] }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="muted">No updates applied yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<a class="btn secondary" href="{{ url_for('network_check.index') }}">Back to Network Check</a>
+{% endblock %}

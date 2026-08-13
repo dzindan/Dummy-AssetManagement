@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Import Result - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>ID Master Import Result</h1>
+
+<div class="panel">
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>File</th><th>Type</th><th>Rows</th><th>Notes</th></tr></thead>
+    <tbody>
+      {% for filename, result in results %}
+      <tr>
+        <td>{{ filename }}</td>
+        <td>{{ result.get('file_type', 'unknown') }}</td>
+        <td>{{ result.get('rows', '-') }}</td>
+        <td>{% if result.get('error') %}<span class="badge badge-removed">{{ result['error'] }}</span>{% else %}<span class="badge badge-added">OK</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<a class="btn secondary" href="{{ url_for('import_data.index') }}">Back to Import Data</a>
+<a class="btn" href="{{ url_for('dashboard.index') }}">Go to Dashboard</a>
+{% endblock %}

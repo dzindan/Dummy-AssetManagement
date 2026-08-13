@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Duplicate Files Found - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>Duplicate Files Found</h1>
+<p class="muted">
+  Some of the files you're importing for <strong>{{ period }}</strong> have byte-for-byte identical content - most
+  likely the same report saved under two different names. Pick one file to import from each group below; the rest
+  will be skipped so this data isn't imported twice.
+</p>
+
+<form method="post" action="{{ url_for('import_data.confirm_asset_reports') }}">
+  <input type="hidden" name="period" value="{{ period }}">
+  <input type="hidden" name="source" value="{{ source }}">
+  <input type="hidden" name="group_count" value="{{ duplicate_groups | length }}">
+
+  {% for group in duplicate_groups %}
+  {% set gi = loop.index0 %}
+  <div class="panel">
+    <h2>Duplicate group {{ gi + 1 }} <span class="badge badge-changed">{{ group | length }} identical files</span></h2>
+    {% for item in group %}
+    <label style="display:block; margin:0.4rem 0; font-weight:normal;">
+      <input type="radio" name="choice_{{ gi }}" value="{{ item.path }}::{{ item.filename }}" {{ 'checked' if loop.first else '' }} required>
+      {{ item.filename }}
+    </label>
+    <input type="hidden" name="group_files_{{ gi }}" value="{{ item.path }}">
+    {% endfor %}
+  </div>
+  {% endfor %}
+
+  {% if unique_files %}
+  <div class="panel">
+    <h2>Also importing (no duplicates found)</h2>
+    <ul>
+      {% for item in unique_files %}
+      <li>{{ item.filename }}</li>
+      <input type="hidden" name="unique_files" value="{{ item.path }}::{{ item.filename }}">
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <button type="submit">Import Selected</button>
+  <a class="btn secondary" href="{{ url_for('import_data.index') }}">Cancel</a>
+</form>
+{% endblock %}

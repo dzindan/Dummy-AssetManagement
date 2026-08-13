@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% block title %}Cleaning Report - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>Cleaning Report</h1>
+
+{% for r in reports %}
+<div class="panel">
+  <h2>{{ r.source_file }}</h2>
+  {% if r.error %}
+    <p><span class="badge badge-removed">Error</span> {{ r.error }}</p>
+  {% else %}
+    <div class="grid grid-3">
+      <div class="stat-tile"><div class="value">{{ r.rows_read }}</div><div class="label">Rows read</div></div>
+      <div class="stat-tile"><div class="value">{{ r.rows_imported }}</div><div class="label">Rows imported</div></div>
+      <div class="stat-tile"><div class="value">{{ r.rows_skipped_no_data }}</div><div class="label">Skipped (empty)</div></div>
+    </div>
+    <p class="muted" style="margin-top:0.9rem;">
+      Sheet: <strong>{{ r.sheet_name }}</strong> &middot;
+      Branch label found in file: <strong>{{ r.branch_hint or '-' }}</strong> &middot;
+      Matched to: {% if r.branch_matched %}<span class="badge badge-added">{{ r.branch_matched }}</span>{% else %}<span class="badge badge-changed">no match - add an alias in Settings</span>{% endif %}
+    </p>
+    {% if r.unmapped_columns %}
+    <p class="muted">Unrecognized columns kept but not mapped: {{ r.unmapped_columns | join(', ') }}</p>
+    {% endif %}
+    {% if r.unrecognized_devices %}
+    <p><span class="badge badge-changed">{{ r.unrecognized_devices | length }} unrecognized device name(s)</span> {{ r.unrecognized_devices | join(', ') }}</p>
+    <a class="btn" href="{{ url_for('settings.index') }}#device-mapping">Go to Device Mapping</a>
+    {% endif %}
+    {% if r.unrecognized_statuses %}
+    <p><span class="badge badge-changed">{{ r.unrecognized_statuses | length }} unrecognized status(es)</span> {{ r.unrecognized_statuses | join(', ') }}</p>
+    <a class="btn" href="{{ url_for('settings.index') }}#status-mapping">Go to Status Mapping</a>
+    {% endif %}
+    {% if r.unrecognized_models %}
+    <p><span class="badge badge-changed">{{ r.unrecognized_models | length }} unrecognized model(s)</span> {{ r.unrecognized_models | join(', ') }}</p>
+    <a class="btn" href="{{ url_for('settings.index') }}#model-mapping">Go to Model Mapping</a>
+    {% endif %}
+    {% if r.duplicate_serials %}
+    <p style="margin-top:0.9rem;"><span class="badge badge-changed">{{ r.duplicate_serials | length }} duplicate serial(s) - same serial appears more than once in this import</span></p>
+    <div class="actions" style="margin-top:0;">
+      <a class="btn" href="{{ url_for('import_data.export_duplicates', batch_ids=r.batch_id) }}">Export to Excel</a>
+      <button type="button" class="danger" data-bulk-delete-trigger
+        data-bulk-delete-url="{{ url_for('asset_edit.bulk_delete') }}"
+        data-bulk-delete-checkbox-class="dupe-row-checkbox-{{ r.batch_id }}"
+        data-bulk-delete-next="{{ request.url }}">Delete Selected</button>
+      <label style="font-weight:normal;"><input type="checkbox" data-select-all="dupe-row-checkbox-{{ r.batch_id }}"> Select all</label>
+    </div>
+    {% for d in r.duplicate_serials %}
+    <p class="muted" style="margin:0.7rem 0 0.3rem;">Serial <strong>{{ d.serial }}</strong> appears {{ d.rows | length }} times:</p>
+    <div class="table-scroll">
+    <table>
+      <thead>
+        <tr><th></th><th>Device</th><th>Model</th><th>Full Name</th><th>User ID</th><th>Branch / Dept</th><th>Status</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for row in d.rows %}
+        <tr>
+          <td><input type="checkbox" class="dupe-row-checkbox-{{ r.batch_id }}" value="{{ row['id'] }}"></td>
+          <td>{{ row['device_name'] }}</td>
+          <td>{{ row['model_device'] }}</td>
+          <td>{{ row['full_name'] }}</td>
+          <td>{{ row['user_id_raw'] }}</td>
+          <td>{{ row['branch_dept'] }}</td>
+          <td>{{ row['status'] }}</td>
+          <td>
+            <a class="btn secondary" href="{{ url_for('asset_edit.edit', asset_id=row['id'], next=request.url) }}">Edit #{{ row['id'] }}</a>
+            <form method="post" action="{{ url_for('asset_edit.delete', asset_id=row['id']) }}" style="display:inline;" onsubmit="return confirm('Delete asset #{{ row['id'] }} ({{ row['device_name'] }}, {{ d.serial }})? This cannot be undone.');">
+              <input type="hidden" name="next" value="{{ request.url }}">
+              <button type="submit" class="danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% endfor %}
+    {% endif %}
+  {% endif %}
+</div>
+{% endfor %}
+
+{% if diffs %}
+<div class="panel">
+  <h2>Changes vs. Previous Import</h2>
+  <p class="muted">Each branch touched by this upload, compared against its own previous import.</p>
+  {% if batch_ids %}
+  <a class="btn" href="{{ url_for('update_compare.export', batch_ids=batch_ids) }}">Export diff report (.xlsx)</a>
+  {% endif %}
+</div>
+
+{% for d in diffs %}
+<div class="panel">
+  <h2>{{ d.branch_label }}</h2>
+  {% if not d.has_previous %}
+    <p class="muted">No previous import found for this branch - everything below is being recorded as a fresh baseline.</p>
+  {% endif %}
+  <div class="grid grid-3">
+    <div class="stat-tile"><div class="value">{{ d.added | length }}</div><div class="label">Added</div></div>
+    <div class="stat-tile"><div class="value">{{ d.removed | length }}</div><div class="label">Removed</div></div>
+    <div class="stat-tile"><div class="value">{{ d.changed | length }}</div><div class="label">Changed</div></div>
+  </div>
+
+  {% if d.added %}
+  <h3>Added <span class="badge badge-added">{{ d.added | length }}</span></h3>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>Device</th><th>Model</th><th>Serial/Tag</th><th>Full Name</th><th>Status</th></tr></thead>
+    <tbody>
+      {% for row in d.added %}
+      <tr><td>{{ row['device_name'] }}</td><td>{{ row['model_device'] }}</td><td>{{ row['serial_tag'] }}</td><td>{{ row['full_name'] }}</td><td>{{ row['status'] }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+
+  {% if d.removed %}
+  <h3>Removed <span class="badge badge-removed">{{ d.removed | length }}</span></h3>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>Device</th><th>Model</th><th>Serial/Tag</th><th>Full Name</th><th>Status</th></tr></thead>
+    <tbody>
+      {% for row in d.removed %}
+      <tr><td>{{ row['device_name'] }}</td><td>{{ row['model_device'] }}</td><td>{{ row['serial_tag'] }}</td><td>{{ row['full_name'] }}</td><td>{{ row['status'] }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+
+  {% if d.changed %}
+  <h3>Changed <span class="badge badge-changed">{{ d.changed | length }}</span></h3>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>Device</th><th>Serial/Tag</th><th>Field</th><th>Old</th><th>New</th></tr></thead>
+    <tbody>
+      {% for c in d.changed %}
+        {% for field, values in c.diffs.items() %}
+        <tr>
+          <td>{{ c.new['device_name'] }}</td>
+          <td>{{ c.new['serial_tag'] }}</td>
+          <td>{{ field }}</td>
+          <td class="diff-value-old">{{ values[0] }}</td>
+          <td class="diff-value-new">{{ values[1] }}</td>
+        </tr>
+        {% endfor %}
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+
+  {% if not d.added and not d.removed and not d.changed %}
+  <p class="muted">No changes detected for this branch ({{ d.unchanged_count }} assets unchanged).</p>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
+<a class="btn secondary" href="{{ url_for('import_data.index') }}">Back to Import Data</a>
+<a class="btn secondary" href="{{ url_for('asset_edit.duplicates') }}">Check Duplicates</a>
+<a class="btn" href="{{ url_for('dashboard.index') }}">Go to Dashboard</a>
+{% endblock %}

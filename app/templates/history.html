@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}History - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>Hand-Over History</h1>
+
+<div class="panel">
+  <form method="get" action="{{ url_for('history.index') }}">
+    <div class="field-row">
+      <div>
+        <label for="user_no">User ID contains</label>
+        <input type="text" id="user_no" name="user_no" value="{{ filters['user_no'] }}">
+      </div>
+      <div>
+        <label for="branch_no">Branch</label>
+        <select id="branch_no" name="branch_no">
+          <option value="">All branches</option>
+          {% for b in branches %}
+          <option value="{{ b['branch_no'] }}" {{ 'selected' if filters['branch_no'] == b['branch_no'] else '' }}>{{ b['eng_name'] }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="date_from">From date</label>
+        <input type="date" id="date_from" name="date_from" value="{{ filters['date_from'] }}">
+      </div>
+      <div>
+        <label for="date_to">To date</label>
+        <input type="date" id="date_to" name="date_to" value="{{ filters['date_to'] }}">
+      </div>
+    </div>
+    <button type="submit">Filter</button>
+    <a class="btn secondary" href="{{ url_for('history.index') }}">Clear</a>
+  </form>
+</div>
+
+<div class="panel">
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr><th>Hand-Over Date</th><th>Logged At</th><th>User</th><th>Branch</th><th>Type</th><th>Reason</th><th>Receiving Party</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for r in records %}
+      <tr>
+        <td>{{ r['ho_date'] or '-' }}</td>
+        <td>{{ r['created_at'][:16] }}</td>
+        <td>{{ r['user_no'] }}</td>
+        <td>{{ r['branch_no'] or '-' }}</td>
+        <td>{{ ho_type_labels.get(r['ho_type'], r['ho_type']) }}</td>
+        <td>{{ r['reason'] }}</td>
+        <td>{{ r['receiving_name'] }}</td>
+        <td><a href="{{ url_for('history.download', record_id=r['id']) }}">Download</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="muted">No hand-over forms generated yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+
+<div class="grid grid-3">
+  <div class="stat-tile">
+    <div class="value">{{ branch_count }}</div>
+    <div class="label">Branches</div>
+  </div>
+  <div class="stat-tile">
+    <div class="value">{{ user_count }}</div>
+    <div class="label">Users</div>
+  </div>
+  <div class="stat-tile">
+    <div class="value">{{ asset_count }}</div>
+    <div class="label">Assets (current)</div>
+  </div>
+</div>
+
+{% if unmapped_device_count %}
+<div class="panel" style="border-left: 4px solid var(--warn); margin-top: 1.25rem;">
+  <span class="badge badge-changed">{{ unmapped_device_count }}</span>
+  device name(s) need mapping to a standard name.
+  <a class="btn" href="{{ url_for('settings.index') }}#device-mapping">Go to Device Mapping</a>
+</div>
+{% endif %}
+
+<div class="panel" style="margin-top: 1.25rem;">
+  <h2>Assets by Branch (by month)</h2>
+  {% if month_table %}
+    <p class="muted">
+      Each cell is that branch's asset count for the month (its most recent import that month). The most recent month
+      also shows its change vs. the month before it - <span style="color:var(--ok);">+added</span> /
+      <span style="color:var(--danger);">-removed</span>, matched by actual asset identity (not just a count
+      difference, so swapping devices still shows as real movement). Click a branch name for its own monthly
+      breakdown, trend chart, and Excel export.
+    </p>
+    <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Branch / Dept</th>
+          {% for p in month_periods %}<th>{{ p }}{% if loop.last %} (vs prev.){% endif %}</th>{% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in month_table %}
+        <tr>
+          <td>
+            {% if row.branch_no %}
+            <a class="branch-link" href="{{ url_for('branch_detail.detail', branch_no=row.branch_no) }}">{{ row.label }}</a>
+            {% else %}
+            {{ row.label }}
+            {% endif %}
+          </td>
+          {% for cell in row.cells %}
+          <td>
+            {% if cell %}
+              {{ cell.count }}
+              {% if cell.added is not none %}
+              <br><span style="font-size:0.75rem;">
+                {% if cell.added %}<span style="color:var(--ok);">+{{ cell.added }}</span>{% endif %}
+                {% if cell.added and cell.removed %} / {% endif %}
+                {% if cell.removed %}<span style="color:var(--danger);">-{{ cell.removed }}</span>{% endif %}
+                {% if not cell.added and not cell.removed %}<span class="muted">no change</span>{% endif %}
+              </span>
+              {% endif %}
+            {% else %}-{% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td><strong>Total</strong></td>
+          {% for c in month_column_totals %}
+          <td>
+            <strong>{{ c }}</strong>
+            {% if loop.last %}
+            <br><span style="font-size:0.75rem;">
+              <span style="color:var(--ok);">+{{ month_grand_added }}</span> /
+              <span style="color:var(--danger);">-{{ month_grand_removed }}</span>
+            </span>
+            {% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+      </tfoot>
+    </table>
+    </div>
+  {% else %}
+    <p class="muted">No asset reports imported yet. Go to <a href="{{ url_for('import_data.index') }}">Import Data</a> to get started.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Recent Hand-Over Forms</h2>
+  {% if recent_handovers %}
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>Date</th><th>User</th><th>Type</th></tr></thead>
+      <tbody>
+        {% for h in recent_handovers %}
+        <tr>
+          <td>{{ h['created_at'][:16] }}</td>
+          <td>{{ h['receiving_name'] or h['user_name'] }} ({{ h['user_no'] }})</td>
+          <td>{{ h['ho_type'] }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    <a class="btn secondary" href="{{ url_for('history.index') }}">View full history</a>
+  {% else %}
+    <p class="muted">No hand-over forms generated yet. {{ handover_count }} total.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Item Count Trend - All Branches (by month)</h2>
+  <p class="muted">Each line is a device type, summed across every branch; counts come from each branch's most recent import for that month.</p>
+  {{ all_branches_chart_html }}
+</div>
+{% endblock %}

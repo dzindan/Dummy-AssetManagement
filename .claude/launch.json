@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "asset-management-tool",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["main_devserver.py"],
+      "port": 8737
+    },
+    {
+      "name": "kinh-dich-app",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["../Kinh Dich App/main_devserver.py"],
+      "port": 8839
+    },
+    {
+      "name": "tarot-reader",
+      "runtimeExecutable": "../Tarot Reader/.venv/Scripts/python.exe",
+      "runtimeArgs": ["../Tarot Reader/main_devserver.py"],
+      "port": 8841
+    }
+  ]
+}

@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Review Hand-Over Form - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>Review Hand-Over Form</h1>
+<p class="muted">Check everything below carefully. Nothing is saved to the hand-over log yet - clicking "Confirm &amp; Download" is what finalizes and logs this hand-over.</p>
+
+<div class="grid grid-2">
+  <div class="panel">
+    <h2>Hand-Over</h2>
+    <p>
+      <strong>Date:</strong> {{ data.ho_date }}<br>
+      <strong>Type:</strong> {{ data.ho_type }}{% if data.ho_type == 'TEMP' and data.temp_due_date %} (due {{ data.temp_due_date }}){% endif %}{% if data.ho_type == 'OTHER' and data.other_type_text %} - {{ data.other_type_text }}{% endif %}<br>
+      <strong>Reason:</strong> {{ data.reason }}{% if data.reason == 'OTHER' and data.other_reason_text %} - {{ data.other_reason_text }}{% endif %}
+    </p>
+  </div>
+
+  <div class="panel">
+    <h2>ICT Representative</h2>
+    <p>
+      <strong>{{ data.ict_rep_name or '-' }}</strong><br>
+      Employee ID: {{ data.ict_rep_id or '-' }}
+    </p>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Receiving Party</h2>
+  <p>
+    <strong>{{ data.receiving_name }}</strong>{% if data.receiving_title %} - {{ data.receiving_title }}{% endif %}<br>
+    {{ data.receiving_dept or '-' }} &middot; Employee ID: {{ data.receiving_id or '-' }}
+  </p>
+</div>
+
+<div class="panel">
+  <h2>Signatures</h2>
+  <p>
+    Hand-Over / Receiving Party: <strong>{{ data.signature_receiving_name or '-' }}</strong><br>
+    Prepared By: <strong>{{ data.signature_prepared_by or '-' }}</strong>
+  </p>
+</div>
+
+<div class="panel">
+  <h2>Assets ({{ assets | length }})</h2>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>Device</th><th>Serial / Service Tag</th><th>Condition</th><th>Qty</th></tr></thead>
+    <tbody>
+      {% for a in assets %}
+      <tr>
+        <td>{{ a['equipment_name'] }}</td>
+        <td>{{ a['serial_number'] }}</td>
+        <td>{{ a['status'] }}</td>
+        <td>{{ a['qty'] }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="muted">Total quantity: {{ total_qty }}</p>
+</div>
+
+<form method="post" action="{{ url_for('lookup.generate') }}">
+  <input type="hidden" name="user_no" value="{{ data.user_no }}">
+  <input type="hidden" name="ho_date" value="{{ data.ho_date }}">
+  <input type="hidden" name="ho_type" value="{{ data.ho_type }}">
+  <input type="hidden" name="temp_due_date" value="{{ data.temp_due_date }}">
+  <input type="hidden" name="other_type_text" value="{{ data.other_type_text }}">
+  <input type="hidden" name="reason" value="{{ data.reason }}">
+  <input type="hidden" name="other_reason_text" value="{{ data.other_reason_text }}">
+  <input type="hidden" name="receiving_name" value="{{ data.receiving_name }}">
+  <input type="hidden" name="receiving_title" value="{{ data.receiving_title }}">
+  <input type="hidden" name="receiving_dept" value="{{ data.receiving_dept }}">
+  <input type="hidden" name="receiving_id" value="{{ data.receiving_id }}">
+  <input type="hidden" name="ict_rep_name" value="{{ data.ict_rep_name }}">
+  <input type="hidden" name="ict_rep_id" value="{{ data.ict_rep_id }}">
+  <input type="hidden" name="signature_receiving_name" value="{{ data.signature_receiving_name }}">
+  <input type="hidden" name="signature_prepared_by" value="{{ data.signature_prepared_by }}">
+  {% for a in assets %}
+  <input type="hidden" name="asset_id" value="{{ a['id'] }}">
+  <input type="hidden" name="condition_{{ a['id'] }}" value="{{ a['status'] }}">
+  {% endfor %}
+
+  <a class="btn secondary" href="{{ url_for('lookup.index', q=data.user_no) }}">Back to Edit</a>
+  <button type="submit">Confirm &amp; Download</button>
+</form>
+{% endblock %}

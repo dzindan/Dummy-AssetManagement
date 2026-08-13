@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Saved Diff Reports - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>Saved Diff Reports</h1>
+<p class="muted">Every asset_diff_report.xlsx generated after a Monthly Asset Reports import is automatically saved here - newest first - so it can be downloaded again later without re-running anything.</p>
+
+<div class="panel">
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>Saved</th><th>Period</th><th>Branches Covered</th><th>File</th><th></th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r['created_at'] }}</td>
+        <td>{{ r['period'] or '-' }}</td>
+        <td>{{ r['branch_labels'] or '-' }}</td>
+        <td>{{ r['label'] }}</td>
+        <td><a class="btn secondary" href="{{ url_for('import_data.download_diff_report', report_id=r['id']) }}">Download</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="muted">No diff reports saved yet - import a Monthly Asset Report to generate one.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<a class="btn secondary" href="{{ url_for('import_data.index') }}">Back to Import Data</a>
+{% endblock %}

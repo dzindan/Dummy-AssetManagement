@@ -1,0 +1,399 @@
+{% extends "base.html" %}
+{% block title %}Settings - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+
+<div class="panel">
+  <h2>Default ICT Representative</h2>
+  <p class="muted">Pre-fills the "Representative of ICT Planning Department" section on every hand-over form. Still editable per form.</p>
+  <form method="post" action="{{ url_for('settings.save_general') }}">
+    <div class="field-row">
+      <div>
+        <label for="ict_rep_name">Full name</label>
+        <input type="text" id="ict_rep_name" name="ict_rep_name" value="{{ ict_rep_name }}" class="uc">
+      </div>
+      <div>
+        <label for="ict_rep_id">Employee ID</label>
+        <input type="text" id="ict_rep_id" name="ict_rep_id" value="{{ ict_rep_id }}" class="uc">
+      </div>
+    </div>
+
+    <h2 style="margin-top:1.5rem;">Default Import Folders</h2>
+    <p class="muted">Optional. When set, the Import Data and Update &amp; Compare pages show an "Import all from folder" shortcut instead of manual file selection.</p>
+    <div class="field-row">
+      <div>
+        <label for="asset_reports_folder">Asset reports folder</label>
+        <input type="text" id="asset_reports_folder" name="asset_reports_folder" value="{{ asset_reports_folder }}" placeholder="C:\...\Asset reports">
+      </div>
+      <div>
+        <label for="id_files_folder">ID files folder</label>
+        <input type="text" id="id_files_folder" name="id_files_folder" value="{{ id_files_folder }}" placeholder="C:\...\IDFromAither">
+      </div>
+    </div>
+    <button type="submit">Save Settings</button>
+  </form>
+</div>
+
+<div class="panel">
+  <h2>Branch Name Aliases</h2>
+  <p class="muted">Asset report files often label a branch differently from the official branch master list (e.g. "South Saigon T.O" vs. "South Sai Gon Transaction Office"). Add an alias to map a free-text label straight to the correct branch.</p>
+
+  <h3>Unresolved Branch Labels {% if unresolved_branches %}<span class="badge badge-changed">{{ unresolved_branches | length }}</span>{% endif %}</h3>
+  <p class="muted">Branch labels seen during import that didn't match anything (only the file's name changed since the last try, or a new one). Assign each to the correct branch below - no need to retype it.</p>
+  {% if unresolved_branches %}
+  <div class="device-pool" style="max-height:360px;">
+    {% for u in unresolved_branches %}
+    <div class="device-chip">
+      <div class="device-chip-label">{{ u['raw_hint'] }} <span class="muted">&times;{{ u['occurrences'] }}</span></div>
+      <form method="post" action="{{ url_for('settings.map_branch_hint') }}" class="device-chip-form">
+        <input type="hidden" name="raw_hint" value="{{ u['raw_hint'] }}">
+        <select name="branch_no" required>
+          <option value="">Select a branch...</option>
+          {% for b in branches %}
+          <option value="{{ b['branch_no'] }}">{{ b['eng_name'] }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit">Assign</button>
+      </form>
+      <form method="post" action="{{ url_for('settings.dismiss_branch_hint') }}" class="inline-form" style="margin-top:0.35rem;">
+        <input type="hidden" name="raw_hint" value="{{ u['raw_hint'] }}">
+        <button type="submit" class="secondary">Dismiss</button>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">Nothing unresolved right now - every branch label seen so far matched a branch or an existing alias.</p>
+  {% endif %}
+
+  <h3 style="margin-top:1.2rem;">Add Alias Manually</h3>
+  <form method="post" action="{{ url_for('settings.add_branch_alias') }}">
+    <div class="field-row">
+      <div>
+        <label for="alias_text">Label as it appears in the report</label>
+        <input type="text" id="alias_text" name="alias_text" placeholder="e.g. South saigon T.O" required>
+      </div>
+      <div>
+        <label for="branch_no">Maps to branch</label>
+        <select id="branch_no" name="branch_no" required>
+          <option value="">Select a branch...</option>
+          {% for b in branches %}
+          <option value="{{ b['branch_no'] }}">{{ b['eng_name'] }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <button type="submit">Add Alias</button>
+  </form>
+
+  {% if branch_aliases %}
+  <div class="table-scroll" style="margin-top:1rem;">
+  <table>
+    <thead><tr><th>Label</th><th>Maps to</th><th></th></tr></thead>
+    <tbody>
+      {% for a in branch_aliases %}
+      <tr>
+        <td>{{ a['alias'] }}</td>
+        <td>{{ a['eng_name'] or a['branch_no'] }}</td>
+        <td>
+          <form method="post" action="{{ url_for('settings.delete_branch_alias') }}" style="margin:0;">
+            <input type="hidden" name="alias" value="{{ a['alias'] }}">
+            <button type="submit" class="danger">Remove</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">No branch aliases configured yet.</p>
+  {% endif %}
+</div>
+
+<div class="panel" id="device-mapping">
+  <h2>Device Name Mapping</h2>
+  <p class="muted">
+    Standardizes device names during import (e.g. "IPPHONE" and "ID CARD READER" both map to a single standard name).
+    Any device name a cleaning report doesn't recognize lands in the <strong>Unmapped</strong> pool below - drag it onto
+    the standard name it belongs to, or use the dropdown next to it if you'd rather not drag.
+  </p>
+
+  <h3>Standard Device Names</h3>
+  <p class="muted">The master list of recognized device types. Add, rename, or remove entries as your equipment list evolves.</p>
+  <form method="post" action="{{ url_for('settings.add_standard_name') }}" class="field-row">
+    <div>
+      <label for="new_standard_name">New standard name</label>
+      <input type="text" id="new_standard_name" name="name" placeholder="e.g. BARCODE SCANNER" class="uc" required>
+    </div>
+    <div style="flex: 0 0 auto; align-self: flex-end;"><button type="submit">Add</button></div>
+  </form>
+
+  <div class="device-mapping-grid">
+    <div class="device-pool-col">
+      <h3>Unmapped Device Names {% if unmapped_devices %}<span class="badge badge-changed">{{ unmapped_devices | length }}</span>{% endif %}</h3>
+      <div class="device-pool" id="device-pool">
+        {% for d in unmapped_devices %}
+        <div class="device-chip" draggable="true" data-alias="{{ d['raw_name'] }}">
+          <div class="device-chip-label">{{ d['raw_name'] }} <span class="muted">&times;{{ d['occurrences'] }}</span></div>
+          <form method="post" action="{{ url_for('settings.map_device_alias') }}" class="device-chip-form">
+            <input type="hidden" name="alias" value="{{ d['raw_name'] }}">
+            <select name="canonical_name">
+              {% for name in standard_names %}<option value="{{ name }}">{{ name }}</option>{% endfor %}
+            </select>
+            <button type="submit">Assign</button>
+          </form>
+          <div class="muted" style="font-size:0.72rem; margin:0.25rem 0;">or</div>
+          <form method="post" action="{{ url_for('settings.map_device_alias') }}" class="device-chip-form">
+            <input type="hidden" name="alias" value="{{ d['raw_name'] }}">
+            <input type="text" name="canonical_name" placeholder="new standard name..." class="uc" required>
+            <button type="submit" class="secondary">Create &amp; Assign</button>
+          </form>
+        </div>
+        {% else %}
+        <p class="muted">Nothing unmapped right now - every device name seen so far matches a standard name or an existing alias.</p>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="device-bucket-col">
+      <h3>Standard Names</h3>
+      <div class="device-buckets">
+        {% for name in standard_names %}
+        <div class="device-bucket">
+          <div class="device-bucket-header">
+            <strong>{{ name }}</strong>
+            <div class="device-bucket-actions">
+              <form method="post" action="{{ url_for('settings.rename_standard_name') }}" class="inline-form">
+                <input type="hidden" name="old_name" value="{{ name }}">
+                <input type="text" name="new_name" placeholder="rename to..." class="uc">
+                <button type="submit" class="secondary">Rename</button>
+              </form>
+              <form method="post" action="{{ url_for('settings.delete_standard_name') }}" class="inline-form">
+                <input type="hidden" name="name" value="{{ name }}">
+                <button type="submit" class="danger">Delete</button>
+              </form>
+            </div>
+          </div>
+          <div class="device-dropzone" data-name="{{ name }}" data-map-url="{{ url_for('settings.map_device_alias') }}">
+            {% for alias in aliases_by_name.get(name, []) %}
+            <span class="device-alias-tag">
+              {{ alias }}
+              <form method="post" action="{{ url_for('settings.unmap_device_alias') }}" class="inline-form">
+                <input type="hidden" name="alias" value="{{ alias }}">
+                <button type="submit" title="Unmap">&times;</button>
+              </form>
+            </span>
+            {% else %}
+            <span class="muted">Drop a device name here</span>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="panel" id="status-mapping">
+  <h2>Status Mapping</h2>
+  <p class="muted">
+    Standardizes the Status column during import, same idea as Device Name Mapping. Any status a cleaning report
+    doesn't recognize lands in the <strong>Unmapped</strong> pool below - drag it onto the standard status it belongs
+    to, or use the dropdown next to it if you'd rather not drag. This list also powers Manage Assets' Status filter.
+  </p>
+
+  <h3>Standard Statuses</h3>
+  <p class="muted">The master list of recognized statuses. Add, rename, or remove entries as needed.</p>
+  <form method="post" action="{{ url_for('settings.add_standard_status') }}" class="field-row">
+    <div>
+      <label for="new_standard_status">New standard status</label>
+      <input type="text" id="new_standard_status" name="name" placeholder="e.g. IN REPAIR" class="uc" required>
+    </div>
+    <div style="flex: 0 0 auto; align-self: flex-end;"><button type="submit">Add</button></div>
+  </form>
+
+  <div class="device-mapping-grid">
+    <div class="device-pool-col">
+      <h3>Unmapped Statuses {% if unmapped_statuses %}<span class="badge badge-changed">{{ unmapped_statuses | length }}</span>{% endif %}</h3>
+      <div class="device-pool" id="status-pool">
+        {% for s in unmapped_statuses %}
+        <div class="device-chip" draggable="true" data-alias="{{ s['raw_status'] }}">
+          <div class="device-chip-label">{{ s['raw_status'] }} <span class="muted">&times;{{ s['occurrences'] }}</span></div>
+          <form method="post" action="{{ url_for('settings.map_status_alias') }}" class="device-chip-form">
+            <input type="hidden" name="alias" value="{{ s['raw_status'] }}">
+            <select name="canonical_name">
+              {% for name in standard_statuses %}<option value="{{ name }}">{{ name }}</option>{% endfor %}
+            </select>
+            <button type="submit">Assign</button>
+          </form>
+          <div class="muted" style="font-size:0.72rem; margin:0.25rem 0;">or</div>
+          <form method="post" action="{{ url_for('settings.map_status_alias') }}" class="device-chip-form">
+            <input type="hidden" name="alias" value="{{ s['raw_status'] }}">
+            <input type="text" name="canonical_name" placeholder="new standard status..." class="uc" required>
+            <button type="submit" class="secondary">Create &amp; Assign</button>
+          </form>
+        </div>
+        {% else %}
+        <p class="muted">Nothing unmapped right now - every status seen so far matches a standard status or an existing alias.</p>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="device-bucket-col">
+      <h3>Standard Statuses</h3>
+      <div class="device-buckets">
+        {% for name in standard_statuses %}
+        <div class="device-bucket">
+          <div class="device-bucket-header">
+            <strong>{{ name }}</strong>
+            <div class="device-bucket-actions">
+              <form method="post" action="{{ url_for('settings.rename_standard_status') }}" class="inline-form">
+                <input type="hidden" name="old_name" value="{{ name }}">
+                <input type="text" name="new_name" placeholder="rename to..." class="uc">
+                <button type="submit" class="secondary">Rename</button>
+              </form>
+              <form method="post" action="{{ url_for('settings.delete_standard_status') }}" class="inline-form">
+                <input type="hidden" name="name" value="{{ name }}">
+                <button type="submit" class="danger">Delete</button>
+              </form>
+            </div>
+          </div>
+          <div class="device-dropzone" data-name="{{ name }}" data-map-url="{{ url_for('settings.map_status_alias') }}">
+            {% for alias in status_aliases_by_name.get(name, []) %}
+            <span class="device-alias-tag">
+              {{ alias }}
+              <form method="post" action="{{ url_for('settings.unmap_status_alias') }}" class="inline-form">
+                <input type="hidden" name="alias" value="{{ alias }}">
+                <button type="submit" title="Unmap">&times;</button>
+              </form>
+            </span>
+            {% else %}
+            <span class="muted">Drop a status here</span>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="panel" id="model-mapping">
+  <h2>Model Mapping</h2>
+  <p class="muted">
+    Standardizes the Model column during import, grouped by manufacturer, same idea as Device Name Mapping. Any
+    model a cleaning report doesn't recognize lands in the <strong>Unmapped</strong> pool below - drag it onto the
+    standard model it belongs to, or use the dropdown next to it if you'd rather not drag.
+  </p>
+
+  <h3>Standard Models</h3>
+  <p class="muted">The master list of recognized models. Add, rename, or remove entries as your equipment list evolves.</p>
+  <form method="post" action="{{ url_for('settings.add_standard_model') }}" class="field-row">
+    <div>
+      <label for="new_standard_model">New standard model</label>
+      <input type="text" id="new_standard_model" name="name" placeholder="e.g. DELL OPTIPLEX 3080" class="uc" required>
+    </div>
+    <div style="flex: 0 0 auto; align-self: flex-end;"><button type="submit">Add</button></div>
+  </form>
+
+  <div class="device-mapping-grid">
+    <div class="device-pool-col">
+      <h3>Unmapped Models {% if unmapped_models %}<span class="badge badge-changed">{{ unmapped_models | length }}</span>{% endif %}</h3>
+      <div class="device-pool" id="model-pool">
+        {% for m in unmapped_models %}
+        <div class="device-chip" draggable="true" data-alias="{{ m['raw_model'] }}">
+          <div class="device-chip-label">{{ m['raw_model'] }} <span class="muted">&times;{{ m['occurrences'] }}</span></div>
+          <form method="post" action="{{ url_for('settings.map_model_alias') }}" class="device-chip-form">
+            <input type="hidden" name="alias" value="{{ m['raw_model'] }}">
+            <select name="canonical_name">
+              {% for name in standard_models %}<option value="{{ name }}">{{ name }}</option>{% endfor %}
+            </select>
+            <button type="submit">Assign</button>
+          </form>
+          <div class="muted" style="font-size:0.72rem; margin:0.25rem 0;">or</div>
+          <form method="post" action="{{ url_for('settings.map_model_alias') }}" class="device-chip-form">
+            <input type="hidden" name="alias" value="{{ m['raw_model'] }}">
+            <input type="text" name="canonical_name" placeholder="new standard model..." class="uc" required>
+            <button type="submit" class="secondary">Create &amp; Assign</button>
+          </form>
+        </div>
+        {% else %}
+        <p class="muted">Nothing unmapped right now - every model seen so far matches a standard model or an existing alias.</p>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="device-bucket-col">
+      <h3>Standard Models</h3>
+      <div class="device-buckets">
+        {% for name in standard_models %}
+        <div class="device-bucket">
+          <div class="device-bucket-header">
+            <strong>{{ name }}</strong>
+            <div class="device-bucket-actions">
+              <form method="post" action="{{ url_for('settings.rename_standard_model') }}" class="inline-form">
+                <input type="hidden" name="old_name" value="{{ name }}">
+                <input type="text" name="new_name" placeholder="rename to..." class="uc">
+                <button type="submit" class="secondary">Rename</button>
+              </form>
+              <form method="post" action="{{ url_for('settings.delete_standard_model') }}" class="inline-form">
+                <input type="hidden" name="name" value="{{ name }}">
+                <button type="submit" class="danger">Delete</button>
+              </form>
+            </div>
+          </div>
+          <div class="device-dropzone" data-name="{{ name }}" data-map-url="{{ url_for('settings.map_model_alias') }}">
+            {% for alias in model_aliases_by_name.get(name, []) %}
+            <span class="device-alias-tag">
+              {{ alias }}
+              <form method="post" action="{{ url_for('settings.unmap_model_alias') }}" class="inline-form">
+                <input type="hidden" name="alias" value="{{ alias }}">
+                <button type="submit" title="Unmap">&times;</button>
+              </form>
+            </span>
+            {% else %}
+            <span class="muted">Drop a model here</span>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Data Storage Location</h2>
+  <p class="muted">The database and every generated hand-over form are stored here, independent of where this program itself is installed:</p>
+  <p><code>{{ data_dir }}</code></p>
+  <form method="post" action="{{ url_for('settings.open_data_folder') }}" style="display:inline-block; margin-right:0.5rem;">
+    <button type="submit" class="secondary">Open Data Folder</button>
+  </form>
+  {% if data_dir != default_data_dir %}
+  <form method="post" action="{{ url_for('settings.reset_data_location') }}" style="display:inline-block;" onsubmit="return confirm('Reset to the default location? Files already in {{ data_dir }} stay there - you will need to move them back manually if you want to keep using them.');">
+    <button type="submit" class="secondary">Reset to Default</button>
+  </form>
+  {% endif %}
+
+  <h3 style="margin-top:1.2rem;">Change Location</h3>
+  <p class="muted">Move the database, hand-over files, and exports to a different folder - e.g. a drive with more space, or a shared network path. Existing data is moved automatically; nothing already imported is lost.</p>
+  <form method="post" action="{{ url_for('settings.change_data_location') }}" onsubmit="return confirm('Move all data to this new folder now? Make sure no one else is using the tool at the same time.');">
+    <div class="field-row">
+      <div><input type="text" name="new_data_dir" placeholder="e.g. D:\AssetManagementData or \\server\share\AssetManagementData" required></div>
+      <div style="flex: 0 0 auto;"><button type="submit">Change Location</button></div>
+    </div>
+  </form>
+</div>
+
+<div class="panel">
+  <h2>Share With Other Computers</h2>
+  {% if lan_url %}
+  <p class="muted">This computer is acting as the server. Everyone else on the same office/home network can use this tool - with the same shared data - just by opening this address in their own browser (no install needed):</p>
+  <p><code>{{ lan_url }}</code></p>
+  <p class="muted">If it's not reachable from another computer, check that Windows Firewall allowed this app on "Private networks" (it usually prompts the first time), and that both computers are on the same network.</p>
+  {% else %}
+  <p class="muted">Not running as a shared server right now.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Import Data - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>Import Data</h1>
+<p class="muted">
+  Upload source spreadsheets to clean, normalize, and load them into the tool. Nothing here modifies your original files.
+  <a href="{{ url_for('import_data.history') }}">View Import History</a> &middot;
+  <a href="{{ url_for('import_data.diff_reports') }}">Saved Diff Reports</a> &middot;
+  <a href="{{ url_for('asset_edit.duplicates') }}">Check Duplicates</a>
+</p>
+
+<div class="grid grid-2">
+  <div class="panel">
+    <h2>1. Branch Codes</h2>
+    <p class="muted">From <code>IDFromAither/</code> - the branch master list (Branch No, Local/Eng branch name...).</p>
+    <form method="post" action="{{ url_for('import_data.upload_branch_file') }}" enctype="multipart/form-data">
+      <label for="branch-files">Excel file(s)</label>
+      <input type="file" id="branch-files" name="files" accept=".xlsx" multiple required>
+      <button type="submit">Import Branch Codes</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <h2>2. User IDs</h2>
+    <p class="muted">From <code>IDFromAither/</code> - the user/banker list (Branch ID, User No, User Name...).</p>
+    <form method="post" action="{{ url_for('import_data.upload_user_file') }}" enctype="multipart/form-data">
+      <label for="user-files">Excel file(s)</label>
+      <input type="file" id="user-files" name="files" accept=".xlsx" multiple required>
+      <button type="submit">Import User IDs</button>
+    </form>
+  </div>
+</div>
+
+{% if id_files_folder %}
+<div class="panel">
+  <p class="muted">Or import both branch &amp; user files at once from the configured folder (file type is auto-detected per file):</p>
+  <form method="post" action="{{ url_for('import_data.import_from_folder') }}">
+    <input type="hidden" name="kind" value="id_files">
+    <button type="submit" class="secondary">Import all ID files from folder: {{ id_files_folder }}</button>
+  </form>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>3. Monthly Asset Reports</h2>
+  <p class="muted">From <code>Asset reports/</code> - one or more per-branch equipment list files. Column layout and sheet names may vary between files; the importer auto-detects the equipment sheet and maps columns, and normalizes device names against the known list in Settings. Each branch's new file is also compared against its previous import right on the result page (added/removed/changed), with an Excel export.</p>
+  <form method="post" action="{{ url_for('import_data.upload_asset_reports') }}" enctype="multipart/form-data">
+    <label for="asset-files">Excel files</label>
+    <input type="file" id="asset-files" name="files" accept=".xlsx" multiple required>
+    <label for="asset-period">Reporting month</label>
+    <input type="month" id="asset-period" name="period" value="{{ current_month }}">
+    <button type="submit">Import &amp; Compare</button>
+  </form>
+  {% if asset_reports_folder %}
+  <form method="post" action="{{ url_for('import_data.import_from_folder') }}">
+    <input type="hidden" name="kind" value="asset_reports">
+    <label for="asset-folder-period">Reporting month</label>
+    <input type="month" id="asset-folder-period" name="period" value="{{ current_month }}">
+    <button type="submit" class="secondary">Import all from folder: {{ asset_reports_folder }}</button>
+  </form>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>4. Total Asset History (one-time baseline)</h2>
+  <p class="muted">The aggregated "Total Asset" workbook that packs several months of every branch into one sheet (with Month/Year columns). Each month becomes its own historical snapshot. Only needed once, to seed history before regular monthly imports take over.</p>
+  <form method="post" action="{{ url_for('import_data.upload_total_asset') }}" enctype="multipart/form-data">
+    <label for="total-asset-file">Excel file</label>
+    <input type="file" id="total-asset-file" name="file" accept=".xlsx" required>
+    <button type="submit">Import History</button>
+  </form>
+</div>
+
+<p class="muted">Tip: set default import folders and manage device/branch name aliases on the <a href="{{ url_for('settings.index') }}">Settings</a> page.</p>
+{% endblock %}
