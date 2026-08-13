@@ -28,7 +28,10 @@ CREATE TABLE IF NOT EXISTS import_batches (
     kind TEXT NOT NULL,
     source_files_json TEXT,
     label TEXT,
-    period TEXT
+    period TEXT,
+    sheet_name TEXT,
+    branch_hint TEXT,
+    unmapped_columns_json TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_import_batches_period ON import_batches (period);
@@ -332,6 +335,8 @@ def init_db() -> None:
                 (alias, canonical),
             )
         _backfill_branch_names(conn)
+        _backfill_unmapped(conn, "asset_items", "device_name", "device_aliases", "device_standard_names",
+                            "device_unmapped", "raw_name")
         _backfill_unmapped(conn, "asset_items", "status", "status_aliases", "status_standard_names",
                             "status_unmapped", "raw_status")
         _backfill_unmapped(conn, "asset_items", "model_device", "model_aliases", "model_standard_names",
@@ -362,6 +367,14 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
     # database, the ALTER TABLE just above only just added the column this
     # index is on, and CREATE INDEX would fail if it ran any earlier.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_users_no_norm ON users (user_no_norm)")
+
+    existing_batch_cols = {row["name"] for row in conn.execute("PRAGMA table_info(import_batches)").fetchall()}
+    if "sheet_name" not in existing_batch_cols:
+        conn.execute("ALTER TABLE import_batches ADD COLUMN sheet_name TEXT")
+    if "branch_hint" not in existing_batch_cols:
+        conn.execute("ALTER TABLE import_batches ADD COLUMN branch_hint TEXT")
+    if "unmapped_columns_json" not in existing_batch_cols:
+        conn.execute("ALTER TABLE import_batches ADD COLUMN unmapped_columns_json TEXT")
 
 
 def _backfill_user_no_norm(conn: sqlite3.Connection) -> None:

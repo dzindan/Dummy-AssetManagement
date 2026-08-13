@@ -26,7 +26,7 @@ from openpyxl.styles import Font
 
 from ..db import get_connection
 from ..paths import safe_filename
-from ..queries import get_branches_with_current_assets, get_current_assets
+from ..queries import get_branch, get_branches_with_current_assets, get_current_assets
 from ..scanner import DEFAULT_CONCURRENCY, run_scan
 
 bp = Blueprint("network_check", __name__, url_prefix="/network-check")
@@ -172,7 +172,7 @@ def start_scan():
     conn = get_connection()
     try:
         rows = get_current_assets(conn, branch_no=branch_no)
-        branch_row = conn.execute("SELECT eng_name FROM branches WHERE branch_no = ?", (branch_no,)).fetchone()
+        branch_row = get_branch(conn, branch_no)
     finally:
         conn.close()
 

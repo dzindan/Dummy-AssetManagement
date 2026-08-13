@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .queries import get_batch_assets_for_branch, get_branches_in_batch, get_previous_batch_for_branch
+from .queries import get_batch_assets_for_branch, get_branch, get_branches_in_batch, get_previous_batch_for_branch
 
 COMPARE_FIELDS = ["status", "user_id_norm", "full_name", "position", "device_name", "model_device"]
 FIELD_LABELS = {
@@ -36,9 +36,7 @@ class BranchDiff:
 
 
 def diff_branch(conn, branch_no: str, new_batch_id: int) -> BranchDiff:
-    branch_row = conn.execute(
-        "SELECT eng_name FROM branches WHERE branch_no = ?", (branch_no,)
-    ).fetchone()
+    branch_row = get_branch(conn, branch_no)
     branch_label = branch_row["eng_name"] if branch_row else (branch_no or "(unresolved branch)")
 
     previous_batch_id = get_previous_batch_for_branch(conn, branch_no, new_batch_id)
@@ -85,4 +83,17 @@ def diff_batch(conn, batch_id: int, fallback_branch_no: str = "") -> list[Branch
     branch_nos = get_branches_in_batch(conn, batch_id)
     if not branch_nos and fallback_branch_no:
         branch_nos = [fallback_branch_no]
+
+    # get_branches_in_batch excludes branch_no='' (unresolved). A batch can
+    # still carry unresolved rows alongside resolved ones (e.g. the Total
+    # Asset history import resolves each row independently) - without this,
+    # those rows are silently skipped by every diff below instead of showing
+    # up as "(unresolved branch)" (the label diff_branch already renders for
+    # branch_no=''), making them look like they were never diffed at all.
+    has_unresolved = conn.execute(
+        "SELECT 1 FROM asset_items WHERE batch_id = ? AND branch_no = '' LIMIT 1", (batch_id,)
+    ).fetchone() is not None
+    if has_unresolved and "" not in branch_nos:
+        branch_nos = [*branch_nos, ""]
+
     return [diff_branch(conn, b, batch_id) for b in branch_nos]

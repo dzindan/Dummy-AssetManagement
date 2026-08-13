@@ -8,20 +8,16 @@ from ..analytics import get_branch_device_month_changes, get_branch_item_trend
 from ..charts import render_line_chart
 from ..db import get_connection
 from ..paths import safe_filename
-from ..queries import get_current_assets
+from ..queries import get_branch, get_current_assets
 
 bp = Blueprint("branch_detail", __name__, url_prefix="/branch")
-
-
-def _get_branch(conn, branch_no: str):
-    return conn.execute("SELECT * FROM branches WHERE branch_no = ?", (branch_no,)).fetchone()
 
 
 @bp.route("/<branch_no>")
 def detail(branch_no):
     conn = get_connection()
     try:
-        branch = _get_branch(conn, branch_no)
+        branch = get_branch(conn, branch_no)
         if not branch:
             abort(404, description="Branch not found.")
         assets = get_current_assets(conn, branch_no=branch_no)
@@ -69,7 +65,7 @@ def detail(branch_no):
 def export(branch_no):
     conn = get_connection()
     try:
-        branch = _get_branch(conn, branch_no)
+        branch = get_branch(conn, branch_no)
         if not branch:
             abort(404, description="Branch not found.")
         assets = get_current_assets(conn, branch_no=branch_no)

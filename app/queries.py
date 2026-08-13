@@ -305,6 +305,15 @@ def get_latest_batch(conn, kind: str = "asset_report"):
     ).fetchone()
 
 
+def get_branch(conn, branch_no: str):
+    """Look up one branch row by its branch_no PK - the single shared home
+    for what used to be seven independent copies of this same lookup
+    scattered across diffing.py, importer.py, and several routes."""
+    if not branch_no:
+        return None
+    return conn.execute("SELECT * FROM branches WHERE branch_no = ?", (branch_no,)).fetchone()
+
+
 def get_branches_in_batch(conn, batch_id: int) -> list[str]:
     rows = conn.execute(
         "SELECT DISTINCT branch_no FROM asset_items WHERE batch_id = ? AND branch_no != ''",

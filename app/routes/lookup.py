@@ -5,7 +5,7 @@ from flask import Blueprint, flash, redirect, render_template, request, url_for
 from ..db import get_connection, get_setting
 from ..handover import ASSET_CONDITIONS, HO_TYPES, REASONS, record_handover, render_handover_docx
 from ..importer import find_user, normalize_user_id
-from ..queries import get_current_assets, search_current_assets_by_serial
+from ..queries import get_branch, get_current_assets, search_current_assets_by_serial
 from ..text_utils import strip_bank_prefix
 
 bp = Blueprint("lookup", __name__, url_prefix="/lookup")
@@ -54,9 +54,7 @@ def index():
             user = find_user(conn, q)
             if user:
                 user_id_norm = normalize_user_id(user["user_no"])[1]
-                branch = conn.execute(
-                    "SELECT * FROM branches WHERE branch_no = ?", (user["branch_no"],)
-                ).fetchone()
+                branch = get_branch(conn, user["branch_no"])
                 assets = get_current_assets(conn, user_id_norm=user_id_norm)
             else:
                 _, norm = normalize_user_id(q)

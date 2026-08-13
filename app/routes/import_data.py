@@ -2,6 +2,7 @@ import datetime as dt
 import glob
 import hashlib
 import io
+import json
 import os
 import uuid
 
@@ -23,6 +24,7 @@ from ..queries import (
     find_duplicate_serials_in_batch,
     find_existing_batch_for_branch_period,
     find_unrecognized_in_batch,
+    get_branch,
 )
 from .asset_edit import build_duplicates_workbook
 from .update_compare import build_diff_workbook
@@ -502,18 +504,17 @@ def result():
                 continue
             rows = conn.execute("SELECT * FROM asset_items WHERE batch_id = ?", (batch_id,)).fetchall()
             branch_no = next((r["branch_no"] for r in rows if r["branch_no"]), "")
-            branch_row = (
-                conn.execute("SELECT eng_name FROM branches WHERE branch_no = ?", (branch_no,)).fetchone()
-                if branch_no
-                else None
-            )
+            branch_row = get_branch(conn, branch_no)
             report = CleaningReport(
                 source_file=batch["label"] or f"Batch #{batch_id}",
+                sheet_name=batch["sheet_name"] or "",
                 rows_read=len(rows),
                 rows_imported=len(rows),
+                branch_hint=batch["branch_hint"] or "",
                 branch_matched=branch_row["eng_name"] if branch_row else "",
                 branch_no=branch_no,
                 batch_id=batch_id,
+                unmapped_columns=json.loads(batch["unmapped_columns_json"]) if batch["unmapped_columns_json"] else [],
             )
             report.duplicate_serials = find_duplicate_serials_in_batch(conn, batch_id)
             report.unrecognized_devices = find_unrecognized_in_batch(

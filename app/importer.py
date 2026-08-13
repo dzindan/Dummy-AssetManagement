@@ -21,6 +21,7 @@ import openpyxl
 from unidecode import unidecode
 
 from .db import get_connection, log_import
+from .queries import get_branch
 from .text_utils import normalize_user_id, strip_bank_prefix
 
 
@@ -226,10 +227,7 @@ def _resolve_branch_uncached(conn, branch_text: str) -> tuple[str, str]:
         "SELECT branch_no FROM branch_aliases WHERE alias = ?", (norm,)
     ).fetchone()
     if alias_row:
-        b = conn.execute(
-            "SELECT branch_no, eng_name FROM branches WHERE branch_no = ?",
-            (alias_row["branch_no"],),
-        ).fetchone()
+        b = get_branch(conn, alias_row["branch_no"])
         if b:
             return b["branch_no"], b["eng_name"]
 
@@ -691,16 +689,30 @@ def import_asset_report(path: str, source_label: str | None = None, period: str 
     now = _now_iso()
     resolved_period = period.strip() if period and period.strip() else now[:7]
     batch_id = conn.execute(
-        "INSERT INTO import_batches (imported_at, kind, source_files_json, label, period) VALUES (?, 'asset_report', ?, ?, ?)",
-        (now, json.dumps([report.source_file]), report.branch_hint or match.sheet_name, resolved_period),
+        """INSERT INTO import_batches
+           (imported_at, kind, source_files_json, label, period, sheet_name, branch_hint, unmapped_columns_json)
+           VALUES (?, 'asset_report', ?, ?, ?, ?, ?, ?)""",
+        (
+            now, json.dumps([report.source_file]), report.branch_hint or match.sheet_name, resolved_period,
+            report.sheet_name, report.branch_hint, json.dumps(report.unmapped_columns),
+        ),
     ).lastrowid
     report.batch_id = batch_id
 
     data_rows = ws.iter_rows(min_row=match.header_row_idx + 2, values_only=True)
-    _ingest_asset_rows(
-        conn, batch_id, data_rows, match.col_map, match.branch_hint, report.source_file, report,
-        fixed_branch_no=branch_no,
-    )
+    try:
+        _ingest_asset_rows(
+            conn, batch_id, data_rows, match.col_map, match.branch_hint, report.source_file, report,
+            fixed_branch_no=branch_no,
+        )
+    except Exception as exc:  # noqa: BLE001 - surfaced to the user, mirrors the load_workbook guard above
+        conn.rollback()
+        report.error = f"Import failed while processing rows: {exc}"
+        log_import(conn, "asset_report", report.source_file, period=period or "", result=report.error)
+        conn.commit()
+        conn.close()
+        wb.close()
+        return report
 
     log_import(conn, "asset_report", report.source_file, rows_processed=report.rows_imported, period=resolved_period)
     conn.commit()
@@ -726,7 +738,16 @@ def import_total_asset_history(path: str) -> list[CleaningReport]:
     instead of one file per month). Each distinct (Month, Years) becomes its own
     historical import_batch, inserted oldest-first, using the same row
     normalization as a regular monthly asset report."""
-    wb = openpyxl.load_workbook(path, data_only=True)
+    try:
+        wb = openpyxl.load_workbook(path, data_only=True)
+    except Exception as exc:  # noqa: BLE001 - surfaced to the user as-is, mirrors import_asset_report's guard
+        error = f"Could not open file: {exc}"
+        conn = get_connection()
+        log_import(conn, "total_asset_baseline", path, result=error)
+        conn.commit()
+        conn.close()
+        return [CleaningReport(source_file=path, error=error)]
+
     match = detect_equipment_sheet(wb)
     if not match:
         wb.close()
@@ -768,8 +789,9 @@ def import_total_asset_history(path: str) -> list[CleaningReport]:
         year_num, month_num = _month_sort_key(month_text, year_val)
         period = f"{year_num:04d}-{month_num:02d}"
         batch_id = conn.execute(
-            "INSERT INTO import_batches (imported_at, kind, source_files_json, label, period) VALUES (?, 'asset_report', ?, ?, ?)",
-            (now, json.dumps([path]), label, period),
+            """INSERT INTO import_batches (imported_at, kind, source_files_json, label, period, sheet_name)
+               VALUES (?, 'asset_report', ?, ?, ?, ?)""",
+            (now, json.dumps([path]), label, period, match.sheet_name),
         ).lastrowid
         report.batch_id = batch_id
         _ingest_asset_rows(conn, batch_id, rows, match.col_map, "", report.source_file, report)
@@ -785,7 +807,15 @@ def import_total_asset_history(path: str) -> list[CleaningReport]:
 # --- ID master files (branches / users) -----------------------------------
 
 def import_branch_file(path: str) -> dict:
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    except Exception as exc:  # noqa: BLE001 - surfaced to the user as-is, mirrors import_asset_report's guard
+        error = f"Could not open file: {exc}"
+        conn = get_connection()
+        log_import(conn, "branch_codes", path, result=error)
+        conn.commit()
+        conn.close()
+        return {"error": error}
     ws = wb[wb.sheetnames[0]]
     rows = ws.iter_rows(values_only=True)
     header = next(rows)
@@ -834,7 +864,15 @@ def import_branch_file(path: str) -> dict:
 
 
 def import_user_file(path: str) -> dict:
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    except Exception as exc:  # noqa: BLE001 - surfaced to the user as-is, mirrors import_asset_report's guard
+        error = f"Could not open file: {exc}"
+        conn = get_connection()
+        log_import(conn, "user_ids", path, result=error)
+        conn.commit()
+        conn.close()
+        return {"error": error}
     ws = wb[wb.sheetnames[0]]
     rows = ws.iter_rows(values_only=True)
     header = next(rows)
@@ -888,7 +926,15 @@ def import_user_file(path: str) -> dict:
 
 def import_id_file(path: str) -> dict:
     """Detect whether a file from IDFromAither/ is a branch list or a user list."""
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    except Exception as exc:  # noqa: BLE001 - surfaced to the user as-is, mirrors import_asset_report's guard
+        error = f"Could not open file: {exc}"
+        conn = get_connection()
+        log_import(conn, "id_file", path, result=error)
+        conn.commit()
+        conn.close()
+        return {"error": error, "file_type": "unknown"}
     ws = wb[wb.sheetnames[0]]
     header = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
     keys = {_normalize_header_cell(h) for h in header if h}

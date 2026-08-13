@@ -6,6 +6,7 @@ from a branch's own imported asset IPs (see routes/network_check.py), never
 from free-text user input."""
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
 import socket
@@ -130,8 +131,25 @@ def _format_uptime(delta_seconds: float) -> str:
     return " ".join(parts)
 
 
+def _validate_ip(ip: str) -> Optional[str]:
+    """Reject anything that isn't a syntactically valid IP address. Both
+    get_uptime and get_hardware interpolate `ip` directly into a PowerShell
+    script string below - an unvalidated value (e.g. from an imported Excel
+    cell) could otherwise break out of the quoted literal and inject
+    arbitrary PowerShell. A real IP address can never contain the quote/
+    semicolon characters needed to do that."""
+    try:
+        ipaddress.ip_address(ip)
+        return None
+    except ValueError:
+        return f"Invalid IP address: {ip!r}"
+
+
 def get_uptime(ip: str) -> dict:
     """Run Get-WmiObject Win32_OperatingSystem to compute uptime from LastBootUpTime."""
+    invalid = _validate_ip(ip)
+    if invalid:
+        return {"ok": False, "error": invalid, "boot_time": None, "uptime": None}
     script = _UPTIME_PS_SCRIPT.format(ip=ip)
     code, out = _run(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
@@ -243,6 +261,14 @@ def _mac_result(raw: dict) -> dict:
 
 def get_hardware(ip: str) -> dict:
     """Run Get-WmiObject against ComputerSystem/BIOS, DiskDrive, WmiMonitorID, Processor, PhysicalMemory, NIC MAC."""
+    invalid = _validate_ip(ip)
+    if invalid:
+        empty = {"ok": False, "error": invalid, "items": []}
+        empty_mac = {"ok": False, "error": invalid, "mac": None}
+        return {
+            "system": empty, "disks": empty, "monitors": empty, "cpu": empty, "memory": empty,
+            "mac_address": empty_mac,
+        }
     script = _HARDWARE_PS_SCRIPT.replace("__IP__", ip)
     code, out = _run(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],

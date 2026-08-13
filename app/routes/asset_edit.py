@@ -9,6 +9,7 @@ from ..db import get_connection
 from ..queries import (
     UNRESOLVED_BRANCH_FILTER,
     find_current_duplicate_serials,
+    get_branch,
     get_branches_with_current_assets,
     has_unresolved_current_assets,
     search_assets,
@@ -88,9 +89,7 @@ def index():
             if only_branch == UNRESOLVED_BRANCH_FILTER:
                 selected_branch = {"branch_no": "", "eng_name": "Unresolved / unmatched branch"}
             else:
-                selected_branch = conn.execute(
-                    "SELECT * FROM branches WHERE branch_no = ?", (only_branch,)
-                ).fetchone()
+                selected_branch = get_branch(conn, only_branch)
     finally:
         conn.close()
 
