@@ -157,38 +157,70 @@ document.addEventListener("click", function (e) {
   form.submit();
 });
 
-// Manage Assets: per-column header filter row - live client-side narrowing
-// of the already-loaded (unpaginated) table, on top of the server-side
-// Branch/Device/Status/Search panel above it. Each input filters its own
-// column by case-insensitive substring match; a row must match every
-// active (non-empty) filter to stay visible.
-document.addEventListener("input", function (e) {
-  if (!e.target.matches(".header-filter")) return;
-  const table = e.target.closest("[data-header-filter-table]");
+// Manage Assets: per-column header filter dropdowns - built once from the
+// distinct values actually present in the (unpaginated) table, then a
+// plain exact-match <select> per column. An earlier free-text version
+// re-scanned every row's text on every keystroke, which visibly lagged
+// against a table this long; a <select> only re-filters on "change", and
+// each row's per-column text is cached once here instead of re-read from
+// the DOM on every filter change.
+document.addEventListener("DOMContentLoaded", function () {
+  const table = document.querySelector("[data-header-filter-table]");
   if (!table) return;
+  const filterRow = table.querySelector(".header-filter-row");
+  if (!filterRow) return;
 
-  const filterRow = e.target.closest("tr");
-  const filters = Array.from(filterRow.children).map(function (th) {
-    const input = th.querySelector(".header-filter");
-    return input ? input.value.trim().toLowerCase() : "";
+  const bodyRows = Array.from(table.querySelectorAll("tbody tr"));
+  const selects = Array.from(filterRow.children).map(function (th) {
+    return th.querySelector(".header-filter");
   });
 
-  let visibleCount = 0;
-  table.querySelectorAll("tbody tr").forEach(function (row) {
-    const cells = row.children;
-    let visible = true;
-    for (let i = 0; i < filters.length; i++) {
-      if (!filters[i]) continue;
-      const text = cells[i] ? cells[i].textContent.toLowerCase() : "";
-      if (!text.includes(filters[i])) {
-        visible = false;
-        break;
+  const rowTexts = bodyRows.map(function (row) {
+    return Array.from(row.children).map(function (cell) {
+      return cell.textContent.trim();
+    });
+  });
+
+  selects.forEach(function (select, colIndex) {
+    if (!select) return;
+    const values = new Set();
+    rowTexts.forEach(function (cells) {
+      if (cells[colIndex]) values.add(cells[colIndex]);
+    });
+    Array.from(values)
+      .sort(function (a, b) {
+        return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+      })
+      .forEach(function (value) {
+        const opt = document.createElement("option");
+        opt.value = value;
+        opt.textContent = value;
+        select.appendChild(opt);
+      });
+  });
+
+  function applyFilters() {
+    const activeFilters = selects.map(function (select) {
+      return select ? select.value : "";
+    });
+    let visibleCount = 0;
+    bodyRows.forEach(function (row, i) {
+      let visible = true;
+      for (let c = 0; c < activeFilters.length; c++) {
+        if (!activeFilters[c]) continue;
+        if (rowTexts[i][c] !== activeFilters[c]) {
+          visible = false;
+          break;
+        }
       }
-    }
-    row.style.display = visible ? "" : "none";
-    if (visible) visibleCount++;
-  });
+      row.style.display = visible ? "" : "none";
+      if (visible) visibleCount++;
+    });
+    const counter = document.getElementById("asset-row-count");
+    if (counter) counter.textContent = visibleCount;
+  }
 
-  const counter = document.getElementById("asset-row-count");
-  if (counter) counter.textContent = visibleCount;
+  selects.forEach(function (select) {
+    if (select) select.addEventListener("change", applyFilters);
+  });
 });
