@@ -24,6 +24,8 @@
   {% endif %}
   {% if not groups %}
     <p class="muted">No asset history found for this user ID.</p>
+  {% else %}
+    <p><a class="btn secondary" href="{{ url_for('user_history.export', q=q) }}">Export to Excel</a></p>
   {% endif %}
 </div>
 {% endif %}

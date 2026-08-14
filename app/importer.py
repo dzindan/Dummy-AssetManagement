@@ -93,6 +93,13 @@ SHEET_NAME_SKIP_PATTERNS = ["PIVOT", "PIOT", "GUIDELINE", "HDD BROKEN"]
 
 REQUIRED_FIELDS_FOR_HEADER_ROW = {"device_name", "serial_tag"}
 
+# Named (not inline) so the "Download Template" routes (app/routes/import_data.py)
+# can reference the exact same list the importer itself checks against - a
+# template can never silently drift from what actually gets accepted.
+BRANCH_FILE_REQUIRED_COLUMNS = ["BRANCH NO", "LOCAL BRANCH NAME", "ENG. BRANCH NAME"]
+USER_FILE_REQUIRED_COLUMNS = ["BRANCH ID", "USER NO", "USER NAME"]
+USER_FILE_OPTIONAL_COLUMNS = ["ENG. BANKER NAME", "BANKER KEY NUMBER", "STATUS"]
+
 
 def _build_alias_lookup() -> dict[str, str]:
     lookup = {}
@@ -821,8 +828,7 @@ def import_branch_file(path: str) -> dict:
     header = next(rows)
     col = {_normalize_header_cell(h): idx for idx, h in enumerate(header) if h}
 
-    required = ["BRANCH NO", "LOCAL BRANCH NAME", "ENG. BRANCH NAME"]
-    if not all(r in col for r in required):
+    if not all(r in col for r in BRANCH_FILE_REQUIRED_COLUMNS):
         wb.close()
         error = f"Unrecognized branch file layout: {header}"
         conn = get_connection()
@@ -878,8 +884,7 @@ def import_user_file(path: str) -> dict:
     header = next(rows)
     col = {_normalize_header_cell(h): idx for idx, h in enumerate(header) if h}
 
-    required = ["BRANCH ID", "USER NO", "USER NAME"]
-    if not all(r in col for r in required):
+    if not all(r in col for r in USER_FILE_REQUIRED_COLUMNS):
         wb.close()
         error = f"Unrecognized user file layout: {header}"
         conn = get_connection()

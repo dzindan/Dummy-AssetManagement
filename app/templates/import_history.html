@@ -3,6 +3,7 @@
 {% block content %}
 <h1>Import History</h1>
 <p class="muted">A permanent log of every import ever run - branch codes, user IDs, monthly asset reports, and Total Asset baseline periods - newest first.</p>
+<p><a class="btn secondary" href="{{ url_for('import_data.export_history') }}">Export to Excel</a></p>
 
 <div class="panel">
   <div class="table-scroll">

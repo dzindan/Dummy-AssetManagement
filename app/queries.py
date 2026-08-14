@@ -344,3 +344,36 @@ def get_batch_assets_for_branch(conn, batch_id: int, branch_no: str):
         "SELECT * FROM asset_items WHERE batch_id = ? AND branch_no = ?",
         (batch_id, branch_no),
     ).fetchall()
+
+
+def search_handover_records(conn, filters: dict):
+    """Filterable hand-over history - shared by the History page and its
+    Excel export (routes/history.py) so both run the exact same query
+    instead of the export copy-pasting the page's WHERE-building. `filters`
+    is the same {"user_no", "branch_no", "date_from", "date_to"} shape
+    History already builds from request.args. LEFT JOINs branches for
+    eng_name (the page itself only shows the raw branch_no) since a
+    downloaded report is more useful with the readable branch name."""
+    where = ["1=1"]
+    params: list = []
+    if filters.get("user_no"):
+        where.append("hr.user_no LIKE ?")
+        params.append(f"%{filters['user_no']}%")
+    if filters.get("branch_no"):
+        where.append("hr.branch_no = ?")
+        params.append(filters["branch_no"])
+    if filters.get("date_from"):
+        where.append("hr.ho_date >= ?")
+        params.append(filters["date_from"])
+    if filters.get("date_to"):
+        where.append("hr.ho_date <= ?")
+        params.append(filters["date_to"])
+
+    sql = f"""
+        SELECT hr.*, b.eng_name AS branch_eng_name
+        FROM handover_records hr
+        LEFT JOIN branches b ON b.branch_no = hr.branch_no
+        WHERE {" AND ".join(where)}
+        ORDER BY hr.id DESC
+    """
+    return conn.execute(sql, params).fetchall()

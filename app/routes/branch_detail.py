@@ -1,12 +1,10 @@
-import io
-
-import openpyxl
-from flask import Blueprint, abort, render_template, send_file
+from flask import Blueprint, abort, render_template
 from markupsafe import Markup
 
 from ..analytics import get_branch_device_month_changes, get_branch_item_trend
 from ..charts import render_line_chart
 from ..db import get_connection
+from ..exports import build_asset_rows_workbook, send_workbook
 from ..paths import safe_filename
 from ..queries import get_branch, get_current_assets
 
@@ -72,30 +70,6 @@ def export(branch_no):
     finally:
         conn.close()
 
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Current Assets"
-    ws.append(
-        [
-            "Device", "Model", "Serial/Service Tag", "Status", "Full Name",
-            "User ID", "Position", "Remark", "Handover Date",
-        ]
-    )
-    for a in assets:
-        ws.append(
-            [
-                a["device_name"], a["model_device"], a["serial_tag"], a["status"],
-                a["full_name"], a["user_id_raw"], a["position"], a["remark"], a["handover_date"],
-            ]
-        )
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
     safe_name = safe_filename(branch["eng_name"] or branch_no, fallback=branch_no)
-    return send_file(
-        buf,
-        as_attachment=True,
-        download_name=f"{safe_name} - assets.xlsx",
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+    wb = build_asset_rows_workbook(assets, sheet_title="Current Assets")
+    return send_workbook(wb, f"{safe_name} - assets.xlsx")

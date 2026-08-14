@@ -83,6 +83,7 @@
   <p class="muted"><span id="asset-row-count">{{ total }}</span> asset(s) match these filters.</p>
   {% if rows %}
   <div class="actions" style="margin-top:0;">
+    <a class="btn secondary" href="{{ url_for('asset_edit.export') }}?{{ request.query_string.decode() }}">Export to Excel</a>
     <button type="button" class="danger" data-bulk-delete-trigger
       data-bulk-delete-url="{{ url_for('asset_edit.bulk_delete') }}"
       data-bulk-delete-checkbox-class="asset-row-checkbox"

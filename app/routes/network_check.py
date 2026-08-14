@@ -15,17 +15,15 @@ original standalone scanner.
 
 from __future__ import annotations
 
-import io
 import re
 import threading
 import uuid
 
-import openpyxl
-from flask import Blueprint, jsonify, render_template, request, send_file
-from openpyxl.styles import Font
+from flask import Blueprint, jsonify, render_template, request
 
 from ..auth import require_permission
 from ..db import get_connection
+from ..exports import build_workbook, send_workbook
 from ..paths import safe_filename
 from ..queries import get_branch, get_branches_with_current_assets, get_current_assets
 from ..scanner import DEFAULT_CONCURRENCY, run_scan
@@ -325,6 +323,24 @@ def _match_text(value: bool | None) -> str:
     return "MATCH" if value else "MISMATCH"
 
 
+NETWORK_CHECK_COLUMNS = [
+    ("IP", "ip"),
+    ("Alive", lambda r: "Yes" if r["alive"] else "No"),
+    ("Hostname", lambda r: r.get("hostname") or ""),
+    ("MAC Address", lambda r: r["compare"]["live_mac"]),
+    ("PC Serial (Live)", lambda r: r["compare"]["live_pc_serial"]),
+    ("PC Serial (Imported)", lambda r: r["compare"]["imported_pc_serial"]),
+    ("PC Match", lambda r: _match_text(r["compare"]["pc_match"])),
+    ("Monitor Serial (Live)", lambda r: ", ".join(r["compare"]["live_monitor_serials"])),
+    ("Monitor Serial (Imported)", lambda r: r["compare"]["imported_monitor_serial"]),
+    ("Monitor Match", lambda r: _match_text(r["compare"]["monitor_match"])),
+    ("Logged-on User (Live)", lambda r: ", ".join(r["compare"]["live_users"])),
+    ("User (Imported)", lambda r: r["compare"]["imported_user"]),
+    ("User Match", lambda r: _match_text(r["compare"]["user_match"])),
+]
+NETWORK_CHECK_COLUMN_WIDTHS = [16, 8, 20, 18, 22, 22, 12, 22, 22, 14, 22, 22, 12]
+
+
 @bp.route("/scan/<scan_id>/export.xlsx")
 def export_xlsx(scan_id: str):
     with _LOCK:
@@ -334,67 +350,45 @@ def export_xlsx(scan_id: str):
         results = _augmented_results(state)
         branch_label = state["branch_label"]
 
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Network Check"
-    headers = [
-        "IP", "Alive", "Hostname", "MAC Address",
-        "PC Serial (Live)", "PC Serial (Imported)", "PC Match",
-        "Monitor Serial (Live)", "Monitor Serial (Imported)", "Monitor Match",
-        "Logged-on User (Live)", "User (Imported)", "User Match",
-    ]
-    ws.append(headers)
-    for cell in ws[1]:
-        cell.font = Font(bold=True)
-
-    for r in results:
-        c = r["compare"]
-        ws.append(
-            [
-                r["ip"],
-                "Yes" if r["alive"] else "No",
-                r.get("hostname") or "",
-                c["live_mac"],
-                c["live_pc_serial"],
-                c["imported_pc_serial"],
-                _match_text(c["pc_match"]),
-                ", ".join(c["live_monitor_serials"]),
-                c["imported_monitor_serial"],
-                _match_text(c["monitor_match"]),
-                ", ".join(c["live_users"]),
-                c["imported_user"],
-                _match_text(c["user_match"]),
-            ]
-        )
-
-    widths = [16, 8, 20, 18, 22, 22, 12, 22, 22, 14, 22, 22, 12]
-    for i, width in enumerate(widths, start=1):
-        ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = width
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
+    wb = build_workbook("Network Check", NETWORK_CHECK_COLUMNS, results, widths=NETWORK_CHECK_COLUMN_WIDTHS)
     safe_branch = safe_filename(branch_label, fallback="branch")
-    return send_file(
-        buf,
-        as_attachment=True,
-        download_name=f"network_check_{safe_branch}.xlsx",
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+    return send_workbook(wb, f"network_check_{safe_branch}.xlsx")
+
+
+NETWORK_CHECK_LOG_SQL = """
+    SELECT ncl.*, b.eng_name AS branch_eng_name
+    FROM network_check_log ncl
+    LEFT JOIN branches b ON b.branch_no = ncl.branch_no
+    ORDER BY ncl.id DESC LIMIT 500
+"""
+
+NETWORK_CHECK_LOG_EXPORT_COLUMNS = [
+    ("Applied At", "applied_at"),
+    ("Branch", lambda r: r["branch_eng_name"] or r["branch_no"]),
+    ("IP", "ip"),
+    ("Asset ID", "asset_id"),
+    ("Field", "field"),
+    ("Old Value", "old_value"),
+    ("New Value", "new_value"),
+]
 
 
 @bp.route("/log")
 def log():
     conn = get_connection()
     try:
-        rows = conn.execute(
-            """
-            SELECT ncl.*, b.eng_name AS branch_eng_name
-            FROM network_check_log ncl
-            LEFT JOIN branches b ON b.branch_no = ncl.branch_no
-            ORDER BY ncl.id DESC LIMIT 500
-            """
-        ).fetchall()
+        rows = conn.execute(NETWORK_CHECK_LOG_SQL).fetchall()
     finally:
         conn.close()
     return render_template("network_check_log.html", active_page="network_check", rows=rows)
+
+
+@bp.route("/log/export")
+def export_log():
+    conn = get_connection()
+    try:
+        rows = conn.execute(NETWORK_CHECK_LOG_SQL).fetchall()
+    finally:
+        conn.close()
+    wb = build_workbook("Network Check Log", NETWORK_CHECK_LOG_EXPORT_COLUMNS, rows)
+    return send_workbook(wb, "network_check_log.xlsx")

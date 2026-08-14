@@ -1,11 +1,8 @@
-import io
-
-import openpyxl
-from flask import Blueprint, flash, redirect, render_template, request, send_file, url_for
-from openpyxl.styles import Font
+from flask import Blueprint, flash, redirect, render_template, request, url_for
 
 from ..auth import require_permission
 from ..db import get_connection, prune_stale_unmapped
+from ..exports import ASSET_ROW_COLUMNS, build_asset_rows_workbook, build_duplicates_workbook, send_workbook
 from ..queries import (
     UNRESOLVED_BRANCH_FILTER,
     find_current_duplicate_serials,
@@ -41,14 +38,18 @@ EDITABLE_FIELDS = [
 UPPERCASE_FIELDS = set(EDITABLE_FIELDS) - {"handover_date"}
 
 
-@bp.route("/")
-def index():
-    filters = {
+def _filters_from_args() -> dict:
+    return {
         "branch_no": [v for v in request.args.getlist("branch_no") if v],
         "device_name": [v for v in request.args.getlist("device_name") if v],
         "status": [v for v in request.args.getlist("status") if v],
         "q": request.args.get("q", "").strip(),
     }
+
+
+@bp.route("/")
+def index():
+    filters = _filters_from_args()
 
     conn = get_connection()
     try:
@@ -105,6 +106,24 @@ def index():
     )
 
 
+@bp.route("/export")
+def export():
+    """Exports exactly what's currently on screen - same `filters` the page
+    itself builds from request.args, so a filtered view exports filtered,
+    matching branch_detail.export()'s existing "export what you're looking
+    at" pattern rather than always dumping every asset."""
+    filters = _filters_from_args()
+    conn = get_connection()
+    try:
+        rows, _total = search_assets(conn, filters)
+    finally:
+        conn.close()
+
+    columns = [("Branch", lambda r: r["branch_eng_name"] or r["branch_dept"])] + list(ASSET_ROW_COLUMNS)
+    wb = build_asset_rows_workbook(rows, sheet_title="Manage Assets", columns=columns)
+    return send_workbook(wb, "manage_assets.xlsx")
+
+
 @bp.route("/duplicates")
 def duplicates():
     """On-demand, system-wide duplicate-serial check across every branch's
@@ -118,36 +137,6 @@ def duplicates():
     return render_template("duplicate_check.html", active_page="assets", dupes=dupes)
 
 
-def build_duplicates_workbook(dupes: list) -> openpyxl.Workbook:
-    """Shared by both places duplicates get exported: the system-wide
-    Duplicate Check page (dupes from find_current_duplicate_serials) and the
-    per-import Cleaning Report (dupes from find_duplicate_serials_in_batch,
-    called from import_data.export_duplicates) - same [{"serial", "rows"}]
-    shape either way, just missing the joined branch_eng_name column in the
-    per-import case since that query has no branches JOIN."""
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Duplicates"
-    ws.append(["Serial", "Branch", "Device", "Model", "Full Name", "User ID", "Status", "Asset ID"])
-    for cell in ws[1]:
-        cell.font = Font(bold=True)
-
-    for d in dupes:
-        for row in d["rows"]:
-            branch = row["branch_eng_name"] if "branch_eng_name" in row.keys() else ""
-            ws.append(
-                [
-                    d["serial"], branch or row["branch_dept"], row["device_name"], row["model_device"],
-                    row["full_name"], row["user_id_raw"], row["status"], row["id"],
-                ]
-            )
-
-    widths = [16, 26, 14, 18, 22, 14, 12, 10]
-    for i, width in enumerate(widths, start=1):
-        ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = width
-    return wb
-
-
 @bp.route("/duplicates/export")
 def export_duplicates():
     conn = get_connection()
@@ -158,16 +147,7 @@ def export_duplicates():
     if not dupes:
         flash("No duplicate serials found among current assets.", "error")
         return redirect(url_for("asset_edit.duplicates"))
-    wb = build_duplicates_workbook(dupes)
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return send_file(
-        buf,
-        as_attachment=True,
-        download_name="duplicate_assets.xlsx",
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+    return send_workbook(build_duplicates_workbook(dupes), "duplicate_assets.xlsx")
 
 
 @bp.route("/bulk-delete", methods=["POST"])

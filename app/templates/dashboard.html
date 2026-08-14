@@ -27,7 +27,10 @@
 {% endif %}
 
 <div class="panel" style="margin-top: 1.25rem;">
-  <h2>Assets by Branch (by month)</h2>
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+    <h2 style="margin:0;">Assets by Branch (by month)</h2>
+    <a class="btn secondary" href="{{ url_for('dashboard.export') }}">Export to Excel</a>
+  </div>
   {% if month_table %}
     <p class="muted">
       Each cell is that branch's asset count for the month (its most recent import that month). The most recent month

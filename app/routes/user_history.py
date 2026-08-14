@@ -1,10 +1,18 @@
 from flask import Blueprint, render_template, request
 
 from ..db import get_connection
+from ..exports import build_workbook, send_workbook
 from ..importer import find_user, normalize_user_id
+from ..paths import safe_filename
 from ..queries import get_user_asset_history
 
 bp = Blueprint("user_history", __name__, url_prefix="/user-history")
+
+USER_HISTORY_EXPORT_COLUMNS = [
+    ("Period", "period"), ("Device", "device_name"), ("Model", "model_device"),
+    ("Serial/Tag", "serial_tag"), ("Status", "status"), ("Branch", "branch_dept"),
+    ("Handover Date", "handover_date"), ("Change", "change"),
+]
 
 
 def _group_by_period(rows):
@@ -32,9 +40,35 @@ def _group_by_period(rows):
     return groups
 
 
-@bp.route("/")
-def index():
-    q = request.args.get("q", "").strip()
+def _flatten_history_rows(groups: list[dict]) -> list[dict]:
+    """One row per (period, asset) for export - each currently-held asset
+    marked "Added" if it's new since the previous period, plus one row per
+    dropped asset marked "Removed" - same Added/Removed distinction the
+    page itself shows, just flattened into a single sheet."""
+    flat = []
+    for g in groups:
+        for item in g["assets"]:
+            flat.append(
+                {
+                    "period": g["period"], "device_name": item["device_name"], "model_device": item["model_device"],
+                    "serial_tag": item["serial_tag"], "status": item["status"], "branch_dept": item["branch_dept"],
+                    "handover_date": item["handover_date"],
+                    "change": "Added" if item["asset_key"] in g["added_keys"] else "",
+                }
+            )
+        for item in g["removed"]:
+            flat.append(
+                {
+                    "period": g["period"], "device_name": item["device_name"], "model_device": item["model_device"],
+                    "serial_tag": item["serial_tag"], "status": item["status"], "branch_dept": item["branch_dept"],
+                    "handover_date": item["handover_date"],
+                    "change": "Removed",
+                }
+            )
+    return flat
+
+
+def _load_groups(q: str):
     conn = get_connection()
     try:
         user = None
@@ -46,7 +80,13 @@ def index():
             groups = _group_by_period(rows)
     finally:
         conn.close()
+    return user, groups
 
+
+@bp.route("/")
+def index():
+    q = request.args.get("q", "").strip()
+    user, groups = _load_groups(q)
     return render_template(
         "user_history.html",
         active_page="user_history",
@@ -54,3 +94,12 @@ def index():
         user=user,
         groups=groups,
     )
+
+
+@bp.route("/export")
+def export():
+    q = request.args.get("q", "").strip()
+    _user, groups = _load_groups(q)
+    wb = build_workbook("User Asset History", USER_HISTORY_EXPORT_COLUMNS, _flatten_history_rows(groups))
+    safe_q = safe_filename(q, fallback="export")
+    return send_workbook(wb, f"user_history_{safe_q}.xlsx")

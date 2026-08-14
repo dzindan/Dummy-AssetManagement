@@ -1,7 +1,6 @@
 import datetime as dt
 import glob
 import hashlib
-import io
 import json
 import os
 import uuid
@@ -11,7 +10,12 @@ from flask import Blueprint, flash, redirect, render_template, request, send_fil
 from ..auth import require_permission
 from ..db import get_connection, get_setting
 from ..diffing import diff_batch
+from ..exports import build_diff_workbook, build_duplicates_workbook, build_import_template_workbook, build_workbook, send_workbook
 from ..importer import (
+    BRANCH_FILE_REQUIRED_COLUMNS,
+    HEADER_ALIASES,
+    USER_FILE_OPTIONAL_COLUMNS,
+    USER_FILE_REQUIRED_COLUMNS,
     CleaningReport,
     import_asset_report,
     import_branch_file,
@@ -27,8 +31,6 @@ from ..queries import (
     find_unrecognized_in_batch,
     get_branch,
 )
-from .asset_edit import build_duplicates_workbook
-from .update_compare import build_diff_workbook
 
 bp = Blueprint("import_data", __name__, url_prefix="/import")
 
@@ -51,16 +53,75 @@ def index():
     )
 
 
+# --- Download templates -----------------------------------------------------
+# Headers always come from importer.py's own HEADER_ALIASES/required-column
+# constants - never a second hand-typed copy - so a template can't silently
+# drift from what the importer actually accepts.
+
+# Keyed by field name (not a positional list) so re-ordering HEADER_ALIASES
+# can never silently misalign the example row against its headers.
+EXAMPLE_ASSET_REPORT_ROW = {
+    "branch_dept": "HANOI BRANCH", "device_name": "PC", "user_id": "14501864",
+    "full_name": "NGUYEN VAN A", "model_device": "DELL OPTIPLEX 7090", "serial_tag": "SN123456",
+    "status": "IN USE", "remark": "", "position": "TELLER",
+    "handover_date": "2024-01-15", "ip": "10.10.1.23",
+}
+EXAMPLE_BRANCH_ROW = ["001", "CHI NHANH HA NOI", "SHINHAN BANK VIETNAM(E) HANOI BRANCH"]
+EXAMPLE_USER_ROW = ["001", "14501864", "NGUYEN VAN A", "NGUYEN VAN A", "K001", "ACTIVE"]
+
+
+@bp.route("/templates/asset-report")
+def template_asset_report():
+    headers = [aliases[0] for aliases in HEADER_ALIASES.values()]
+    example = [EXAMPLE_ASSET_REPORT_ROW[field] for field in HEADER_ALIASES]
+    wb = build_import_template_workbook(headers, example)
+    return send_workbook(wb, "asset_report_template.xlsx")
+
+
+@bp.route("/templates/branch-codes")
+def template_branch_codes():
+    wb = build_import_template_workbook(BRANCH_FILE_REQUIRED_COLUMNS, EXAMPLE_BRANCH_ROW)
+    return send_workbook(wb, "branch_codes_template.xlsx")
+
+
+@bp.route("/templates/user-ids")
+def template_user_ids():
+    headers = USER_FILE_REQUIRED_COLUMNS + USER_FILE_OPTIONAL_COLUMNS
+    wb = build_import_template_workbook(headers, EXAMPLE_USER_ROW)
+    return send_workbook(wb, "user_ids_template.xlsx")
+
+
+IMPORT_LOG_SQL = "SELECT * FROM import_log ORDER BY id DESC LIMIT 500"
+
+IMPORT_HISTORY_EXPORT_COLUMNS = [
+    ("Imported At", "imported_at"),
+    ("Kind", "kind"),
+    ("Source File", "source_file"),
+    ("Period", "period"),
+    ("Rows Processed", "rows_processed"),
+    ("Result", "result"),
+]
+
+
 @bp.route("/history")
 def history():
     conn = get_connection()
     try:
-        rows = conn.execute(
-            "SELECT * FROM import_log ORDER BY id DESC LIMIT 500"
-        ).fetchall()
+        rows = conn.execute(IMPORT_LOG_SQL).fetchall()
     finally:
         conn.close()
     return render_template("import_history.html", active_page="import", rows=rows)
+
+
+@bp.route("/history/export")
+def export_history():
+    conn = get_connection()
+    try:
+        rows = conn.execute(IMPORT_LOG_SQL).fetchall()
+    finally:
+        conn.close()
+    wb = build_workbook("Import History", IMPORT_HISTORY_EXPORT_COLUMNS, rows)
+    return send_workbook(wb, "import_history.xlsx")
 
 
 @bp.route("/diff-reports")
@@ -113,16 +174,7 @@ def export_duplicates():
         flash("No duplicate serials found in this import.", "error")
         return redirect(url_for("import_data.index"))
 
-    wb = build_duplicates_workbook(dupes)
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return send_file(
-        buf,
-        as_attachment=True,
-        download_name="duplicate_assets.xlsx",
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+    return send_workbook(build_duplicates_workbook(dupes), "duplicate_assets.xlsx")
 
 
 def _upload_id_files(importer_fn, file_type: str):

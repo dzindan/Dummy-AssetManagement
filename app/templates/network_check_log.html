@@ -3,6 +3,7 @@
 {% block content %}
 <h1>Network Check Log</h1>
 <p class="muted">Every value written into the database from Network Check's "Update" actions - what changed, from what, to what, and when - newest first.</p>
+<p><a class="btn secondary" href="{{ url_for('network_check.export_log') }}">Export to Excel</a></p>
 
 <div class="panel">
   <div class="table-scroll">

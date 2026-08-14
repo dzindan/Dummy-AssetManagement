@@ -30,6 +30,7 @@
     </div>
     <button type="submit">Filter</button>
     <a class="btn secondary" href="{{ url_for('history.index') }}">Clear</a>
+    <a class="btn secondary" href="{{ url_for('history.export', user_no=filters['user_no'], branch_no=filters['branch_no'], date_from=filters['date_from'], date_to=filters['date_to']) }}">Export to Excel</a>
   </form>
 </div>
 
