@@ -4,7 +4,7 @@ import openpyxl
 from flask import Blueprint, flash, redirect, render_template, request, send_file, url_for
 from openpyxl.styles import Font
 
-from ..db import get_connection
+from ..db import get_connection, prune_stale_unmapped
 from ..queries import (
     UNRESOLVED_BRANCH_FILTER,
     find_current_duplicate_serials,
@@ -179,6 +179,7 @@ def bulk_delete():
         try:
             placeholders = ",".join("?" * len(ids))
             conn.execute(f"DELETE FROM asset_items WHERE id IN ({placeholders})", ids)
+            prune_stale_unmapped(conn)
             conn.commit()
             flash(f"Deleted {len(ids)} asset(s).", "success")
         finally:
@@ -196,6 +197,7 @@ def delete(asset_id):
             flash("Asset not found.", "error")
         else:
             conn.execute("DELETE FROM asset_items WHERE id = ?", (asset_id,))
+            prune_stale_unmapped(conn)
             conn.commit()
             flash(f"Asset #{asset_id} deleted.", "success")
     finally:
@@ -224,6 +226,7 @@ def edit(asset_id):
                 f"UPDATE asset_items SET {set_clause} WHERE id = ?",
                 [*values.values(), asset_id],
             )
+            prune_stale_unmapped(conn)
             conn.commit()
             flash(f"Asset #{asset_id} updated.", "success")
             next_url = request.form.get("next") or url_for("dashboard.index")

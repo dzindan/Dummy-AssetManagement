@@ -341,6 +341,7 @@ def init_db() -> None:
                             "status_unmapped", "raw_status")
         _backfill_unmapped(conn, "asset_items", "model_device", "model_aliases", "model_standard_names",
                             "model_unmapped", "raw_model")
+        prune_stale_unmapped(conn)
         _backfill_user_no_norm(conn)
         conn.commit()
     finally:
@@ -425,6 +426,32 @@ def _backfill_unmapped(
                 """,
                 (value,),
             )
+
+
+def prune_stale_unmapped(conn: sqlite3.Connection) -> None:
+    """Unmapped entries are a queue of raw values still needing an
+    assignment - once the last asset carrying that value is deleted, edited
+    away, or dropped by a re-import, the entry has nothing left to assign
+    and should disappear too. Nothing else prunes this queue (import only
+    ever adds to it, and delete_standard_name()/_status()/_model() only
+    re-queue), so without this a value can sit in Settings > Unmapped
+    forever pointing at zero actual assets, even though Manage Assets has
+    nothing to show for it. Call after any operation that deletes or edits
+    asset_items rows (see asset_edit.py), plus once here in init_db() to
+    self-heal a database that already went stale before this existed."""
+    for source_column, unmapped_table, unmapped_column in (
+        ("device_name", "device_unmapped", "raw_name"),
+        ("status", "status_unmapped", "raw_status"),
+        ("model_device", "model_unmapped", "raw_model"),
+    ):
+        conn.execute(
+            f"""
+            DELETE FROM {unmapped_table}
+            WHERE {unmapped_column} NOT IN (
+                SELECT DISTINCT {source_column} FROM asset_items WHERE {source_column} != ''
+            )
+            """
+        )
 
 
 def _backfill_branch_names(conn: sqlite3.Connection) -> None:
