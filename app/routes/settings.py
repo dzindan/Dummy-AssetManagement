@@ -396,6 +396,12 @@ def map_status_alias():
             (alias, canonical_name),
         )
         conn.execute("DELETE FROM status_unmapped WHERE raw_status = ?", (alias,))
+        # See map_device_alias()'s comment on resyncing already-imported rows.
+        conn.execute(
+            "UPDATE asset_items SET status = ? "
+            "WHERE status = UPPER(status_raw) AND UPPER(status_raw) = ?",
+            (canonical_name, alias),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -525,6 +531,12 @@ def map_model_alias():
             (alias, canonical_name),
         )
         conn.execute("DELETE FROM model_unmapped WHERE raw_model = ?", (alias,))
+        # See map_device_alias()'s comment on resyncing already-imported rows.
+        conn.execute(
+            "UPDATE asset_items SET model_device = ? "
+            "WHERE model_device = UPPER(model_device_raw) AND UPPER(model_device_raw) = ?",
+            (canonical_name, alias),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -585,6 +597,18 @@ def map_device_alias():
             (alias, canonical_name),
         )
         conn.execute("DELETE FROM device_unmapped WHERE raw_name = ?", (alias,))
+        # Mirror of the resync in delete/unmap: assets already sitting on
+        # this raw value (device_name still equals its own raw text,
+        # meaning nothing else has touched it since) now resolve through
+        # this new mapping - without this they'd keep showing the old raw
+        # text in Manage Assets until the branch happens to be re-imported.
+        # The `device_name = UPPER(device_name_raw)` guard leaves alone any
+        # row a user has since hand-edited to something else.
+        conn.execute(
+            "UPDATE asset_items SET device_name = ? "
+            "WHERE device_name = UPPER(device_name_raw) AND UPPER(device_name_raw) = ?",
+            (canonical_name, alias),
+        )
         conn.commit()
     finally:
         conn.close()
