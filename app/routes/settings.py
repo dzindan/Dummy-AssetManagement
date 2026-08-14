@@ -4,7 +4,7 @@ import sys
 
 from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 
-from ..db import get_connection, get_setting, init_db, set_setting
+from ..db import get_connection, get_setting, init_db, prune_stale_unmapped, set_setting
 from ..importer import (
     normalize_branch_text,
     record_unmapped_device,
@@ -296,6 +296,12 @@ def delete_standard_name():
         # too, or it vanishes from every mapping list despite still being here.
         if conn.execute("SELECT 1 FROM asset_items WHERE device_name = ? LIMIT 1", (name,)).fetchone():
             record_unmapped_device(conn, name)
+        # An alias re-queued above might itself be a phantom - e.g. a seed
+        # default like COMPUTER->PC that no actual import ever used - which
+        # would otherwise sit in Settings > Unmapped forever pointing at
+        # zero real assets. prune_stale_unmapped() removes it right back out
+        # if nothing in asset_items actually carries that value.
+        prune_stale_unmapped(conn)
         conn.commit()
     finally:
         conn.close()
@@ -357,6 +363,8 @@ def delete_standard_status():
         conn.execute("UPDATE asset_items SET status = UPPER(status_raw) WHERE status = ?", (name,))
         if conn.execute("SELECT 1 FROM asset_items WHERE status = ? LIMIT 1", (name,)).fetchone():
             record_unmapped_status(conn, name)
+        # See delete_standard_name()'s comment on prune_stale_unmapped().
+        prune_stale_unmapped(conn)
         conn.commit()
     finally:
         conn.close()
@@ -403,8 +411,26 @@ def unmap_status_alias():
     alias = request.form.get("alias", "").strip().upper()
     conn = get_connection()
     try:
+        row = conn.execute("SELECT canonical_name FROM status_aliases WHERE alias = ?", (alias,)).fetchone()
         conn.execute("DELETE FROM status_aliases WHERE alias = ?", (alias,))
+        if row:
+            # Assets that resolved through this alias were showing the
+            # canonical status it pointed to - now that the mapping is
+            # gone, drop those specific rows back to their own raw text so
+            # Manage Assets shows (and can be filtered on) the same value
+            # that's now sitting in Settings > Unmapped, instead of a
+            # stale canonical status nothing points to anymore.
+            conn.execute(
+                "UPDATE asset_items SET status = UPPER(status_raw) "
+                "WHERE status = ? AND UPPER(status_raw) = ?",
+                (row["canonical_name"], alias),
+            )
         record_unmapped_status(conn, alias)
+        # If this alias (e.g. a seed default never actually used by any
+        # import) has zero real assets behind it, there's nothing to
+        # "move back to unmapped" - drop it right back out instead of
+        # leaving a phantom entry Manage Assets can never show.
+        prune_stale_unmapped(conn)
         conn.commit()
     finally:
         conn.close()
@@ -466,6 +492,8 @@ def delete_standard_model():
         conn.execute("UPDATE asset_items SET model_device = UPPER(model_device_raw) WHERE model_device = ?", (name,))
         if conn.execute("SELECT 1 FROM asset_items WHERE model_device = ? LIMIT 1", (name,)).fetchone():
             record_unmapped_model(conn, name)
+        # See delete_standard_name()'s comment on prune_stale_unmapped().
+        prune_stale_unmapped(conn)
         conn.commit()
     finally:
         conn.close()
@@ -512,8 +540,18 @@ def unmap_model_alias():
     alias = request.form.get("alias", "").strip().upper()
     conn = get_connection()
     try:
+        row = conn.execute("SELECT canonical_name FROM model_aliases WHERE alias = ?", (alias,)).fetchone()
         conn.execute("DELETE FROM model_aliases WHERE alias = ?", (alias,))
+        if row:
+            # See unmap_status_alias()'s comment on resyncing affected rows.
+            conn.execute(
+                "UPDATE asset_items SET model_device = UPPER(model_device_raw) "
+                "WHERE model_device = ? AND UPPER(model_device_raw) = ?",
+                (row["canonical_name"], alias),
+            )
         record_unmapped_model(conn, alias)
+        # See unmap_status_alias()'s comment on prune_stale_unmapped().
+        prune_stale_unmapped(conn)
         conn.commit()
     finally:
         conn.close()
@@ -564,8 +602,18 @@ def unmap_device_alias():
     alias = request.form.get("alias", "").strip().upper()
     conn = get_connection()
     try:
+        row = conn.execute("SELECT canonical_name FROM device_aliases WHERE alias = ?", (alias,)).fetchone()
         conn.execute("DELETE FROM device_aliases WHERE alias = ?", (alias,))
+        if row:
+            # See unmap_status_alias()'s comment on resyncing affected rows.
+            conn.execute(
+                "UPDATE asset_items SET device_name = UPPER(device_name_raw) "
+                "WHERE device_name = ? AND UPPER(device_name_raw) = ?",
+                (row["canonical_name"], alias),
+            )
         record_unmapped_device(conn, alias)
+        # See unmap_status_alias()'s comment on prune_stale_unmapped().
+        prune_stale_unmapped(conn)
         conn.commit()
     finally:
         conn.close()
