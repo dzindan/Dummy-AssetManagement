@@ -283,6 +283,14 @@ def delete_standard_name():
             record_unmapped_device(conn, row["alias"])
         conn.execute("DELETE FROM device_aliases WHERE canonical_name = ?", (name,))
         conn.execute("DELETE FROM device_standard_names WHERE name = ?", (name,))
+        # Assets whose raw imported value matched this standard name exactly
+        # (no alias needed) never went through record_unmapped_device at
+        # import time - without this they'd vanish from every mapping list
+        # (not standard, not alias, not unmapped) the moment the standard
+        # name is deleted, even though asset_items.device_name still says
+        # `name` on those rows and the assets are still there.
+        if conn.execute("SELECT 1 FROM asset_items WHERE device_name = ? LIMIT 1", (name,)).fetchone():
+            record_unmapped_device(conn, name)
         conn.commit()
     finally:
         conn.close()
@@ -339,6 +347,10 @@ def delete_standard_status():
             record_unmapped_status(conn, row["alias"])
         conn.execute("DELETE FROM status_aliases WHERE canonical_name = ?", (name,))
         conn.execute("DELETE FROM status_standard_names WHERE name = ?", (name,))
+        # See delete_standard_name()'s comment - same gap for assets whose
+        # status matched this standard name directly, without an alias.
+        if conn.execute("SELECT 1 FROM asset_items WHERE status = ? LIMIT 1", (name,)).fetchone():
+            record_unmapped_status(conn, name)
         conn.commit()
     finally:
         conn.close()
@@ -443,6 +455,10 @@ def delete_standard_model():
             record_unmapped_model(conn, row["alias"])
         conn.execute("DELETE FROM model_aliases WHERE canonical_name = ?", (name,))
         conn.execute("DELETE FROM model_standard_names WHERE name = ?", (name,))
+        # See delete_standard_name()'s comment - same gap for assets whose
+        # model matched this standard name directly, without an alias.
+        if conn.execute("SELECT 1 FROM asset_items WHERE model_device = ? LIMIT 1", (name,)).fetchone():
+            record_unmapped_model(conn, name)
         conn.commit()
     finally:
         conn.close()
