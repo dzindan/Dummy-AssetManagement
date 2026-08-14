@@ -80,7 +80,7 @@
 {% endif %}
 
 <div class="panel">
-  <p class="muted">{{ total }} asset(s) match these filters &middot; page {{ page }} of {{ total_pages }}.</p>
+  <p class="muted"><span id="asset-row-count">{{ total }}</span> asset(s) match these filters.</p>
   {% if rows %}
   <div class="actions" style="margin-top:0;">
     <button type="button" class="danger" data-bulk-delete-trigger
@@ -90,11 +90,24 @@
   </div>
   {% endif %}
   <div class="table-scroll">
-  <table>
+  <table data-header-filter-table>
     <thead>
       <tr>
         <th><input type="checkbox" data-select-all="asset-row-checkbox"></th>
         <th>Branch</th><th>Device</th><th>Model</th><th>Serial/Tag</th><th>Status</th><th>Full Name</th><th>User ID</th><th>Handover Date</th><th>Period</th><th></th>
+      </tr>
+      <tr class="header-filter-row">
+        <th></th>
+        <th><input type="text" class="header-filter" placeholder="Filter..."></th>
+        <th><input type="text" class="header-filter" placeholder="Filter..."></th>
+        <th><input type="text" class="header-filter" placeholder="Filter..."></th>
+        <th><input type="text" class="header-filter" placeholder="Filter..."></th>
+        <th><input type="text" class="header-filter" placeholder="Filter..."></th>
+        <th><input type="text" class="header-filter" placeholder="Filter..."></th>
+        <th><input type="text" class="header-filter" placeholder="Filter..."></th>
+        <th><input type="text" class="header-filter" placeholder="Filter..."></th>
+        <th><input type="text" class="header-filter" placeholder="Filter..."></th>
+        <th></th>
       </tr>
     </thead>
     <tbody>
@@ -118,17 +131,5 @@
     </tbody>
   </table>
   </div>
-
-  {% if total_pages > 1 %}
-  <div class="field-row" style="margin-top:0.75rem; align-items:center;">
-    {% if page > 1 %}
-    <div style="flex: 0 0 auto;"><a class="btn secondary" href="{{ url_for('asset_edit.index', branch_no=filters.branch_no, device_name=filters.device_name, status=filters.status, q=filters.q, page=page-1) }}">&laquo; Previous</a></div>
-    {% endif %}
-    <div style="flex: 0 0 auto;"><span class="muted">Page {{ page }} of {{ total_pages }}</span></div>
-    {% if page < total_pages %}
-    <div style="flex: 0 0 auto;"><a class="btn secondary" href="{{ url_for('asset_edit.index', branch_no=filters.branch_no, device_name=filters.device_name, status=filters.status, q=filters.q, page=page+1) }}">Next &raquo;</a></div>
-    {% endif %}
-  </div>
-  {% endif %}
 </div>
 {% endblock %}

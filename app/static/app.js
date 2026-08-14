@@ -156,3 +156,39 @@ document.addEventListener("click", function (e) {
   document.body.appendChild(form);
   form.submit();
 });
+
+// Manage Assets: per-column header filter row - live client-side narrowing
+// of the already-loaded (unpaginated) table, on top of the server-side
+// Branch/Device/Status/Search panel above it. Each input filters its own
+// column by case-insensitive substring match; a row must match every
+// active (non-empty) filter to stay visible.
+document.addEventListener("input", function (e) {
+  if (!e.target.matches(".header-filter")) return;
+  const table = e.target.closest("[data-header-filter-table]");
+  if (!table) return;
+
+  const filterRow = e.target.closest("tr");
+  const filters = Array.from(filterRow.children).map(function (th) {
+    const input = th.querySelector(".header-filter");
+    return input ? input.value.trim().toLowerCase() : "";
+  });
+
+  let visibleCount = 0;
+  table.querySelectorAll("tbody tr").forEach(function (row) {
+    const cells = row.children;
+    let visible = true;
+    for (let i = 0; i < filters.length; i++) {
+      if (!filters[i]) continue;
+      const text = cells[i] ? cells[i].textContent.toLowerCase() : "";
+      if (!text.includes(filters[i])) {
+        visible = false;
+        break;
+      }
+    }
+    row.style.display = visible ? "" : "none";
+    if (visible) visibleCount++;
+  });
+
+  const counter = document.getElementById("asset-row-count");
+  if (counter) counter.textContent = visibleCount;
+});

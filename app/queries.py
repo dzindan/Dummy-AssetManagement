@@ -115,16 +115,20 @@ def has_unresolved_current_assets(conn) -> bool:
     return bool(conn.execute(sql).fetchone()["e"])
 
 
-def search_assets(conn, filters: dict, page: int = 1, per_page: int = 100):
-    """Filterable, paginated view over *current* assets (see
-    CURRENT_ASSETS_CTE docstring) for the standalone Manage Assets page -
-    deliberately scoped to current state, like the rest of the app, so
-    nobody accidentally edits a snapshot row that's already been superseded.
+def search_assets(conn, filters: dict, page: int = 1, per_page: int | None = None):
+    """Filterable view over *current* assets (see CURRENT_ASSETS_CTE
+    docstring) for the standalone Manage Assets page - deliberately scoped
+    to current state, like the rest of the app, so nobody accidentally
+    edits a snapshot row that's already been superseded.
 
     `branch_no`, `device_name`, and `status` are each a *list* (possibly
     empty, meaning "no filter on this field") so the page can multi-select
     several values per field at once - e.g. Device = PC or LCD in one go,
     rather than one value at a time.
+
+    `per_page=None` (the default) returns every matching row unpaginated -
+    the Manage Assets page shows the full result set at once and filters
+    further client-side. Pass a real per_page to paginate instead.
     """
     where = []
     params: list = []
@@ -167,14 +171,19 @@ def search_assets(conn, filters: dict, page: int = 1, per_page: int = 100):
     """
 
     total = conn.execute(f"SELECT COUNT(*) AS c {from_sql}", params).fetchone()["c"]
+    limit_sql = ""
+    query_params = list(params)
+    if per_page is not None:
+        limit_sql = "LIMIT ? OFFSET ?"
+        query_params += [per_page, max(page - 1, 0) * per_page]
     rows = conn.execute(
         f"""
         SELECT bk.*, b.eng_name AS branch_eng_name, ib.period AS period
         {from_sql}
         ORDER BY COALESCE(b.eng_name, bk.branch_dept), bk.device_name
-        LIMIT ? OFFSET ?
+        {limit_sql}
         """,
-        [*params, per_page, max(page - 1, 0) * per_page],
+        query_params,
     ).fetchall()
     return rows, total
 

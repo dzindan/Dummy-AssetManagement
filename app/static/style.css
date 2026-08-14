@@ -186,6 +186,25 @@ th, td {
 th { background: #f0f2f5; font-weight: 600; position: sticky; top: 0; }
 tr:hover td { background: #fafbfc; }
 
+/* Manage Assets: per-column filter inputs row, stacked directly under the
+   sticky column-header row (both stay pinned while scrolling a long,
+   unpaginated table). */
+.header-filter-row th {
+  position: sticky;
+  top: 2.3rem;
+  background: #f0f2f5;
+  padding: 0.3rem 0.5rem;
+}
+
+.header-filter {
+  width: 100%;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.82rem;
+  font-weight: 400;
+}
+
 label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.25rem; margin-top: 0.85rem; }
 
 input[type=text], input[type=number], input[type=date], input[type=month], input[type=file], select, textarea {

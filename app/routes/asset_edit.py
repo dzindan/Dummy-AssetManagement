@@ -1,5 +1,4 @@
 import io
-import math
 
 import openpyxl
 from flask import Blueprint, flash, redirect, render_template, request, send_file, url_for
@@ -16,8 +15,6 @@ from ..queries import (
 )
 
 bp = Blueprint("asset_edit", __name__, url_prefix="/assets")
-
-PAGE_SIZE = 100
 
 # Free-text fields a user can correct by hand (e.g. to resolve a duplicate
 # serial flagged by the cleaning report). branch_no/batch_id/asset_key are
@@ -51,14 +48,13 @@ def index():
         "status": [v for v in request.args.getlist("status") if v],
         "q": request.args.get("q", "").strip(),
     }
-    try:
-        page = max(int(request.args.get("page", 1)), 1)
-    except ValueError:
-        page = 1
 
     conn = get_connection()
     try:
-        rows, total = search_assets(conn, filters, page=page, per_page=PAGE_SIZE)
+        # Every matching row at once, unpaginated - the page adds a
+        # client-side per-column header filter (see app.js) for further
+        # narrowing without a round trip.
+        rows, total = search_assets(conn, filters)
         branches = get_branches_with_current_assets(conn)
         show_unresolved_option = has_unresolved_current_assets(conn)
         device_names = [
@@ -93,15 +89,11 @@ def index():
     finally:
         conn.close()
 
-    total_pages = max(math.ceil(total / PAGE_SIZE), 1)
-
     return render_template(
         "asset_management.html",
         active_page="assets",
         rows=rows,
         total=total,
-        page=page,
-        total_pages=total_pages,
         filters=filters,
         branches=branches,
         show_unresolved_option=show_unresolved_option,
