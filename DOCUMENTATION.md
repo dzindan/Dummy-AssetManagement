@@ -413,7 +413,9 @@ checkboxes share a `data-bulk-delete-checkbox-class` value, rather than
 wrapping the whole table in a `<form>` - the duplicate-check tables already
 have their own per-row delete `<form>`s, and HTML doesn't allow nesting
 forms. "Select all" only affects checkboxes currently rendered on screen -
-it doesn't reach across pagination on Manage Assets.
+Manage Assets is unpaginated (the full filtered result set renders at
+once), so this covers every row currently visible under the active
+per-column header filters.
 
 **Period-conflict warning** (`importer.peek_asset_report_branch`,
 `queries.find_existing_batch_for_branch_period`,
@@ -516,10 +518,11 @@ branches' files listing the same serial, or drift between separately-timed
 monthly imports, which the per-import check can't see. Run it any time, not
 just right after an import.
 
-**Manage Assets** (`/assets/`): a single filterable, paginated table over
-*every currently-assigned asset* across all branches (branch, device,
-status, and a free-text search over serial/model/name/user ID/dept), with
-an Edit link per row. This is what clicking a branch name on the Dashboard
+**Manage Assets** (`/assets/`): a single filterable, unpaginated table over
+*every currently-assigned asset* across all branches (server-side: branch,
+device, status, and a free-text search over serial/model/name/user ID/dept;
+client-side: a dropdown filter per column, built from the distinct values
+actually present in the rendered rows), with an Edit link per row. This is what clicking a branch name on the Dashboard
 now opens (pre-filtered to that branch) — its old destination, the Branch
 Detail page (trend chart + Excel export), is still one click further via a
 link shown when a single branch is filtered. The Branch filter dropdown only
