@@ -3,6 +3,14 @@
 {% block content %}
 <h1>Settings</h1>
 
+{% if 'manage_users' in current_permissions %}
+<div class="panel">
+  <h2>Users &amp; Roles</h2>
+  <p class="muted">Manage who can log in and what they're allowed to do.</p>
+  <a class="btn secondary" href="{{ url_for('user_admin.index') }}">Manage Users &amp; Roles</a>
+</div>
+{% endif %}
+
 <div class="panel">
   <h2>Default ICT Representative</h2>
   <p class="muted">Pre-fills the "Representative of ICT Planning Department" section on every hand-over form. Still editable per form.</p>

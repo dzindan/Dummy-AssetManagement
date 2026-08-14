@@ -4,6 +4,7 @@ import openpyxl
 from flask import Blueprint, flash, redirect, render_template, request, send_file, url_for
 from openpyxl.styles import Font
 
+from ..auth import require_permission
 from ..db import get_connection, prune_stale_unmapped
 from ..queries import (
     UNRESOLVED_BRANCH_FILTER,
@@ -170,6 +171,7 @@ def export_duplicates():
 
 
 @bp.route("/bulk-delete", methods=["POST"])
+@require_permission("edit_assets")
 def bulk_delete():
     ids = [int(x) for x in request.form.getlist("asset_ids") if x.isdigit()]
     if not ids:
@@ -189,6 +191,7 @@ def bulk_delete():
 
 
 @bp.route("/<int:asset_id>/delete", methods=["POST"])
+@require_permission("edit_assets")
 def delete(asset_id):
     conn = get_connection()
     try:
@@ -207,6 +210,7 @@ def delete(asset_id):
 
 
 @bp.route("/<int:asset_id>/edit", methods=["GET", "POST"])
+@require_permission("edit_assets")
 def edit(asset_id):
     conn = get_connection()
     try:

@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Users & Roles - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>Users &amp; Roles</h1>
+<p class="muted"><a href="{{ url_for('settings.index') }}">&laquo; Back to Settings</a></p>
+
+<div class="panel">
+  <h2>Accounts</h2>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>Username</th><th>Role</th><th>Status</th><th>Last Login</th><th></th></tr></thead>
+    <tbody>
+      {% for a in accounts %}
+      <tr>
+        <td>{{ a['username'] }}</td>
+        <td>
+          <form method="post" action="{{ url_for('user_admin.set_account_role', account_id=a['id']) }}" style="margin:0; display:flex; gap:0.4rem; align-items:center;">
+            <select name="role_id" onchange="this.form.submit()">
+              {% for r in roles %}
+              <option value="{{ r['id'] }}" {{ 'selected' if r['id'] == a['role_id'] else '' }}>{{ r['name'] }}</option>
+              {% endfor %}
+            </select>
+          </form>
+        </td>
+        <td>{{ 'Active' if a['is_active'] else 'Disabled' }}</td>
+        <td>{{ a['last_login_at'] or '—' }}</td>
+        <td style="white-space:nowrap;">
+          <form method="post" action="{{ url_for('user_admin.toggle_active', account_id=a['id']) }}" style="display:inline; margin:0;">
+            <button type="submit" class="{{ 'danger' if a['is_active'] else 'secondary' }}">{{ 'Deactivate' if a['is_active'] else 'Activate' }}</button>
+          </form>
+          <details style="display:inline-block;">
+            <summary style="display:inline; cursor:pointer;">Reset password</summary>
+            <form method="post" action="{{ url_for('user_admin.reset_password', account_id=a['id']) }}" style="margin-top:0.4rem; display:flex; gap:0.4rem;">
+              <input type="password" name="password" placeholder="New password (min 8 chars)" minlength="8" required>
+              <button type="submit">Set</button>
+            </form>
+          </details>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="muted">No accounts yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+
+  <h3 style="margin-top:1.5rem;">Add Account</h3>
+  <form method="post" action="{{ url_for('user_admin.add_account') }}">
+    <div class="field-row">
+      <div>
+        <label for="new_username">Username</label>
+        <input type="text" id="new_username" name="username" required>
+      </div>
+      <div>
+        <label for="new_password">Password (min 8 chars)</label>
+        <input type="password" id="new_password" name="password" minlength="8" required>
+      </div>
+      <div>
+        <label for="new_role_id">Role</label>
+        <select id="new_role_id" name="role_id" required>
+          {% for r in roles %}
+          <option value="{{ r['id'] }}">{{ r['name'] }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div style="flex: 0 0 auto; align-self: flex-end;"><button type="submit">Add Account</button></div>
+    </div>
+  </form>
+</div>
+
+<div class="panel">
+  <h2>Roles</h2>
+  <p class="muted">Viewer/Editor/Admin are built-in and can't be renamed, deleted, or have their permissions edited - create a custom role instead for any other combination.</p>
+
+  {% for r in roles %}
+  <div class="panel" style="background:var(--bg); margin-bottom:0.75rem;">
+    <h3 style="margin-top:0;">{{ r['name'] }} {% if r['is_builtin'] %}<span class="muted">(built-in)</span>{% endif %}</h3>
+    {% if r['is_builtin'] %}
+      <p class="muted">
+        {% for key, label in permissions.items() %}
+          {% if key in role_permissions[r['id']] %}<span>&#10003; {{ label }}</span><br>{% endif %}
+        {% endfor %}
+        {% if not role_permissions[r['id']] %}No permissions (view-only).{% endif %}
+      </p>
+    {% else %}
+      <form method="post" action="{{ url_for('user_admin.edit_role', role_id=r['id']) }}">
+        <div class="grid grid-2">
+          {% for key, label in permissions.items() %}
+          <label style="font-weight:400;"><input type="checkbox" name="permissions" value="{{ key }}" {{ 'checked' if key in role_permissions[r['id']] else '' }}> {{ label }}</label>
+          {% endfor %}
+        </div>
+        <div class="actions" style="margin-top:0.75rem;">
+          <button type="submit">Save Permissions</button>
+        </div>
+      </form>
+      <form method="post" action="{{ url_for('user_admin.delete_role', role_id=r['id']) }}" onsubmit="return confirm('Delete role {{ r['name'] }}?');" style="margin-top:0.5rem;">
+        <button type="submit" class="danger">Delete Role</button>
+      </form>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  <h3>Add Custom Role</h3>
+  <form method="post" action="{{ url_for('user_admin.add_role') }}">
+    <div>
+      <label for="new_role_name">Role name</label>
+      <input type="text" id="new_role_name" name="name" required>
+    </div>
+    <div class="grid grid-2" style="margin-top:0.75rem;">
+      {% for key, label in permissions.items() %}
+      <label style="font-weight:400;"><input type="checkbox" name="permissions" value="{{ key }}"> {{ label }}</label>
+      {% endfor %}
+    </div>
+    <button type="submit" style="margin-top:0.75rem;">Add Role</button>
+  </form>
+</div>
+{% endblock %}

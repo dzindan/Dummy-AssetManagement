@@ -69,6 +69,36 @@ body {
 .topbar nav a:hover { color: #fff; }
 .topbar nav a.active { color: #fff; border-bottom-color: #fff; }
 
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 1.3rem;
+  flex-wrap: wrap;
+}
+
+.user-box {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: #fff;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+.user-box .muted { color: #a9b7dd; }
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: #dbe4ff;
+  font-size: 0.9rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.link-button:hover { color: #fff; }
+
 .nav-dropdown {
   position: relative;
   display: inline-block;

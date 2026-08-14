@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Khởi tạo tài khoản quản trị - Asset Management Tool</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="icon" href="{{ url_for('static', filename='img/logo.png') }}">
+  <style>
+    body { align-items: center; justify-content: center; min-height: 100vh; }
+    .auth-card { width: 100%; max-width: 400px; margin: 0 1rem; }
+    .auth-brand { display: flex; align-items: center; gap: 0.6rem; justify-content: center; margin-bottom: 1.25rem; }
+    .auth-brand img { height: 32px; }
+    .auth-brand span { font-weight: 600; }
+    .auth-card form > div { margin-bottom: 1rem; }
+    .auth-card button { width: 100%; }
+  </style>
+</head>
+<body>
+  <div class="auth-card">
+    <div class="auth-brand">
+      <img src="{{ url_for('static', filename='img/logo.png') }}" alt="Shinhan">
+      <span>Asset Management Tool</span>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin-top:0;">Khởi tạo tài khoản quản trị</h2>
+      <p class="muted">Đây là lần chạy đầu tiên của công cụ - chưa có tài khoản nào. Tạo tài khoản quản trị (Admin) đầu tiên để bắt đầu; tài khoản này có toàn quyền, bao gồm quản lý các tài khoản khác sau này.</p>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <div class="flash-stack">
+            {% for category, message in messages %}
+              <div class="flash flash-{{ category }}">{{ message }}</div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      <form method="post" action="{{ url_for('auth.setup') }}">
+        <div>
+          <label for="username">Tên đăng nhập</label>
+          <input type="text" id="username" name="username" autofocus required>
+        </div>
+        <div>
+          <label for="password">Mật khẩu (tối thiểu 8 ký tự)</label>
+          <input type="password" id="password" name="password" minlength="8" required>
+        </div>
+        <div>
+          <label for="confirm">Nhập lại mật khẩu</label>
+          <input type="password" id="confirm" name="confirm" minlength="8" required>
+        </div>
+        <button type="submit">Tạo tài khoản quản trị</button>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

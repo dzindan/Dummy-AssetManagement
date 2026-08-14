@@ -13,29 +13,40 @@
       <img src="{{ url_for('static', filename='img/logo.png') }}" alt="Shinhan" class="brand-logo">
       <span>Asset Management Tool</span>
     </div>
-    <nav>
-      <a href="{{ url_for('dashboard.index') }}" class="{{ 'active' if active_page == 'dashboard' else '' }}">Dashboard</a>
-      <a href="{{ url_for('import_data.index') }}" class="{{ 'active' if active_page == 'import' else '' }}">Import Data</a>
+    <div class="topbar-right">
+      <nav>
+        <a href="{{ url_for('dashboard.index') }}" class="{{ 'active' if active_page == 'dashboard' else '' }}">Dashboard</a>
+        <a href="{{ url_for('import_data.index') }}" class="{{ 'active' if active_page == 'import' else '' }}">Import Data</a>
 
-      <div class="nav-dropdown {{ 'active' if active_page in ('assets', 'user_history', 'network_check') else '' }}">
-        <button type="button" class="nav-dropdown-toggle">Assets <span class="nav-caret">&#9662;</span></button>
-        <div class="nav-dropdown-menu">
-          <a href="{{ url_for('asset_edit.index') }}" class="{{ 'active' if active_page == 'assets' else '' }}">Manage Assets</a>
-          <a href="{{ url_for('user_history.index') }}" class="{{ 'active' if active_page == 'user_history' else '' }}">User History</a>
-          <a href="{{ url_for('network_check.index') }}" class="{{ 'active' if active_page == 'network_check' else '' }}">Network Check</a>
+        <div class="nav-dropdown {{ 'active' if active_page in ('assets', 'user_history', 'network_check') else '' }}">
+          <button type="button" class="nav-dropdown-toggle">Assets <span class="nav-caret">&#9662;</span></button>
+          <div class="nav-dropdown-menu">
+            <a href="{{ url_for('asset_edit.index') }}" class="{{ 'active' if active_page == 'assets' else '' }}">Manage Assets</a>
+            <a href="{{ url_for('user_history.index') }}" class="{{ 'active' if active_page == 'user_history' else '' }}">User History</a>
+            <a href="{{ url_for('network_check.index') }}" class="{{ 'active' if active_page == 'network_check' else '' }}">Network Check</a>
+          </div>
         </div>
-      </div>
 
-      <div class="nav-dropdown {{ 'active' if active_page in ('lookup', 'history') else '' }}">
-        <button type="button" class="nav-dropdown-toggle">Hand-Over <span class="nav-caret">&#9662;</span></button>
-        <div class="nav-dropdown-menu">
-          <a href="{{ url_for('lookup.index') }}" class="{{ 'active' if active_page == 'lookup' else '' }}">Lookup &amp; Hand-Over</a>
-          <a href="{{ url_for('history.index') }}" class="{{ 'active' if active_page == 'history' else '' }}">History</a>
+        <div class="nav-dropdown {{ 'active' if active_page in ('lookup', 'history') else '' }}">
+          <button type="button" class="nav-dropdown-toggle">Hand-Over <span class="nav-caret">&#9662;</span></button>
+          <div class="nav-dropdown-menu">
+            <a href="{{ url_for('lookup.index') }}" class="{{ 'active' if active_page == 'lookup' else '' }}">Lookup &amp; Hand-Over</a>
+            <a href="{{ url_for('history.index') }}" class="{{ 'active' if active_page == 'history' else '' }}">History</a>
+          </div>
         </div>
-      </div>
 
-      <a href="{{ url_for('settings.index') }}" class="{{ 'active' if active_page == 'settings' else '' }}">Settings</a>
-    </nav>
+        <a href="{{ url_for('settings.index') }}" class="{{ 'active' if active_page == 'settings' else '' }}">Settings</a>
+      </nav>
+
+      {% if current_account %}
+      <div class="user-box">
+        <span>{{ current_account.username }} <span class="muted">({{ current_account.role_name }})</span></span>
+        <form method="post" action="{{ url_for('auth.logout') }}">
+          <button type="submit" class="link-button">Logout</button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
   </header>
 
   <main class="content">

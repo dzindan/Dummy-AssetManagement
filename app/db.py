@@ -195,7 +195,69 @@ CREATE TABLE IF NOT EXISTS import_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_import_log_imported_at ON import_log (imported_at);
+
+-- Login/permissions. Deliberately named `accounts`/`roles`, not `users` -
+-- `users` above is bank-staff domain data imported from IDFromAither
+-- (PK user_no), unrelated to who can log into this tool.
+CREATE TABLE IF NOT EXISTS permissions (
+    key TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS roles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    is_builtin INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS role_permissions (
+    role_id INTEGER NOT NULL REFERENCES roles (id) ON DELETE CASCADE,
+    permission_key TEXT NOT NULL REFERENCES permissions (key),
+    PRIMARY KEY (role_id, permission_key)
+);
+
+CREATE TABLE IF NOT EXISTS accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL,
+    username_norm TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role_id INTEGER NOT NULL REFERENCES roles (id),
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT,
+    last_login_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_accounts_role ON accounts (role_id);
 """
+
+# Single source of truth for what a role can be granted - `view` isn't
+# here on purpose: it's just "you have a valid session" (see auth.py's
+# before_request), not a stored permission, since read access isn't the
+# problem this app needs to gate; uncontrolled writes are. Keys are load-
+# bearing (referenced by role_permissions.permission_key and by every
+# @require_permission(...) call) - only ever add a key here, never rename
+# one, or existing role_permissions rows would silently point at nothing.
+PERMISSIONS = {
+    "import_data": "Nạp dữ liệu (Import Data)",
+    "edit_assets": "Sửa/xoá tài sản (Manage Assets)",
+    "handover": "Tạo biên bản bàn giao (Lookup & Hand-Over)",
+    "network_check": "Network Check (scan và áp dụng kết quả)",
+    "manage_mappings": "Quản lý Device/Status/Model/Branch Mapping (Settings)",
+    "manage_settings": "Cấu hình hệ thống, đổi vị trí lưu dữ liệu (Settings)",
+    "manage_users": "Quản lý tài khoản và vai trò",
+}
+
+# Built-in roles are fully locked (not deletable/renamable/permission-
+# editable via UI) and re-synced to this canonical definition on every
+# init_db() run - see _seed_permissions_and_roles(). Anyone wanting a
+# different combination creates a custom role instead.
+BUILTIN_ROLES = {
+    "Viewer": [],
+    "Editor": ["import_data", "edit_assets", "handover", "network_check", "manage_mappings"],
+    "Admin": list(PERMISSIONS.keys()),
+}
 
 # The editable "standard" device list, seeded once on first run from the
 # device types actually observed across the real asset report files.
@@ -343,6 +405,7 @@ def init_db() -> None:
                             "model_unmapped", "raw_model")
         prune_stale_unmapped(conn)
         _backfill_user_no_norm(conn)
+        _seed_permissions_and_roles(conn)
         conn.commit()
     finally:
         conn.close()
@@ -464,6 +527,35 @@ def _backfill_branch_names(conn: sqlite3.Connection) -> None:
             conn.execute(
                 "UPDATE branches SET eng_name = ? WHERE branch_no = ?", (cleaned, row["branch_no"])
             )
+
+
+def _seed_permissions_and_roles(conn: sqlite3.Connection) -> None:
+    """Keeps the `permissions` catalog and the 3 built-in roles in sync with
+    the canonical PERMISSIONS/BUILTIN_ROLES definitions above, every launch.
+    Labels/permission-sets can change across app versions; INSERT OR REPLACE
+    (permissions) and a delete-then-reinsert of each built-in role's
+    role_permissions rows means a version that adds a new permission just
+    updates the Python constant, and every existing deployed database picks
+    it up automatically on next launch - no migration step, same self-
+    healing idea as _backfill_user_no_norm/prune_stale_unmapped above.
+    Custom (non-built-in) roles are never touched here."""
+    for i, (key, label) in enumerate(PERMISSIONS.items()):
+        conn.execute(
+            "INSERT INTO permissions (key, label, sort_order) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET label = excluded.label, sort_order = excluded.sort_order",
+            (key, label, i),
+        )
+    for name, perm_keys in BUILTIN_ROLES.items():
+        conn.execute(
+            "INSERT OR IGNORE INTO roles (name, is_builtin, created_at) VALUES (?, 1, datetime('now'))",
+            (name,),
+        )
+        role_id = conn.execute("SELECT id FROM roles WHERE name = ?", (name,)).fetchone()["id"]
+        conn.execute("DELETE FROM role_permissions WHERE role_id = ?", (role_id,))
+        conn.executemany(
+            "INSERT INTO role_permissions (role_id, permission_key) VALUES (?, ?)",
+            [(role_id, key) for key in perm_keys],
+        )
 
 
 def get_setting(key: str, default: str | None = None) -> str | None:

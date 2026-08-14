@@ -115,6 +115,12 @@ computers on the same office network.
     existed were retroactively queued into the Unmapped pools on first
     startup after upgrading (see §4), so nothing already in the database is
     invisible to it.
+18. **Login + role-based permissions** (Settings → Manage Users & Roles):
+    every user logs in; a one-time `/setup` page creates the first Admin
+    account on an empty database. Three built-in roles (Viewer/Editor/
+    Admin) are seeded automatically, and an Admin can create additional
+    **custom roles** with any combination of permissions. See §8 for what
+    this login system does and doesn't cover.
 
 ---
 
@@ -718,9 +724,29 @@ for the caveat.
 
 ## 8. Known limitations
 
-- **Not internet-facing.** The bundled Flask server is a development server
-  with no authentication. Only use it on a trusted local network; never
-  expose the LAN URL to the internet.
+- **Login + role-based permissions.** The app requires a login (`app/auth.py`,
+  `app/routes/auth.py`) - first launch on an empty database walks through a
+  one-time `/setup` page to create the initial Admin account. Every account
+  has exactly one role; three built-ins are seeded automatically (Viewer:
+  browse only, Editor: day-to-day import/edit/hand-over/network-check/
+  mapping work, Admin: everything including Settings > Users & Roles),
+  and an Admin can define additional **custom roles** with any combination
+  of permissions from there. Read access itself isn't gated - anyone logged
+  in can view any page; permissions control *write* actions (import, edit/
+  delete assets, generate hand-overs, run Network Check, manage the device/
+  status/model/branch mapping tables, change settings, manage other
+  accounts). Accepted limitations of this login system, not solved by
+  design:
+  - **No TLS.** The bundled Flask server is a development server with no
+    HTTPS - credentials and session cookies travel in cleartext on the LAN,
+    same trust model as every other request this app already makes. Only
+    use it on a trusted local network; never expose the LAN URL to the
+    internet.
+  - **No brute-force/lockout protection** on the login form - acceptable
+    for a small internal team on a private LAN, not suitable if this ever
+    became internet-facing.
+  - **No CSRF tokens**, consistent with the rest of the app (none exists
+    anywhere else in it either).
 - **SQLite concurrency.** Reads are unaffected by a concurrent writer (WAL
   mode), but two people importing large files (like the Total Asset
   baseline) at the exact same moment could see a "database is locked" error

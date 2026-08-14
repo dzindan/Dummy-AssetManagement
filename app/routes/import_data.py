@@ -8,6 +8,7 @@ import uuid
 
 from flask import Blueprint, flash, redirect, render_template, request, send_file, url_for
 
+from ..auth import require_permission
 from ..db import get_connection, get_setting
 from ..diffing import diff_batch
 from ..importer import (
@@ -147,6 +148,7 @@ def _upload_id_files(importer_fn, file_type: str):
 
 
 @bp.route("/branches", methods=["POST"])
+@require_permission("import_data")
 def upload_branch_file():
     """Branch master list only (Branch No, Local/Eng name...) - kept separate
     from user-ID import so uploading the wrong file gives an immediate, clear
@@ -155,6 +157,7 @@ def upload_branch_file():
 
 
 @bp.route("/users", methods=["POST"])
+@require_permission("import_data")
 def upload_user_file():
     """User/banker list only (Branch ID, User No, User Name...)."""
     return _upload_id_files(import_user_file, "users")
@@ -305,6 +308,7 @@ def _run_asset_report_imports(files: list[dict], period: str, source: str) -> li
 
 
 @bp.route("/asset-reports", methods=["POST"])
+@require_permission("import_data")
 def upload_asset_reports():
     files = [f for f in request.files.getlist("files") if f and f.filename]
     if not files:
@@ -341,6 +345,7 @@ def upload_asset_reports():
 
 
 @bp.route("/asset-reports/confirm", methods=["POST"])
+@require_permission("import_data")
 def confirm_asset_reports():
     """Second step after upload_asset_reports (or the folder shortcut)
     flagged duplicate-content files: import only the file chosen per
@@ -396,6 +401,7 @@ def confirm_asset_reports():
 
 
 @bp.route("/asset-reports/confirm-period", methods=["POST"])
+@require_permission("import_data")
 def confirm_period_import():
     """User clicked "Import Anyway" on the period-conflict warning (see
     _check_period_conflicts) - just import the same file list, no more
@@ -415,6 +421,7 @@ def confirm_period_import():
 
 
 @bp.route("/total-asset", methods=["POST"])
+@require_permission("import_data")
 def upload_total_asset():
     f = request.files.get("file")
     if not f or not f.filename:
@@ -438,6 +445,7 @@ def upload_total_asset():
 
 
 @bp.route("/from-folder", methods=["POST"])
+@require_permission("import_data")
 def import_from_folder():
     kind = request.form.get("kind")
     folder = get_setting("asset_reports_folder" if kind == "asset_reports" else "id_files_folder", "")

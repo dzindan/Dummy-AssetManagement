@@ -2,6 +2,7 @@ import datetime as dt
 
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
+from ..auth import require_permission
 from ..db import get_connection, get_setting
 from ..handover import ASSET_CONDITIONS, HO_TYPES, REASONS, record_handover, render_handover_docx
 from ..importer import find_user, normalize_user_id
@@ -157,6 +158,7 @@ def review():
 
 
 @bp.route("/generate", methods=["POST"])
+@require_permission("handover")
 def generate():
     data = _collect_form_data(request.form)
 

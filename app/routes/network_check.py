@@ -24,6 +24,7 @@ import openpyxl
 from flask import Blueprint, jsonify, render_template, request, send_file
 from openpyxl.styles import Font
 
+from ..auth import require_permission
 from ..db import get_connection
 from ..paths import safe_filename
 from ..queries import get_branch, get_branches_with_current_assets, get_current_assets
@@ -163,6 +164,7 @@ def index():
 
 
 @bp.route("/scan", methods=["POST"])
+@require_permission("network_check")
 def start_scan():
     body = request.get_json(silent=True) or {}
     branch_no = (body.get("branch_no") or "").strip()
@@ -223,6 +225,7 @@ def start_scan():
 
 
 @bp.route("/scan/<scan_id>/stop", methods=["POST"])
+@require_permission("network_check")
 def stop_scan(scan_id: str):
     with _LOCK:
         state = _SCANS.get(scan_id)
@@ -233,6 +236,7 @@ def stop_scan(scan_id: str):
 
 
 @bp.route("/scan/<scan_id>/apply", methods=["POST"])
+@require_permission("network_check")
 def apply_updates(scan_id: str):
     """Write one or more mismatched fields' live-scanned value into the
     database, e.g. after the user clicks "Update" on a single mismatched

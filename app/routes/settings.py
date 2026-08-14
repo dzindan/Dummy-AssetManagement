@@ -4,6 +4,7 @@ import sys
 
 from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 
+from ..auth import require_permission
 from ..db import get_connection, get_setting, init_db, prune_stale_unmapped, set_setting
 from ..importer import (
     normalize_branch_text,
@@ -99,6 +100,7 @@ def index():
 
 
 @bp.route("/general", methods=["POST"])
+@require_permission("manage_settings")
 def save_general():
     set_setting("ict_rep_name", request.form.get("ict_rep_name", "").strip().upper())
     set_setting("ict_rep_id", request.form.get("ict_rep_id", "").strip().upper())
@@ -109,6 +111,7 @@ def save_general():
 
 
 @bp.route("/branch-alias/add", methods=["POST"])
+@require_permission("manage_mappings")
 def add_branch_alias():
     alias_text = request.form.get("alias_text", "").strip()
     branch_no = request.form.get("branch_no", "").strip()
@@ -134,6 +137,7 @@ def add_branch_alias():
 
 
 @bp.route("/branch-alias/delete", methods=["POST"])
+@require_permission("manage_mappings")
 def delete_branch_alias():
     alias = request.form.get("alias", "")
     conn = get_connection()
@@ -153,6 +157,7 @@ def delete_branch_alias():
 # branches makes sense.
 
 @bp.route("/branch-hint/map", methods=["POST"])
+@require_permission("manage_mappings")
 def map_branch_hint():
     raw_hint = request.form.get("raw_hint", "").strip()
     branch_no = request.form.get("branch_no", "").strip()
@@ -179,6 +184,7 @@ def map_branch_hint():
 
 
 @bp.route("/branch-hint/dismiss", methods=["POST"])
+@require_permission("manage_mappings")
 def dismiss_branch_hint():
     """Remove a label from the unresolved pool without mapping it - e.g. it
     was a one-off typo that's already been fixed at the source and won't
@@ -234,6 +240,7 @@ def _rename_or_merge_standard(standard_table: str, alias_table: str, old_name: s
 # --- Device standard names (the editable canonical list) -------------------
 
 @bp.route("/device-standard/add", methods=["POST"])
+@require_permission("manage_mappings")
 def add_standard_name():
     name = request.form.get("name", "").strip().upper()
     if not name:
@@ -257,6 +264,7 @@ def add_standard_name():
 
 
 @bp.route("/device-standard/rename", methods=["POST"])
+@require_permission("manage_mappings")
 def rename_standard_name():
     old_name = request.form.get("old_name", "").strip().upper()
     new_name = request.form.get("new_name", "").strip().upper()
@@ -270,6 +278,7 @@ def rename_standard_name():
 
 
 @bp.route("/device-standard/delete", methods=["POST"])
+@require_permission("manage_mappings")
 def delete_standard_name():
     name = request.form.get("name", "").strip().upper()
     conn = get_connection()
@@ -313,6 +322,7 @@ def delete_standard_name():
 # pattern as devices above) --------------------------------------------------
 
 @bp.route("/status-standard/add", methods=["POST"])
+@require_permission("manage_mappings")
 def add_standard_status():
     name = request.form.get("name", "").strip().upper()
     if not name:
@@ -334,6 +344,7 @@ def add_standard_status():
 
 
 @bp.route("/status-standard/rename", methods=["POST"])
+@require_permission("manage_mappings")
 def rename_standard_status():
     old_name = request.form.get("old_name", "").strip().upper()
     new_name = request.form.get("new_name", "").strip().upper()
@@ -347,6 +358,7 @@ def rename_standard_status():
 
 
 @bp.route("/status-standard/delete", methods=["POST"])
+@require_permission("manage_mappings")
 def delete_standard_status():
     name = request.form.get("name", "").strip().upper()
     conn = get_connection()
@@ -373,6 +385,7 @@ def delete_standard_status():
 
 
 @bp.route("/status-alias/map", methods=["POST"])
+@require_permission("manage_mappings")
 def map_status_alias():
     """Used both by the drag-and-drop UI (fetch POST) and the fallback
     dropdown-and-button form for the same action: assign a raw status to a
@@ -413,6 +426,7 @@ def map_status_alias():
 
 
 @bp.route("/status-alias/unmap", methods=["POST"])
+@require_permission("manage_mappings")
 def unmap_status_alias():
     alias = request.form.get("alias", "").strip().upper()
     conn = get_connection()
@@ -448,6 +462,7 @@ def unmap_status_alias():
 # pattern as devices above) --------------------------------------------------
 
 @bp.route("/model-standard/add", methods=["POST"])
+@require_permission("manage_mappings")
 def add_standard_model():
     name = request.form.get("name", "").strip().upper()
     if not name:
@@ -469,6 +484,7 @@ def add_standard_model():
 
 
 @bp.route("/model-standard/rename", methods=["POST"])
+@require_permission("manage_mappings")
 def rename_standard_model():
     old_name = request.form.get("old_name", "").strip().upper()
     new_name = request.form.get("new_name", "").strip().upper()
@@ -482,6 +498,7 @@ def rename_standard_model():
 
 
 @bp.route("/model-standard/delete", methods=["POST"])
+@require_permission("manage_mappings")
 def delete_standard_model():
     name = request.form.get("name", "").strip().upper()
     conn = get_connection()
@@ -508,6 +525,7 @@ def delete_standard_model():
 
 
 @bp.route("/model-alias/map", methods=["POST"])
+@require_permission("manage_mappings")
 def map_model_alias():
     """Used both by the drag-and-drop UI (fetch POST) and the fallback
     dropdown-and-button form for the same action: assign a raw model string
@@ -548,6 +566,7 @@ def map_model_alias():
 
 
 @bp.route("/model-alias/unmap", methods=["POST"])
+@require_permission("manage_mappings")
 def unmap_model_alias():
     alias = request.form.get("alias", "").strip().upper()
     conn = get_connection()
@@ -574,6 +593,7 @@ def unmap_model_alias():
 # --- Device mapping (unmapped raw name -> standard name) --------------------
 
 @bp.route("/device-alias/map", methods=["POST"])
+@require_permission("manage_mappings")
 def map_device_alias():
     """Used both by the drag-and-drop UI (fetch POST) and the fallback
     dropdown-and-button form for the same action: assign a raw device name to
@@ -620,6 +640,7 @@ def map_device_alias():
 
 
 @bp.route("/device-alias/unmap", methods=["POST"])
+@require_permission("manage_mappings")
 def unmap_device_alias():
     """Send a mapped alias back to the unmapped pool (e.g. it was assigned to
     the wrong standard name)."""
@@ -646,6 +667,7 @@ def unmap_device_alias():
 
 
 @bp.route("/open-data-folder", methods=["POST"])
+@require_permission("manage_settings")
 def open_data_folder():
     path = get_app_data_dir()
     try:
@@ -665,6 +687,7 @@ _DATA_ITEMS_TO_MOVE = ["app.db", "app.db-wal", "app.db-shm", "handovers", "expor
 
 
 @bp.route("/data-location", methods=["POST"])
+@require_permission("manage_settings")
 def change_data_location():
     new_dir = request.form.get("new_data_dir", "").strip()
     if not new_dir:
@@ -708,6 +731,7 @@ def change_data_location():
 
 
 @bp.route("/data-location/reset", methods=["POST"])
+@require_permission("manage_settings")
 def reset_data_location():
     default_dir = get_default_app_data_dir()
     set_app_data_dir(default_dir)
