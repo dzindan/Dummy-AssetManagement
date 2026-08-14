@@ -283,12 +283,17 @@ def delete_standard_name():
             record_unmapped_device(conn, row["alias"])
         conn.execute("DELETE FROM device_aliases WHERE canonical_name = ?", (name,))
         conn.execute("DELETE FROM device_standard_names WHERE name = ?", (name,))
-        # Assets whose raw imported value matched this standard name exactly
-        # (no alias needed) never went through record_unmapped_device at
-        # import time - without this they'd vanish from every mapping list
-        # (not standard, not alias, not unmapped) the moment the standard
-        # name is deleted, even though asset_items.device_name still says
-        # `name` on those rows and the assets are still there.
+        # Re-sync already-imported assets that were showing this now-deleted
+        # canonical name: drop each one back to its own raw text (exactly
+        # what a fresh import would resolve to today, with the alias/
+        # standard name gone) - without this, Manage Assets kept showing the
+        # old canonical name on every affected row even though Settings
+        # correctly moved its alias back to Unmapped.
+        conn.execute("UPDATE asset_items SET device_name = UPPER(device_name_raw) WHERE device_name = ?", (name,))
+        # After that resync, any row still showing `name` has it because its
+        # own raw text literally IS `name` (no alias was ever involved, so
+        # the alias loop above never queued it) - queue that into Unmapped
+        # too, or it vanishes from every mapping list despite still being here.
         if conn.execute("SELECT 1 FROM asset_items WHERE device_name = ? LIMIT 1", (name,)).fetchone():
             record_unmapped_device(conn, name)
         conn.commit()
@@ -347,8 +352,9 @@ def delete_standard_status():
             record_unmapped_status(conn, row["alias"])
         conn.execute("DELETE FROM status_aliases WHERE canonical_name = ?", (name,))
         conn.execute("DELETE FROM status_standard_names WHERE name = ?", (name,))
-        # See delete_standard_name()'s comment - same gap for assets whose
-        # status matched this standard name directly, without an alias.
+        # See delete_standard_name()'s comment - same resync for assets whose
+        # displayed status pointed at this now-deleted canonical name.
+        conn.execute("UPDATE asset_items SET status = UPPER(status_raw) WHERE status = ?", (name,))
         if conn.execute("SELECT 1 FROM asset_items WHERE status = ? LIMIT 1", (name,)).fetchone():
             record_unmapped_status(conn, name)
         conn.commit()
@@ -455,8 +461,9 @@ def delete_standard_model():
             record_unmapped_model(conn, row["alias"])
         conn.execute("DELETE FROM model_aliases WHERE canonical_name = ?", (name,))
         conn.execute("DELETE FROM model_standard_names WHERE name = ?", (name,))
-        # See delete_standard_name()'s comment - same gap for assets whose
-        # model matched this standard name directly, without an alias.
+        # See delete_standard_name()'s comment - same resync for assets whose
+        # displayed model pointed at this now-deleted canonical name.
+        conn.execute("UPDATE asset_items SET model_device = UPPER(model_device_raw) WHERE model_device = ?", (name,))
         if conn.execute("SELECT 1 FROM asset_items WHERE model_device = ? LIMIT 1", (name,)).fetchone():
             record_unmapped_model(conn, name)
         conn.commit()
