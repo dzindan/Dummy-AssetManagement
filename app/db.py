@@ -240,13 +240,13 @@ CREATE INDEX IF NOT EXISTS idx_accounts_role ON accounts (role_id);
 # @require_permission(...) call) - only ever add a key here, never rename
 # one, or existing role_permissions rows would silently point at nothing.
 PERMISSIONS = {
-    "import_data": "Nạp dữ liệu (Import Data)",
-    "edit_assets": "Sửa/xoá tài sản (Manage Assets)",
-    "handover": "Tạo biên bản bàn giao (Lookup & Hand-Over)",
-    "network_check": "Network Check (scan và áp dụng kết quả)",
-    "manage_mappings": "Quản lý Device/Status/Model/Branch Mapping (Settings)",
-    "manage_settings": "Cấu hình hệ thống, đổi vị trí lưu dữ liệu (Settings)",
-    "manage_users": "Quản lý tài khoản và vai trò",
+    "import_data": "Import Data (upload branch codes, user IDs, asset reports)",
+    "edit_assets": "Edit/delete assets (Manage Assets)",
+    "handover": "Generate hand-over forms (Lookup & Hand-Over)",
+    "network_check": "Network Check (run scans and apply results)",
+    "manage_mappings": "Manage Device/Status/Model/Branch Mapping (Settings)",
+    "manage_settings": "Change system settings and data storage location (Settings)",
+    "manage_users": "Manage user accounts and roles",
 }
 
 # Built-in roles are fully locked (not deletable/renamable/permission-

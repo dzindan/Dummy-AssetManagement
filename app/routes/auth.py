@@ -38,7 +38,7 @@ def login():
         if account and account["is_active"] and verify_password(password, account["password_hash"]):
             login_account(account["id"])
             return redirect(_safe_next(next_url))
-        flash("Sai tên đăng nhập hoặc mật khẩu.", "error")
+        flash("Incorrect username or password.", "error")
 
     return render_template("login.html", next_url=next_url)
 
@@ -63,11 +63,11 @@ def setup():
         password = request.form.get("password", "")
         confirm = request.form.get("confirm", "")
         if not username or not password:
-            flash("Vui lòng nhập đầy đủ tên đăng nhập và mật khẩu.", "error")
+            flash("Please enter both a username and a password.", "error")
         elif password != confirm:
-            flash("Mật khẩu xác nhận không khớp.", "error")
+            flash("Passwords do not match.", "error")
         elif len(password) < 8:
-            flash("Mật khẩu cần ít nhất 8 ký tự.", "error")
+            flash("Password must be at least 8 characters.", "error")
         else:
             conn = get_connection()
             try:
@@ -76,7 +76,7 @@ def setup():
                 conn.close()
             account_id = create_account(username, password, admin_role["id"])
             login_account(account_id)
-            flash(f'Tài khoản quản trị "{username}" đã được tạo.', "success")
+            flash(f'Admin account "{username}" created.', "success")
             return redirect(url_for("dashboard.index"))
 
     return render_template("setup.html")

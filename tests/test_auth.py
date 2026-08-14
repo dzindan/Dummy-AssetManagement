@@ -17,8 +17,8 @@ from app import create_app  # noqa: E402
 from app.auth import create_account  # noqa: E402
 from app.db import PERMISSIONS, get_connection  # noqa: E402
 
-PERMISSION_DENIED_TEXT = "không có quyền"
-LAST_HOLDER_TEXT = "cuối cùng"
+PERMISSION_DENIED_TEXT = "do not have permission"
+LAST_HOLDER_TEXT = "Manage Users permission"
 
 
 def _fresh_app():

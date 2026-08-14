@@ -144,7 +144,7 @@ def require_permission(permission: str):
             if permission not in current_permissions():
                 if request.is_json or request.headers.get("X-Requested-With") == "fetch":
                     return jsonify({"error": "You do not have permission to do that."}), 403
-                flash("Bạn không có quyền thực hiện thao tác này. Liên hệ quản trị viên nếu cần.", "error")
+                flash("You do not have permission to do that. Contact an administrator if you need access.", "error")
                 return redirect(request.referrer or url_for("dashboard.index"))
             return view_func(*args, **kwargs)
 
