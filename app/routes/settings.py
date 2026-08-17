@@ -1,6 +1,7 @@
 import os
 import shutil
 import sys
+import time
 
 from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 
@@ -686,6 +687,25 @@ def open_data_folder():
 _DATA_ITEMS_TO_MOVE = ["app.db", "app.db-wal", "app.db-shm", "handovers", "exports", "uploads"]
 
 
+def _move_with_retry(src: str, dest: str, attempts: int = 5, delay: float = 0.3) -> None:
+    """shutil.move(), retried briefly on a Windows file-lock error. This app
+    is served to several people on the LAN at once (see main.py) - another
+    still-open request's SQLite connection can hold app.db locked for a
+    moment, which turns into a PermissionError here rather than something a
+    plain retry-free move can ride out. A short retry lets a momentary lock
+    clear instead of failing the whole operation over it."""
+    last_exc = None
+    for attempt in range(attempts):
+        try:
+            shutil.move(src, dest)
+            return
+        except OSError as exc:
+            last_exc = exc
+            if attempt < attempts - 1:
+                time.sleep(delay)
+    raise last_exc
+
+
 @bp.route("/data-location", methods=["POST"])
 @require_permission("manage_settings")
 def change_data_location():
@@ -711,13 +731,54 @@ def change_data_location():
         flash(f"Cannot use that folder: {exc}", "error")
         return redirect(url_for("settings.index"))
 
+    # All-or-nothing: a move that fails partway (e.g. app.db locked by
+    # another request) must never leave old_dir and new_dir both holding a
+    # copy - the app keeps using old_dir either way (the pointer is only
+    # written after every item below succeeds), so a stray, no-longer-
+    # updated duplicate left behind in new_dir would just be a trap for
+    # whoever finds it later and assumes it's current. On failure, every
+    # item this call already moved gets moved straight back before the user
+    # sees an error, and nothing is left half-migrated.
     moved = []
-    for name in _DATA_ITEMS_TO_MOVE:
-        src = os.path.join(old_dir, name)
-        dest = os.path.join(new_dir, name)
-        if os.path.exists(src) and not os.path.exists(dest):
-            shutil.move(src, dest)
-            moved.append(name)
+    current_item = None
+    try:
+        for name in _DATA_ITEMS_TO_MOVE:
+            current_item = name
+            src = os.path.join(old_dir, name)
+            dest = os.path.join(new_dir, name)
+            if os.path.exists(src) and not os.path.exists(dest):
+                _move_with_retry(src, dest)
+                moved.append(name)
+        current_item = None
+    except OSError as exc:
+        for name in reversed(moved):
+            dest = os.path.join(new_dir, name)
+            src = os.path.join(old_dir, name)
+            if os.path.exists(dest) and not os.path.exists(src):
+                shutil.move(dest, src)
+        # shutil.move() can copy-then-fail-to-delete when the source is
+        # locked (its own os.rename -> copy+unlink fallback dying partway
+        # through) - that leaves a stray, already-stale copy of whichever
+        # single item was mid-move when this failed. Clean it up too; it's
+        # not in `moved` since that move never actually completed.
+        if current_item:
+            stray = os.path.join(new_dir, current_item)
+            src = os.path.join(old_dir, current_item)
+            if os.path.exists(stray) and os.path.exists(src):
+                if os.path.isdir(stray):
+                    shutil.rmtree(stray, ignore_errors=True)
+                else:
+                    try:
+                        os.remove(stray)
+                    except OSError:
+                        pass
+        flash(
+            f"Could not move the data folder: {exc}. This usually means the database is "
+            "currently in use - make sure no one else is using the app right now and try "
+            "again. Nothing was changed; your data is still at the original location.",
+            "error",
+        )
+        return redirect(url_for("settings.index"))
 
     set_app_data_dir(new_dir)
     # The new folder may never have held this app's data before (no app.db
