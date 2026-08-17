@@ -23,6 +23,18 @@ HARDWARE_TIMEOUT_S = 20
 DEFAULT_CONCURRENCY = 20
 
 
+def _decode_console_bytes(data: bytes) -> str:
+    """Try strict utf-8 first, falling back to the legacy Windows console
+    code page (cp850) only if utf-8 genuinely can't decode it - errors=
+    "ignore" on the first attempt would make it "succeed" by silently
+    dropping non-ASCII bytes (e.g. accented Vietnamese names), so the
+    fallback would never actually run."""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data.decode("cp850", errors="ignore")
+
+
 def _run(cmd: list[str], timeout: float = SUBPROCESS_TIMEOUT_S) -> tuple[int, str]:
     try:
         proc = subprocess.run(
@@ -31,8 +43,8 @@ def _run(cmd: list[str], timeout: float = SUBPROCESS_TIMEOUT_S) -> tuple[int, st
             timeout=timeout,
             creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
         )
-        out = proc.stdout.decode("utf-8", errors="ignore") or proc.stdout.decode("cp850", errors="ignore")
-        err = proc.stderr.decode("utf-8", errors="ignore") or proc.stderr.decode("cp850", errors="ignore")
+        out = _decode_console_bytes(proc.stdout)
+        err = _decode_console_bytes(proc.stderr)
         return proc.returncode, (out + err)
     except subprocess.TimeoutExpired:
         return -1, "Timeout"
@@ -195,7 +207,29 @@ try {
 }
 
 try {
-    $monitors = Get-WmiObject -Namespace root\wmi -Class WmiMonitorID -ComputerName $ip -ErrorAction Stop | ForEach-Object {
+    # WmiMonitorID (root\wmi) is a well-known flaky WMI class - on servers,
+    # VMs, or docked laptops with no monitor properly enumerated it can
+    # HANG rather than throw, which -ErrorAction Stop can't catch (it only
+    # converts synchronous errors to exceptions, not a stuck call). Since
+    # this whole script shares ONE timeout budget (see HARDWARE_TIMEOUT_S
+    # in scanner.py) and only prints ConvertTo-Json at the very end, a hang
+    # here would starve the timeout and kill the process before the other,
+    # far more reliable categories below (and system/PC serial above,
+    # already gathered) ever get printed. Bound it with its own background
+    # job instead so a stuck monitor query can't take the rest down with it.
+    $monitorJob = Start-Job -ScriptBlock {
+        param($targetIp)
+        Get-WmiObject -Namespace root\wmi -Class WmiMonitorID -ComputerName $targetIp -ErrorAction Stop
+    } -ArgumentList $ip
+    Wait-Job -Job $monitorJob -Timeout 6 | Out-Null
+    if ($monitorJob.State -eq 'Running') {
+        Stop-Job -Job $monitorJob -ErrorAction SilentlyContinue
+        Remove-Job -Job $monitorJob -Force -ErrorAction SilentlyContinue
+        throw "Timed out reading monitor info (no response within 6s)"
+    }
+    $monitorRaw = Receive-Job -Job $monitorJob -ErrorAction Stop
+    Remove-Job -Job $monitorJob -Force -ErrorAction SilentlyContinue
+    $monitors = $monitorRaw | ForEach-Object {
         $model = ""
         if ($_.UserFriendlyName) {
             $model = ($_.UserFriendlyName | Where-Object {$_ -ne 0} | ForEach-Object {[char]$_}) -join ""
@@ -316,14 +350,33 @@ def scan_ip(ip: str, include_hardware: bool = False) -> dict:
         "uptime": None,
         "hardware": None,
     }
-    if alive:
-        info = resolve_hostname(ip)
+    if not alive:
+        return result
+
+    # resolve_hostname/get_sessions/get_uptime/get_hardware are independent
+    # subprocess calls against the same host - running them one after
+    # another means a host's total time is the *sum* of each step's latency
+    # (up to ~4+4+8+20s) instead of the max, multiplying scan time for no
+    # reason once "include hardware" is on. With DEFAULT_CONCURRENCY hosts
+    # already queued in the outer pool (see run_scan), that sum-of-latencies
+    # per host was backing up badly enough on branches with more than a
+    # handful of IPs that hardware (the slowest, last step) often never got
+    # a turn - which looked like "serial number never comes back" even
+    # though the scan was still technically running.
+    with ThreadPoolExecutor(max_workers=4) as host_pool:
+        hostname_future = host_pool.submit(resolve_hostname, ip)
+        sessions_future = host_pool.submit(get_sessions, ip)
+        uptime_future = host_pool.submit(get_uptime, ip)
+        hardware_future = host_pool.submit(get_hardware, ip) if include_hardware else None
+
+        info = hostname_future.result()
         result["hostname"] = info["hostname"]
         result["domain"] = info["domain"]
-        result["sessions"] = get_sessions(ip)
-        result["uptime"] = get_uptime(ip)
-        if include_hardware:
-            result["hardware"] = get_hardware(ip)
+        result["sessions"] = sessions_future.result()
+        result["uptime"] = uptime_future.result()
+        if hardware_future is not None:
+            result["hardware"] = hardware_future.result()
+
     return result
 
 
