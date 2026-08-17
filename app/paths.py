@@ -9,6 +9,35 @@ def is_frozen() -> bool:
     return getattr(sys, "frozen", False)
 
 
+def is_network_path(path: str) -> bool:
+    """True for a UNC path (\\\\server\\share\\...) or a drive letter mapped to
+    one (`net use Z: \\\\server\\share`, or Explorer's "Map network drive").
+
+    SQLite's WAL journal mode - the default this app connects with (see
+    db.py's get_connection) - is explicitly documented upstream as
+    unreliable over a network filesystem: it needs a shared memory mapping
+    for its -shm file that SMB/NFS clients don't all implement the same way
+    a local disk does, which shows up as spurious "database is locked"/
+    "disk I/O error" failures rather than a clean rejection up front. db.py
+    checks this to fall back to the traditional rollback journal instead,
+    which only needs ordinary file locking and has always been fine over a
+    network share (with the usual single-writer-at-a-time caveat)."""
+    if path.startswith("\\\\") or path.startswith("//"):
+        return True
+    if sys.platform != "win32":
+        return False
+    drive = os.path.splitdrive(path)[0]
+    if not drive:
+        return False
+    import ctypes
+
+    DRIVE_REMOTE = 4
+    try:
+        return ctypes.windll.kernel32.GetDriveTypeW(drive + "\\") == DRIVE_REMOTE
+    except OSError:
+        return False
+
+
 def safe_filename(name: str, fallback: str = "file") -> str:
     """Strip characters Windows/Excel don't like from a name headed into a
     download filename (branch/eng names, report labels...) - keeps spaces,

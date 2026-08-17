@@ -1,6 +1,7 @@
+import os
 import sqlite3
 
-from .paths import get_db_path
+from .paths import get_app_data_dir, is_network_path
 from .text_utils import normalize_user_id, strip_bank_prefix
 
 SCHEMA = """
@@ -353,16 +354,29 @@ DEFAULT_MODEL_ALIASES = {
 
 
 def get_connection() -> sqlite3.Connection:
+    data_dir = get_app_data_dir()
     # timeout: wait for a lock instead of failing immediately - matters once
     # several people on the network are using this at once and one of them
     # is mid-import (imports hold a write lock for the whole batch).
-    conn = sqlite3.connect(get_db_path(), timeout=30)
+    conn = sqlite3.connect(os.path.join(data_dir, "app.db"), timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    # WAL lets readers (dashboard, lookup) proceed without blocking on a
-    # concurrent writer (import, hand-over generation) - matters once this
-    # is a shared server multiple people hit at the same time.
-    conn.execute("PRAGMA journal_mode = WAL")
+    if is_network_path(data_dir):
+        # WAL (below) needs shared-memory locking for its -shm file that
+        # SMB/NFS network filesystems don't all support the way a local
+        # disk does - see is_network_path()'s docstring. That shows up as
+        # spurious "database is locked"/"disk I/O error" failures, not a
+        # clean rejection, so detect it up front rather than let every
+        # connection risk hitting it. The traditional rollback journal only
+        # needs ordinary file locking, which network shares have always
+        # handled fine (one writer at a time, same as WAL's real limit here
+        # anyway once mmap isn't reliable).
+        conn.execute("PRAGMA journal_mode = DELETE")
+    else:
+        # WAL lets readers (dashboard, lookup) proceed without blocking on a
+        # concurrent writer (import, hand-over generation) - matters once
+        # this is a shared server multiple people hit at the same time.
+        conn.execute("PRAGMA journal_mode = WAL")
     return conn
 
 
