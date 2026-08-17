@@ -1,13 +1,28 @@
-from flask import Blueprint, render_template
+import datetime
+
+from flask import Blueprint, render_template, request
 from markupsafe import Markup
 
-from ..analytics import get_all_branches_item_trend, get_branch_month_change_table
+from ..analytics import (
+    get_all_branches_item_trend,
+    get_available_report_years,
+    get_branch_month_change_table,
+    get_year_comparison_table,
+)
 from ..charts import render_line_chart
 from ..db import get_connection
 from ..exports import build_workbook, send_workbook
 from ..queries import get_current_asset_count, get_current_branch_breakdown, get_latest_batch
 
 bp = Blueprint("dashboard", __name__)
+
+
+def _resolve_year(requested: str | None, available_years: list[str]) -> str:
+    if requested and requested in available_years:
+        return requested
+    if available_years:
+        return available_years[0]
+    return str(datetime.date.today().year)
 
 
 @bp.route("/")
@@ -27,9 +42,14 @@ def index():
         ).fetchall()
 
         all_periods, all_items, all_matrix = get_all_branches_item_trend(conn)
-        month_periods, month_table, month_column_totals, month_grand_added, month_grand_removed = (
-            get_branch_month_change_table(conn)
+
+        available_years = get_available_report_years(conn)
+        selected_year = _resolve_year(request.args.get("year"), available_years)
+        month_periods, month_table, month_column_totals, month_column_added, month_column_removed = (
+            get_branch_month_change_table(conn, selected_year)
         )
+
+        year_comparison = get_year_comparison_table(conn)
 
         unmapped_device_count = conn.execute("SELECT COUNT(*) c FROM device_unmapped").fetchone()["c"]
     finally:
@@ -49,23 +69,28 @@ def index():
         recent_handovers=recent_handovers,
         all_branches_chart_html=all_branches_chart_html,
         unmapped_device_count=unmapped_device_count,
+        available_years=available_years,
+        selected_year=selected_year,
         month_periods=month_periods,
         month_table=month_table,
         month_column_totals=month_column_totals,
-        month_grand_added=month_grand_added,
-        month_grand_removed=month_grand_removed,
+        month_column_added=month_column_added,
+        month_column_removed=month_column_removed,
+        year_comparison=year_comparison,
     )
 
 
 @bp.route("/export")
 def export():
-    """Branch x month asset-count table, re-computed the same way as the
-    Dashboard itself (see get_branch_month_change_table) rather than reusing
-    state passed from index() - matches how every other export route in
-    this app re-queries instead of caching across requests."""
+    """Branch x month asset-count table for the selected year, re-computed
+    the same way as the Dashboard itself (see get_branch_month_change_table)
+    rather than reusing state passed from index() - matches how every other
+    export route in this app re-queries instead of caching across requests."""
     conn = get_connection()
     try:
-        month_periods, month_table, _totals, _added, _removed = get_branch_month_change_table(conn)
+        available_years = get_available_report_years(conn)
+        selected_year = _resolve_year(request.args.get("year"), available_years)
+        month_periods, month_table, _totals, _added, _removed = get_branch_month_change_table(conn, selected_year)
     finally:
         conn.close()
 
@@ -73,5 +98,5 @@ def export():
     for i, period in enumerate(month_periods):
         columns.append((period, lambda r, i=i: (r["cells"][i]["count"] if r["cells"][i] else 0)))
 
-    wb = build_workbook("Assets by Branch by Month", columns, month_table)
-    return send_workbook(wb, "assets_by_branch_by_month.xlsx")
+    wb = build_workbook(f"Assets by Branch by Month {selected_year}", columns, month_table)
+    return send_workbook(wb, f"assets_by_branch_by_month_{selected_year}.xlsx")

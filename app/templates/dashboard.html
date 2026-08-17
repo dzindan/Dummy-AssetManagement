@@ -29,12 +29,24 @@
 <div class="panel" style="margin-top: 1.25rem;">
   <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
     <h2 style="margin:0;">Assets by Branch (by month)</h2>
-    <a class="btn secondary" href="{{ url_for('dashboard.export') }}">Export to Excel</a>
+    <div style="display:flex; align-items:center; gap:0.5rem;">
+      {% if available_years %}
+      <form method="get" action="{{ url_for('dashboard.index') }}" style="display:flex; align-items:center; gap:0.35rem;">
+        <label for="dash-year" class="muted" style="font-size:0.85rem;">Report year</label>
+        <select id="dash-year" name="year" onchange="this.form.submit()">
+          {% for y in available_years %}
+          <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
+          {% endfor %}
+        </select>
+      </form>
+      {% endif %}
+      <a class="btn secondary" href="{{ url_for('dashboard.export', year=selected_year) }}">Export to Excel</a>
+    </div>
   </div>
   {% if month_table %}
     <p class="muted">
-      Each cell is that branch's asset count for the month (its most recent import that month). The most recent month
-      also shows its change vs. the month before it - <span style="color:var(--ok);">+added</span> /
+      Each cell is that branch's asset count for the month (its most recent import that month), for the selected
+      report year. Every month also shows its change vs. the month before it - <span style="color:var(--ok);">+added</span> /
       <span style="color:var(--danger);">-removed</span>, matched by actual asset identity (not just a count
       difference, so swapping devices still shows as real movement). Click a branch name for its own monthly
       breakdown, trend chart, and Excel export.
@@ -44,7 +56,7 @@
       <thead>
         <tr>
           <th>Branch / Dept</th>
-          {% for p in month_periods %}<th>{{ p }}{% if loop.last %} (vs prev.){% endif %}</th>{% endfor %}
+          {% for p in month_periods %}<th>{{ p }}</th>{% endfor %}
         </tr>
       </thead>
       <tbody>
@@ -81,12 +93,10 @@
           {% for c in month_column_totals %}
           <td>
             <strong>{{ c }}</strong>
-            {% if loop.last %}
             <br><span style="font-size:0.75rem;">
-              <span style="color:var(--ok);">+{{ month_grand_added }}</span> /
-              <span style="color:var(--danger);">-{{ month_grand_removed }}</span>
+              <span style="color:var(--ok);">+{{ month_column_added[loop.index0] }}</span> /
+              <span style="color:var(--danger);">-{{ month_column_removed[loop.index0] }}</span>
             </span>
-            {% endif %}
           </td>
           {% endfor %}
         </tr>
@@ -94,7 +104,44 @@
     </table>
     </div>
   {% else %}
-    <p class="muted">No asset reports imported yet. Go to <a href="{{ url_for('import_data.index') }}">Import Data</a> to get started.</p>
+    <p class="muted">No asset reports imported for {{ selected_year }}. Go to <a href="{{ url_for('import_data.index') }}">Import Data</a> to get started.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Year Comparison</h2>
+  {% if year_comparison %}
+    <p class="muted">
+      Each row is that year's total asset count (as of its latest reporting month), compared to the year before it.
+    </p>
+    <div class="table-scroll">
+    <table>
+      <thead>
+        <tr><th>Year</th><th>Total Assets</th><th>Change</th></tr>
+      </thead>
+      <tbody>
+        {% for row in year_comparison %}
+        <tr>
+          <td>{{ row.year }}</td>
+          <td>{{ row.count }}</td>
+          <td>
+            {% if row.change is none %}
+            <span class="muted">-</span>
+            {% elif row.change > 0 %}
+            <span style="color:var(--ok);">+{{ row.change }}</span>
+            {% elif row.change < 0 %}
+            <span style="color:var(--danger);">{{ row.change }}</span>
+            {% else %}
+            <span class="muted">0</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  {% else %}
+    <p class="muted">No asset reports imported yet.</p>
   {% endif %}
 </div>
 

@@ -142,7 +142,49 @@ def _walk_period_changes(rows: list[tuple[str, str, str]]) -> dict[str, dict]:
     return result
 
 
-VISIBLE_MONTHS = 6  # how many recent months the change tables display
+VISIBLE_MONTHS = 6  # how many recent months Branch Detail's rolling-window table displays
+
+
+def get_available_report_years(conn) -> list[str]:
+    """Distinct calendar years ("YYYY") with at least one asset-report/
+    baseline import on file, newest first - backs the Dashboard's year
+    selector and the year comparison table below."""
+    rows = conn.execute(
+        "SELECT DISTINCT substr(period, 1, 4) AS y FROM import_batches "
+        "WHERE period IS NOT NULL AND period != '' ORDER BY y DESC"
+    ).fetchall()
+    return [r["y"] for r in rows]
+
+
+def _month_periods_for_year(year: str) -> list[str]:
+    return [f"{year}-{m:02d}" for m in range(1, 13)]
+
+
+def _prepare_year_columns(by_group: dict[str, dict], year: str):
+    """Slice a _walk_period_changes result down to the 12 fixed months of
+    `year`, unlike Branch Detail's rolling _limit_to_recent_months window:
+    every shown column keeps its own added/removed (diffed against
+    whatever period actually preceded it - possibly outside the visible
+    year, e.g. January's delta lands against December of the year before),
+    not just the single most recent column. A group with no data at all in
+    `year` is dropped entirely rather than shown as an all-blank row."""
+    visible_periods = _month_periods_for_year(year)
+    prepared: dict[str, dict] = {}
+    for key, data in by_group.items():
+        cells = []
+        last_count = 0
+        any_data = False
+        for period in visible_periods:
+            cell = data["periods"].get(period)
+            if cell is None:
+                cells.append(None)
+                continue
+            any_data = True
+            cells.append({"count": cell["count"], "added": cell["added"], "removed": cell["removed"]})
+            last_count = cell["count"]
+        if any_data:
+            prepared[key] = {"cells": cells, "current_count": last_count}
+    return visible_periods, prepared
 
 
 def _limit_to_recent_months(by_group: dict[str, dict], visible_months: int = VISIBLE_MONTHS):
@@ -193,17 +235,18 @@ JOIN latest l ON r.branch_no = l.branch_no AND r.period = l.period AND r.batch_i
 """
 
 
-def get_branch_month_change_table(conn, visible_months: int = VISIBLE_MONTHS):
+def get_branch_month_change_table(conn, year: str):
     """Dashboard summary table: one row per branch, showing its asset count
-    for the `visible_months` most recent months, sorted by current (most
-    recent) count. Only the most recent month's column carries an
-    added/removed indicator, comparing it against the month right before it
-    - see _walk_period_changes for why that's computed from actual asset
-    identity rather than a naive count difference, and
-    _limit_to_recent_months for why older columns don't also show a delta."""
+    for each of the 12 months of `year`, sorted by current (latest-in-year)
+    count. Every column carries its own added/removed indicator (diffed
+    against whatever period actually precedes it, which may fall in the
+    prior year for January) - see _walk_period_changes for why that's
+    computed from actual asset identity rather than a naive count
+    difference, and _prepare_year_columns for why every column (not just
+    the last) gets a delta here, unlike Branch Detail's rolling window."""
     rows = conn.execute(BRANCH_MONTH_CHANGES_SQL).fetchall()
     by_group = _walk_period_changes((r["grp"] or "", r["period"], r["asset_key"]) for r in rows)
-    visible_periods, prepared = _limit_to_recent_months(by_group, visible_months)
+    visible_periods, prepared = _prepare_year_columns(by_group, year)
 
     names = {
         r["branch_no"]: r["eng_name"] for r in conn.execute("SELECT branch_no, eng_name FROM branches").fetchall()
@@ -224,10 +267,64 @@ def get_branch_month_change_table(conn, visible_months: int = VISIBLE_MONTHS):
     column_totals = [
         sum((c["count"] if c else 0) for c in (r["cells"][i] for r in table)) for i in range(len(visible_periods))
     ]
-    latest_added_total = sum((r["cells"][-1]["added"] or 0) for r in table if r["cells"] and r["cells"][-1])
-    latest_removed_total = sum((r["cells"][-1]["removed"] or 0) for r in table if r["cells"] and r["cells"][-1])
+    column_added = [
+        sum((c["added"] or 0) for c in (r["cells"][i] for r in table) if c) for i in range(len(visible_periods))
+    ]
+    column_removed = [
+        sum((c["removed"] or 0) for c in (r["cells"][i] for r in table) if c) for i in range(len(visible_periods))
+    ]
 
-    return visible_periods, table, column_totals, latest_added_total, latest_removed_total
+    return visible_periods, table, column_totals, column_added, column_removed
+
+
+YEAR_SNAPSHOT_SQL = """
+WITH branch_key AS (
+    SELECT ai.*, COALESCE(NULLIF(ai.branch_no, ''), 'UNRESOLVED:' || ai.branch_dept) AS bkey
+    FROM asset_items ai
+),
+branch_batches AS (
+    SELECT DISTINCT bk.bkey, bk.batch_id, ib.period
+    FROM branch_key bk
+    JOIN import_batches ib ON ib.id = bk.batch_id
+    WHERE ib.period IS NOT NULL AND ib.period != '' AND ib.period <= ?
+),
+latest_period AS (
+    SELECT bkey, MAX(period) AS period
+    FROM branch_batches
+    GROUP BY bkey
+),
+latest_batch AS (
+    SELECT bb.bkey, MAX(bb.batch_id) AS batch_id
+    FROM branch_batches bb
+    JOIN latest_period lp ON lp.bkey = bb.bkey AND lp.period IS bb.period
+    GROUP BY bb.bkey
+)
+SELECT COUNT(*) AS c
+FROM branch_key bk
+JOIN latest_batch lb ON bk.bkey = lb.bkey AND bk.batch_id = lb.batch_id
+"""
+
+
+def get_year_comparison_table(conn) -> list[dict]:
+    """Dashboard year-comparison panel: one row per calendar year with any
+    reporting data, oldest first, showing that year's end-of-year asset
+    snapshot (same per-branch "latest period up to and including this
+    year's December" logic as CURRENT_ASSETS_CTE in queries.py, just bounded
+    by a "<= YYYY-12" cutoff instead of unbounded) and its change versus the
+    year immediately before it. `change` is None for the first year on
+    record, since there's nothing earlier to compare against."""
+    years = get_available_report_years(conn)
+    years.sort()  # oldest first, opposite of get_available_report_years' newest-first default
+
+    table = []
+    prev_count: int | None = None
+    for year in years:
+        cutoff = f"{year}-12"
+        count = conn.execute(YEAR_SNAPSHOT_SQL, (cutoff,)).fetchone()["c"]
+        change = None if prev_count is None else count - prev_count
+        table.append({"year": year, "count": count, "change": change})
+        prev_count = count
+    return table
 
 
 def get_branch_device_month_changes(conn, branch_no: str, top_items: list[str], visible_months: int = VISIBLE_MONTHS):
