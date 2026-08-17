@@ -21,10 +21,13 @@ computers on the same office network.
    changed equipment per branch, vs. that branch's previous import),
    exportable to Excel.
 4. **Visualizes trends**: the Dashboard's "Assets by Branch (by month)" table
-   shows every branch's asset count for the 6 most recent months, with the
-   most recent month's actual added/removed vs. the one before it (matched
-   by asset identity, not a naive count difference - see §4). Click a
-   branch name for its own page — the same idea broken down by device type,
+   shows every branch's asset count for each month (Jan-Dec) of a selectable
+   reporting year, with every month's actual added/removed vs. the one
+   before it (matched by asset identity, not a naive count difference - see
+   §4). A separate "Year Comparison" panel shows each year's end-of-year
+   total and its change vs. the year before. Click a branch name for its own
+   page — the same idea broken down by device type (still a rolling 6-month
+   window there),
    alongside the trend chart, current asset list (linking to **Manage
    Assets** for filtering/editing), and Excel export.
 5. **Tracks a user's equipment over time**: the **User History** page shows
@@ -119,8 +122,12 @@ computers on the same office network.
     every user logs in; a one-time `/setup` page creates the first Admin
     account on an empty database. Three built-in roles (Viewer/Editor/
     Admin) are seeded automatically, and an Admin can create additional
-    **custom roles** with any combination of permissions. See §8 for what
-    this login system does and doesn't cover.
+    **custom roles** with any combination of permissions. Any account can
+    self-service a forgotten password via a one-time **recovery key**
+    (Settings → My Account → Generate Recovery Key, shown once; "Forgot
+    password?" on the login page consumes it) rather than needing another
+    Admin to reset it. See §8 for what this login system does and doesn't
+    cover.
 
 ---
 
@@ -277,11 +284,20 @@ without a circular import.
 
 **"Current state" is computed per branch, not globally** (`app/queries.py`):
 for each branch, take every row from that branch's single most-recent
-`batch_id`. This matters because (a) branches get re-imported on independent
-schedules — a global "latest batch" would only reflect whichever branch
-happened to be imported last, hiding everyone else — and (b) each monthly
-import is a *full replacement* of that branch's list, so a device missing
-from the new file means it's gone, not still current.
+batch **by reporting period** (`import_batches.period`, "YYYY-MM" — the
+"Reporting month" field on the import form), not by `batch_id`/import order.
+`batch_id` only breaks a tie when the exact same period gets re-imported (a
+correction supersedes the earlier upload of that month). This matters
+because (a) branches get re-imported on independent schedules — a global
+"latest batch" would only reflect whichever branch happened to be imported
+last, hiding everyone else — (b) each monthly import is a *full replacement*
+of that branch's list, so a device missing from the new file means it's
+gone, not still current — and (c) files don't always land in period order
+(a June report arriving before a backfilled February one is normal), so
+ordering by `batch_id` alone would make an actually-newer period look stale
+just because it happened to be imported first. `get_previous_batch_for_branch`
+(used for diffing) follows the same period-first rule when picking a
+branch's "previous" snapshot to compare against.
 
 **Branch name resolution** (`importer.resolve_branch`): asset report files
 label their branch with a free-text string that often doesn't match the
@@ -457,13 +473,28 @@ and User History already use) catches that. It's also why summing each
 month's *count* into a running "Total" would be wrong - a branch having 400
 assets in June and 400 in July is not "800 assets total".
 
-Two display rules on top of that diff (`analytics._limit_to_recent_months`):
-only the **6 most recent months** are shown as columns, and only the
-**single most recent month** carries an added/removed indicator (comparing
-it to the month right before it) - older visible columns show a plain
-count with no delta, since the table is meant to answer "what changed most
-recently", not render a full historical audit trail (that's what User
-History and the per-import diff on the Import Data page are for).
+Two different display rules sit on top of that diff, one per consumer:
+
+- **Branch Detail's device-type table** (`analytics._limit_to_recent_months`):
+  only the **6 most recent months** are shown as columns, and only the
+  **single most recent month** carries an added/removed indicator (comparing
+  it to the month right before it) - older visible columns show a plain
+  count with no delta, since this table answers "what changed most
+  recently" for one branch, not a full historical audit trail (that's what
+  User History and the per-import diff on the Import Data page are for).
+- **Dashboard's branch table** (`analytics._prepare_year_columns`): shows a
+  fixed **Jan-Dec** for a selectable reporting year, and *every* populated
+  column carries its own added/removed indicator, diffed against whatever
+  period actually precedes it in the data (which can be outside the
+  selected year - January's delta compares against December of the year
+  before). A `year` query param on both `/` and `/export` picks the year;
+  it defaults to the most recent year with data. `get_available_report_years()`
+  drives the selector by scanning `import_batches.period` for distinct
+  `YYYY` prefixes. A separate **Year Comparison** panel
+  (`analytics.get_year_comparison_table`) shows one row per year - that
+  year's end-of-year snapshot count (bounded `period <= "YYYY-12"`, same
+  per-branch latest-period logic as `CURRENT_ASSETS_CTE` in queries.py, just
+  time-bounded) and its change vs. the year before.
 
 **The Cleaning Report is revisitable, not a one-shot response**
 (`GET /import/result?batch_ids=1,2,3`, importer's `upload_asset_reports` /
@@ -718,7 +749,12 @@ others to use it; closing that console window stops it for everyone.
 This uses SQLite in WAL mode with a 30-second lock-wait timeout
 (`app/db.py`), which comfortably handles a handful of people browsing/
 looking things up while occasionally one of them runs an import — see §8
-for the caveat.
+for the caveat. If the data folder (Settings → Data Storage Location) is a
+network path (UNC or a mapped drive), `get_connection()` detects it
+(`paths.is_network_path`) and falls back to the plain rollback-journal mode
+instead of WAL, since WAL's shared-memory locking isn't reliable over
+SMB/NFS - same lock-wait behavior, just without WAL's extra reader/writer
+concurrency.
 
 ---
 
@@ -747,6 +783,16 @@ for the caveat.
     became internet-facing.
   - **No CSRF tokens**, consistent with the rest of the app (none exists
     anywhere else in it either).
+  - **Password reset without an existing session** works two ways: another
+    Admin can reset anyone's password from Settings → Users & Roles (needs
+    `manage_users`), or the account holder can self-service it with a
+    one-time **recovery key** (`app/routes/auth.py`'s `/forgot-password`,
+    `app/routes/settings.py`'s `generate_recovery_key_route`) - a 16-character
+    random key generated from Settings → My Account, shown exactly once
+    (only its hash is stored, like a password), and single-use (a
+    successful reset clears it). An account with neither an active Admin
+    nor a saved recovery key has no self-service recovery path short of
+    editing `accounts.password_hash` directly in `app.db`.
 - **SQLite concurrency.** Reads are unaffected by a concurrent writer (WAL
   mode), but two people importing large files (like the Total Asset
   baseline) at the exact same moment could see a "database is locked" error
