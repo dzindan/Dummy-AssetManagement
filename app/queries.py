@@ -5,8 +5,16 @@ might land while another's is still from April) and each new import for a
 branch is a *full replacement* of that branch's equipment list (a device
 missing from the new file means it's gone, not still current). So "current
 state" is computed per branch: for each branch, take every row from that
-branch's single most-recent batch_id. This is NOT the same as "the rows in
-the globally most-recent batch" (which would only cover whichever branch
+branch's single most-recent batch, going by that batch's *reporting period*
+(import_batches.period, "YYYY-MM" - the "Reporting month" field on the
+import form), not by batch_id/import order. Files don't always get uploaded
+in period order (a June report landing before a backfilled February one is
+normal), so batch_id alone would make the actually-newer period look stale
+just because it happened to be imported first - see queries.py's git
+history for the bug report this fixed. batch_id only breaks a tie when the
+exact same period gets re-imported (a correction supersedes the earlier
+upload of that same month). This is NOT the same as "the rows in the
+globally most-recent batch" (which would only cover whichever branch
 happened to be imported last) or "the latest batch per asset_key" (which
 would let a retired device linger forever just because it isn't mentioned
 again). Rows whose branch couldn't be auto-resolved are grouped by their raw
@@ -14,7 +22,8 @@ branch_dept text instead, so they still surface as their own bucket rather
 than disappearing from the "current" view.
 
 Diffing (added/removed/changed) uses the same per-branch latest-batch idea:
-it compares a branch's two most recent batches as full snapshots.
+it compares a branch's two most recent batches (by period) as full
+snapshots - see get_previous_batch_for_branch().
 """
 
 from __future__ import annotations
@@ -22,13 +31,31 @@ from __future__ import annotations
 
 CURRENT_ASSETS_CTE = """
 WITH branch_key AS (
-    SELECT *, COALESCE(NULLIF(branch_no, ''), 'UNRESOLVED:' || branch_dept) AS bkey
-    FROM asset_items
+    SELECT ai.*, COALESCE(NULLIF(ai.branch_no, ''), 'UNRESOLVED:' || ai.branch_dept) AS bkey
+    FROM asset_items ai
+),
+-- One row per (branch, batch) actually imported, paired with that batch's
+-- own reporting period - kept to distinct (bkey, batch_id) pairs so this
+-- stays cheap regardless of how many asset rows a batch has.
+branch_batches AS (
+    SELECT DISTINCT bk.bkey, bk.batch_id, ib.period
+    FROM branch_key bk
+    JOIN import_batches ib ON ib.id = bk.batch_id
+),
+latest_period AS (
+    SELECT bkey, MAX(period) AS period
+    FROM branch_batches
+    GROUP BY bkey
 ),
 latest_batch AS (
-    SELECT bkey, MAX(batch_id) AS batch_id
-    FROM branch_key
-    GROUP BY bkey
+    -- "IS", not "=": a NULL period (shouldn't happen for a real import - see
+    -- importer.py, which always resolves one - but must not silently vanish
+    -- from "current" if it ever does) needs NULL-safe equality, since SQL's
+    -- "NULL = NULL" is never true and would drop every such row here.
+    SELECT bb.bkey, MAX(bb.batch_id) AS batch_id
+    FROM branch_batches bb
+    JOIN latest_period lp ON lp.bkey = bb.bkey AND lp.period IS bb.period
+    GROUP BY bb.bkey
 )
 SELECT bk.*
 FROM branch_key bk
@@ -332,11 +359,32 @@ def get_branches_in_batch(conn, batch_id: int) -> list[str]:
 
 
 def get_previous_batch_for_branch(conn, branch_no: str, before_batch_id: int) -> int | None:
-    row = conn.execute(
-        "SELECT MAX(batch_id) AS mb FROM asset_items WHERE branch_no = ? AND batch_id < ?",
-        (branch_no, before_batch_id),
+    """The batch that came before `before_batch_id` for this branch, by
+    reporting period rather than raw batch_id/import order - same reasoning
+    as CURRENT_ASSETS_CTE above. Diffing a backfilled, out-of-period-order
+    import (e.g. uploading February after June is already on file) must
+    compare against whatever period actually precedes it, not just
+    whichever batch happened to be imported most recently in wall-clock
+    time."""
+    period_row = conn.execute(
+        "SELECT ib.period FROM asset_items ai JOIN import_batches ib ON ib.id = ai.batch_id "
+        "WHERE ai.batch_id = ? LIMIT 1",
+        (before_batch_id,),
     ).fetchone()
-    return row["mb"] if row and row["mb"] is not None else None
+    if period_row is None:
+        return None
+    row = conn.execute(
+        """
+        SELECT ai.batch_id
+        FROM asset_items ai
+        JOIN import_batches ib ON ib.id = ai.batch_id
+        WHERE ai.branch_no = ? AND ib.period < ?
+        ORDER BY ib.period DESC, ai.batch_id DESC
+        LIMIT 1
+        """,
+        (branch_no, period_row["period"]),
+    ).fetchone()
+    return row["batch_id"] if row else None
 
 
 def get_batch_assets_for_branch(conn, batch_id: int, branch_no: str):
