@@ -3,6 +3,28 @@
 {% block content %}
 <h1>Settings</h1>
 
+<div class="panel" id="my-account">
+  <h2>My Account</h2>
+  <p class="muted">
+    A recovery key lets you reset your own password from the "Forgot password?" link on the login page if you
+    ever forget it - without needing another Admin to do it for you. It's shown only once, right after you
+    generate it, so save it somewhere safe (a password manager, or printed and locked away). Generating a new
+    one immediately replaces (and invalidates) any previous key.
+  </p>
+  <p>
+    Recovery key status:
+    {% if has_recovery_key %}
+    <span class="badge badge-added">Set</span>
+    {% else %}
+    <span class="badge badge-changed">Not set</span>
+    {% endif %}
+  </p>
+  <form method="post" action="{{ url_for('settings.generate_recovery_key_route') }}"
+        onsubmit="return {% if has_recovery_key %}confirm('This replaces your current recovery key - the old one will stop working. Continue?'){% else %}true{% endif %};">
+    <button type="submit" class="secondary">{% if has_recovery_key %}Generate New Recovery Key{% else %}Generate Recovery Key{% endif %}</button>
+  </form>
+</div>
+
 {% if 'manage_users' in current_permissions %}
 <div class="panel">
   <h2>Users &amp; Roles</h2>

@@ -5,7 +5,7 @@ import time
 
 from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 
-from ..auth import require_permission
+from ..auth import current_account, generate_recovery_key, require_permission, set_recovery_key
 from ..db import get_connection, get_setting, init_db, prune_stale_unmapped, set_setting
 from ..importer import (
     normalize_branch_text,
@@ -72,12 +72,21 @@ def index():
         unresolved_branches = conn.execute(
             "SELECT raw_hint, occurrences FROM branch_unresolved ORDER BY occurrences DESC, raw_hint"
         ).fetchall()
+
+        account = current_account()
+        has_recovery_key = False
+        if account:
+            row = conn.execute(
+                "SELECT recovery_key_hash FROM accounts WHERE id = ?", (account["id"],)
+            ).fetchone()
+            has_recovery_key = bool(row and row["recovery_key_hash"])
     finally:
         conn.close()
 
     return render_template(
         "settings.html",
         active_page="settings",
+        has_recovery_key=has_recovery_key,
         branch_aliases=branch_aliases,
         branches=branches,
         standard_names=standard_names,
@@ -98,6 +107,23 @@ def index():
         default_data_dir=get_default_app_data_dir(),
         lan_url=current_app.config.get("LAN_URL", ""),
     )
+
+
+@bp.route("/account/recovery-key/generate", methods=["POST"])
+def generate_recovery_key_route():
+    """No @require_permission gate - any logged-in account (any role) sets
+    up its own recovery key, same as it would set its own password. Shown
+    exactly once, in the flash message below - only its hash is stored, so
+    this is the only chance to copy it down."""
+    account = current_account()
+    key = generate_recovery_key()
+    set_recovery_key(account["id"], key)
+    flash(
+        f"New recovery key: {key} — save it now, it will not be shown again. "
+        "Use it on the \"Forgot password?\" link if you're ever locked out.",
+        "success",
+    )
+    return redirect(url_for("settings.index") + "#my-account")
 
 
 @bp.route("/general", methods=["POST"])

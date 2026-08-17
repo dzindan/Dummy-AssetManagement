@@ -227,7 +227,8 @@ CREATE TABLE IF NOT EXISTS accounts (
     role_id INTEGER NOT NULL REFERENCES roles (id),
     is_active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT,
-    last_login_at TEXT
+    last_login_at TEXT,
+    recovery_key_hash TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_accounts_role ON accounts (role_id);
@@ -453,6 +454,10 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE import_batches ADD COLUMN branch_hint TEXT")
     if "unmapped_columns_json" not in existing_batch_cols:
         conn.execute("ALTER TABLE import_batches ADD COLUMN unmapped_columns_json TEXT")
+
+    existing_account_cols = {row["name"] for row in conn.execute("PRAGMA table_info(accounts)").fetchall()}
+    if "recovery_key_hash" not in existing_account_cols:
+        conn.execute("ALTER TABLE accounts ADD COLUMN recovery_key_hash TEXT")
 
 
 def _backfill_user_no_norm(conn: sqlite3.Connection) -> None:

@@ -2,12 +2,15 @@ from flask import Blueprint, flash, redirect, render_template, request, session,
 
 from ..auth import (
     accounts_table_is_empty,
+    clear_recovery_key,
     create_account,
     find_account_by_username,
+    hash_password,
     load_active_account,
     login_account,
     logout_account,
     verify_password,
+    verify_recovery_key,
 )
 from ..db import get_connection
 
@@ -41,6 +44,48 @@ def login():
         flash("Incorrect username or password.", "error")
 
     return render_template("login.html", next_url=next_url)
+
+
+@bp.route("/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+    if accounts_table_is_empty():
+        return redirect(url_for("auth.setup"))
+
+    if request.method == "POST":
+        username = request.form.get("username", "")
+        recovery_key = request.form.get("recovery_key", "")
+        password = request.form.get("password", "")
+        confirm = request.form.get("confirm", "")
+
+        account = find_account_by_username(username)
+        # Same generic message whether the username doesn't exist, isn't
+        # active, has no recovery key set, or the key just doesn't match -
+        # doesn't hint to an attacker which of those is true.
+        error = "Username or recovery key is incorrect."
+        if account and account["is_active"] and verify_recovery_key(account, recovery_key):
+            error = None
+        if error is None and password != confirm:
+            error = "Passwords do not match."
+        elif error is None and len(password) < 8:
+            error = "Password must be at least 8 characters."
+
+        if error:
+            flash(error, "error")
+        else:
+            conn = get_connection()
+            try:
+                conn.execute(
+                    "UPDATE accounts SET password_hash = ? WHERE id = ?",
+                    (hash_password(password), account["id"]),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            clear_recovery_key(account["id"])
+            flash("Password reset. You can now log in with your new password.", "success")
+            return redirect(url_for("auth.login"))
+
+    return render_template("forgot_password.html")
 
 
 @bp.route("/logout", methods=["POST"])

@@ -277,7 +277,9 @@ class RouteCoverageGuardTests(unittest.TestCase):
         "auth.login",
         "auth.logout",
         "auth.setup",
+        "auth.forgot_password",
         "lookup.review",  # builds a preview only, no DB write
+        "settings.generate_recovery_key_route",  # self-service, same as setting your own password
     }
 
     def test_every_mutating_route_is_gated_or_allowlisted(self):

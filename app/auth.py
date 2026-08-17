@@ -1,10 +1,14 @@
 import functools
+import secrets
 from datetime import timedelta
 
 from flask import flash, g, jsonify, redirect, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .db import PERMISSIONS, get_connection
+
+# Unambiguous on-screen/on-paper: no 0/O or 1/I/L mixups.
+_RECOVERY_KEY_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
 
 def hash_password(password: str) -> str:
@@ -83,6 +87,51 @@ def create_account(username: str, password: str, role_id: int) -> int:
         conn.close()
 
 
+def generate_recovery_key() -> str:
+    """A one-time-use "forgot password" credential, shown to the account
+    holder exactly once when (re)generated - only its hash is ever stored,
+    same as a password. Formatted in dashed groups of 4 purely for
+    readability when copying it down; the dashes carry no meaning and
+    aren't required when it's typed back in (see verify_recovery_key)."""
+    raw = "".join(secrets.choice(_RECOVERY_KEY_ALPHABET) for _ in range(16))
+    return "-".join(raw[i : i + 4] for i in range(0, 16, 4))
+
+
+def set_recovery_key(account_id: int, key: str) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE accounts SET recovery_key_hash = ? WHERE id = ?",
+            (hash_password(key), account_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def clear_recovery_key(account_id: int) -> None:
+    """Recovery keys are single-use: a successful /forgot-password reset
+    clears it immediately, so a leaked-and-since-used key can't reset the
+    password a second time. The account holder generates a fresh one from
+    Settings after logging back in."""
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE accounts SET recovery_key_hash = NULL WHERE id = ?", (account_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def verify_recovery_key(account, key: str) -> bool:
+    key_hash = account["recovery_key_hash"] if account else None
+    if not key_hash or not key:
+        return False
+    normalized = key.strip().upper().replace(" ", "")
+    if "-" not in normalized and len(normalized) == 16:
+        normalized = "-".join(normalized[i : i + 4] for i in range(0, 16, 4))
+    return check_password_hash(key_hash, normalized)
+
+
 def would_orphan_manage_users(exclude_account_id: int | None = None, exclude_role_id: int | None = None) -> bool:
     """True if, excluding the given account or role from consideration, zero
     active accounts would still hold manage_users. Checked before
@@ -159,7 +208,7 @@ def require_permission(permission: str):
 
 # Endpoints reachable with no session at all - the login/setup flow itself,
 # and static assets (CSS/JS/favicon, needed to even render the login page).
-_EXEMPT_ENDPOINTS = {"auth.login", "auth.logout", "auth.setup", "static"}
+_EXEMPT_ENDPOINTS = {"auth.login", "auth.logout", "auth.setup", "auth.forgot_password", "static"}
 
 
 def register_auth(app) -> None:
