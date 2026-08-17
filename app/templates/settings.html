@@ -375,11 +375,19 @@
   <h2>Data Storage Location</h2>
   <p class="muted">The database and every generated hand-over form are stored here, independent of where this program itself is installed:</p>
   <p><code>{{ data_dir }}</code></p>
+  {% if data_dir_status and data_dir_status.is_fallback %}
+  <div class="flash flash-error">
+    The configured location <code>{{ data_dir_status.configured_path }}</code> couldn't be reached
+    ({{ data_dir_status.error }}), so the app fell back to the default folder above for this
+    session. Reconnect the drive/share and restart to use it again, or click "Reset to Default"
+    below to stop trying it and use this default folder going forward.
+  </div>
+  {% endif %}
   <form method="post" action="{{ url_for('settings.open_data_folder') }}" style="display:inline-block; margin-right:0.5rem;">
     <button type="submit" class="secondary">Open Data Folder</button>
   </form>
-  {% if data_dir != default_data_dir %}
-  <form method="post" action="{{ url_for('settings.reset_data_location') }}" style="display:inline-block;" onsubmit="return confirm('Reset to the default location? Files already in {{ data_dir }} stay there - you will need to move them back manually if you want to keep using them.');">
+  {% if data_dir != default_data_dir or (data_dir_status and data_dir_status.is_fallback) %}
+  <form method="post" action="{{ url_for('settings.reset_data_location') }}" style="display:inline-block;" onsubmit="return confirm('Reset to the default location? Files already in {{ data_dir_status.configured_path or data_dir }} stay there - you will need to move them back manually if you want to keep using them.');">
     <button type="submit" class="secondary">Reset to Default</button>
   </form>
   {% endif %}

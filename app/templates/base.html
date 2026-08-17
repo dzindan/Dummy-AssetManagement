@@ -50,6 +50,14 @@
   </header>
 
   <main class="content">
+    {% if data_dir_status and data_dir_status.is_fallback %}
+    <div class="flash flash-error">
+      Can't reach the configured data folder (<code>{{ data_dir_status.configured_path }}</code>) -
+      using the default location for now, so nothing entered here is being saved to the usual
+      place. Reconnect the drive/network share, or go to
+      <a href="{{ url_for('settings.index') }}">Settings &gt; Data Storage Location</a> to reset it.
+    </div>
+    {% endif %}
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
         <div class="flash-stack">
