@@ -73,6 +73,11 @@
 
   <footer class="app-footer">Build {{ app_version }}</footer>
 
+  <div class="scroll-fabs">
+    <button type="button" class="scroll-fab" data-scroll-to="top" title="Scroll to top" aria-label="Scroll to top">&#8593;</button>
+    <button type="button" class="scroll-fab" data-scroll-to="bottom" title="Scroll to bottom" aria-label="Scroll to bottom">&#8595;</button>
+  </div>
+
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

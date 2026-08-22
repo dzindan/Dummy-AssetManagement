@@ -181,13 +181,19 @@ def search_assets(conn, filters: dict, page: int = 1, per_page: int | None = Non
         where.append(f"UPPER(bk.status) IN ({','.join('?' * len(status_filters))})")
         params.extend([s.strip().upper() for s in status_filters])
 
+    period_filters = filters.get("period") or []
+    if period_filters:
+        where.append(f"ib.period IN ({','.join('?' * len(period_filters))})")
+        params.extend(period_filters)
+
     if filters.get("q"):
         like = f"%{filters['q'].strip().upper()}%"
         where.append(
             "(UPPER(bk.serial_tag) LIKE ? OR UPPER(bk.model_device) LIKE ? OR "
-            "UPPER(bk.full_name) LIKE ? OR UPPER(bk.user_id_raw) LIKE ? OR UPPER(bk.branch_dept) LIKE ?)"
+            "UPPER(bk.full_name) LIKE ? OR UPPER(bk.user_id_raw) LIKE ? OR UPPER(bk.branch_dept) LIKE ? OR "
+            "UPPER(bk.remark) LIKE ? OR UPPER(bk.position) LIKE ?)"
         )
-        params.extend([like, like, like, like, like])
+        params.extend([like, like, like, like, like, like, like])
 
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     from_sql = f"""

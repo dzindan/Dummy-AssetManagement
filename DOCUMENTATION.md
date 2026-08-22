@@ -123,11 +123,25 @@ computers on the same office network.
     account on an empty database. Three built-in roles (Viewer/Editor/
     Admin) are seeded automatically, and an Admin can create additional
     **custom roles** with any combination of permissions. Any account can
-    self-service a forgotten password via a one-time **recovery key**
-    (Settings → My Account → Generate Recovery Key, shown once; "Forgot
-    password?" on the login page consumes it) rather than needing another
+    self-service a forgotten password via a **security question** (Settings
+    → My Account → pick one of 5 fixed questions and set an answer; "Forgot
+    password?" on the login page asks it back) rather than needing another
     Admin to reset it. See §8 for what this login system does and doesn't
     cover.
+19. **Activity Log** (Settings → Activity Log): a general-purpose audit
+    trail (`activity_log` table, `db.log_activity()`) for every hand-edit
+    that doesn't already have its own dedicated log page - Manage Assets
+    edits (field-level old/new value, only for fields that actually
+    changed) and deletes, Settings/Mapping changes (branch aliases, device/
+    status/model standard names and aliases, data storage location), and
+    Users & Roles changes (accounts, roles, permissions). Records who did
+    it (`performed_by`, the logged-in account's username) and when.
+    Filterable by category, exportable to Excel. Imports keep their own
+    Import History (§ import_log, now also recording `imported_by`) and
+    Network Check keeps its own log - this doesn't duplicate either. Hand-
+    over forms record who generated them in `handover_records.created_by`
+    directly rather than through this table, since History already is
+    their dedicated log.
 
 ---
 
@@ -786,13 +800,15 @@ concurrency.
   - **Password reset without an existing session** works two ways: another
     Admin can reset anyone's password from Settings → Users & Roles (needs
     `manage_users`), or the account holder can self-service it with a
-    one-time **recovery key** (`app/routes/auth.py`'s `/forgot-password`,
-    `app/routes/settings.py`'s `generate_recovery_key_route`) - a 16-character
-    random key generated from Settings → My Account, shown exactly once
-    (only its hash is stored, like a password), and single-use (a
-    successful reset clears it). An account with neither an active Admin
-    nor a saved recovery key has no self-service recovery path short of
-    editing `accounts.password_hash` directly in `app.db`.
+    **security question** (`app/routes/auth.py`'s `/forgot-password`,
+    `app/routes/settings.py`'s `set_security_question_route`) - one of 5
+    fixed, deliberately lighthearted questions (`auth.SECURITY_QUESTIONS`),
+    chosen and answered from Settings → My Account; only the answer's hash
+    is stored, like a password. Unlike the one-time recovery key this
+    replaced, the question/answer is reusable and isn't cleared after a
+    successful reset. An account with neither an active Admin nor a saved
+    security question has no self-service recovery path short of editing
+    `accounts.password_hash` directly in `app.db`.
 - **SQLite concurrency.** Reads are unaffected by a concurrent writer (WAL
   mode), but two people importing large files (like the Total Asset
   baseline) at the exact same moment could see a "database is locked" error

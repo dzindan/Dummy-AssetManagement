@@ -1,7 +1,9 @@
+from urllib.parse import urlencode
+
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
-from ..auth import require_permission
-from ..db import get_connection, prune_stale_unmapped
+from ..auth import current_username, require_permission
+from ..db import get_connection, log_activity, prune_stale_unmapped
 from ..exports import ASSET_ROW_COLUMNS, build_asset_rows_workbook, build_duplicates_workbook, send_workbook
 from ..queries import (
     UNRESOLVED_BRANCH_FILTER,
@@ -13,6 +15,39 @@ from ..queries import (
 )
 
 bp = Blueprint("asset_edit", __name__, url_prefix="/assets")
+
+# Manage Assets used to load every matching row at once (see search_assets'
+# docstring) - fine at a few hundred rows, but painfully slow to render once
+# a deployment's asset_items grew into the thousands. Paginated server-side
+# now; the per-column header filter (app.js) still runs client-side, just
+# scoped to whatever page is currently on screen.
+PER_PAGE_OPTIONS = [100, 200, 300, 400, 500, 1000, 2000, 3000, 4000, 5000]
+DEFAULT_PER_PAGE = 200
+
+
+def _parse_per_page() -> int:
+    try:
+        value = int(request.args.get("per_page", DEFAULT_PER_PAGE))
+    except (TypeError, ValueError):
+        return DEFAULT_PER_PAGE
+    return value if value in PER_PAGE_OPTIONS else DEFAULT_PER_PAGE
+
+
+def _parse_page() -> int:
+    try:
+        value = int(request.args.get("page", 1))
+    except (TypeError, ValueError):
+        return 1
+    return max(value, 1)
+
+
+def _pagination_qs() -> str:
+    """Current query string (filters + per_page) with `page` stripped out -
+    Prev/Next links append their own `&page=N` onto this rather than onto
+    the raw request query string, so paging never accidentally carries a
+    stale page number along for the ride."""
+    pairs = [(k, v) for k in request.args if k != "page" for v in request.args.getlist(k)]
+    return urlencode(pairs)
 
 # Free-text fields a user can correct by hand (e.g. to resolve a duplicate
 # serial flagged by the cleaning report). branch_no/batch_id/asset_key are
@@ -43,6 +78,7 @@ def _filters_from_args() -> dict:
         "branch_no": [v for v in request.args.getlist("branch_no") if v],
         "device_name": [v for v in request.args.getlist("device_name") if v],
         "status": [v for v in request.args.getlist("status") if v],
+        "period": [v for v in request.args.getlist("period") if v],
         "q": request.args.get("q", "").strip(),
     }
 
@@ -50,13 +86,19 @@ def _filters_from_args() -> dict:
 @bp.route("/")
 def index():
     filters = _filters_from_args()
+    per_page = _parse_per_page()
+    page = _parse_page()
 
     conn = get_connection()
     try:
-        # Every matching row at once, unpaginated - the page adds a
-        # client-side per-column header filter (see app.js) for further
-        # narrowing without a round trip.
-        rows, total = search_assets(conn, filters)
+        rows, total = search_assets(conn, filters, page=page, per_page=per_page)
+        total_pages = (total + per_page - 1) // per_page if total else 1
+        if page > total_pages:
+            # Stale page number (filters changed, or rows were deleted out
+            # from under it) - fall back to the last real page instead of
+            # rendering an empty table.
+            page = total_pages
+            rows, total = search_assets(conn, filters, page=page, per_page=per_page)
         branches = get_branches_with_current_assets(conn)
         show_unresolved_option = has_unresolved_current_assets(conn)
         device_names = [
@@ -78,6 +120,12 @@ def index():
             r["name"] for r in conn.execute("SELECT name FROM status_standard_names").fetchall()
         }
         status_options = sorted(current_statuses | standard_statuses)
+        period_options = [
+            r["period"]
+            for r in conn.execute(
+                "SELECT DISTINCT period FROM import_batches WHERE period != '' ORDER BY period DESC"
+            ).fetchall()
+        ]
         # Only worth showing the "filtered to this one branch" convenience
         # message/link (see template) when exactly one branch is selected -
         # with several selected at once there's no single branch to link to.
@@ -102,7 +150,13 @@ def index():
         unresolved_value=UNRESOLVED_BRANCH_FILTER,
         device_names=device_names,
         status_options=status_options,
+        period_options=period_options,
         selected_branch=selected_branch,
+        page=page,
+        per_page=per_page,
+        per_page_options=PER_PAGE_OPTIONS,
+        total_pages=total_pages,
+        pagination_qs=_pagination_qs(),
     )
 
 
@@ -119,7 +173,11 @@ def export():
     finally:
         conn.close()
 
-    columns = [("Branch", lambda r: r["branch_eng_name"] or r["branch_dept"])] + list(ASSET_ROW_COLUMNS)
+    columns = (
+        [("Branch", lambda r: r["branch_eng_name"] or r["branch_dept"])]
+        + list(ASSET_ROW_COLUMNS)
+        + [("Period", lambda r: r["period"])]
+    )
     wb = build_asset_rows_workbook(rows, sheet_title="Manage Assets", columns=columns)
     return send_workbook(wb, "manage_assets.xlsx")
 
@@ -160,6 +218,13 @@ def bulk_delete():
         conn = get_connection()
         try:
             placeholders = ",".join("?" * len(ids))
+            rows = conn.execute(
+                f"SELECT id, device_name, serial_tag FROM asset_items WHERE id IN ({placeholders})", ids
+            ).fetchall()
+            performed_by = current_username()
+            for row in rows:
+                target = f"Asset #{row['id']} ({row['device_name']} {row['serial_tag']})".strip()
+                log_activity(conn, "asset", "Deleted asset", performed_by=performed_by, target=target)
             conn.execute(f"DELETE FROM asset_items WHERE id IN ({placeholders})", ids)
             prune_stale_unmapped(conn)
             conn.commit()
@@ -175,10 +240,14 @@ def bulk_delete():
 def delete(asset_id):
     conn = get_connection()
     try:
-        row = conn.execute("SELECT id FROM asset_items WHERE id = ?", (asset_id,)).fetchone()
+        row = conn.execute(
+            "SELECT id, device_name, serial_tag FROM asset_items WHERE id = ?", (asset_id,)
+        ).fetchone()
         if not row:
             flash("Asset not found.", "error")
         else:
+            target = f"Asset #{asset_id} ({row['device_name']} {row['serial_tag']})".strip()
+            log_activity(conn, "asset", "Deleted asset", performed_by=current_username(), target=target)
             conn.execute("DELETE FROM asset_items WHERE id = ?", (asset_id,))
             prune_stale_unmapped(conn)
             conn.commit()
@@ -195,7 +264,7 @@ def edit(asset_id):
     conn = get_connection()
     try:
         if request.method == "POST":
-            asset = conn.execute("SELECT id FROM asset_items WHERE id = ?", (asset_id,)).fetchone()
+            asset = conn.execute("SELECT * FROM asset_items WHERE id = ?", (asset_id,)).fetchone()
             if not asset:
                 flash("Asset not found.", "error")
                 return redirect(url_for("dashboard.index"))
@@ -210,6 +279,14 @@ def edit(asset_id):
                 f"UPDATE asset_items SET {set_clause} WHERE id = ?",
                 [*values.values(), asset_id],
             )
+            performed_by = current_username()
+            for field_name, new_value in values.items():
+                old_value = asset[field_name] or ""
+                if old_value != new_value:
+                    log_activity(
+                        conn, "asset", "Edited asset", performed_by=performed_by,
+                        target=f"Asset #{asset_id}", field=field_name, old_value=old_value, new_value=new_value,
+                    )
             prune_stale_unmapped(conn)
             conn.commit()
             flash(f"Asset #{asset_id} updated.", "success")

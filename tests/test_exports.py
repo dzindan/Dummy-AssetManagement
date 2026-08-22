@@ -143,7 +143,7 @@ class ExportRouteSmokeTests(unittest.TestCase):
         resp = self.client.get("/import/history/export")
         self._assert_valid_xlsx(
             resp,
-            expected_header=("Imported At", "Kind", "Source File", "Period", "Rows Processed", "Result"),
+            expected_header=("Imported At", "Imported By", "Kind", "Source File", "Period", "Rows Processed", "Result"),
             expected_rows=1,
         )
 
@@ -159,7 +159,7 @@ class ExportRouteSmokeTests(unittest.TestCase):
         resp = self.client.get("/history/export")
         self._assert_valid_xlsx(
             resp,
-            expected_header=("Hand-Over Date", "Logged At", "User ID", "Branch", "Type", "Reason", "Receiving Party"),
+            expected_header=("Hand-Over Date", "Logged At", "Created By", "User ID", "Branch", "Type", "Reason", "Receiving Party"),
             expected_rows=1,
         )
 

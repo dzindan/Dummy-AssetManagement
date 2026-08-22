@@ -7,17 +7,18 @@
   <a href="{{ url_for('asset_edit.duplicates') }}">Check Duplicates</a>
 </p>
 
-<div class="panel">
+<div class="panel filter-bar">
   <form method="get" action="{{ url_for('asset_edit.index') }}">
     <div class="field-row">
       <div>
-        <label>Branch</label>
+        <label title="Only branches with at least one current asset are listed.">Branch</label>
         <div class="multiselect">
           <button type="button" class="multiselect-toggle">
             <span>{% if filters.branch_no %}{{ filters.branch_no | length }} selected{% else %}All branches{% endif %}</span>
             <span class="nav-caret">&#9662;</span>
           </button>
           <div class="multiselect-panel">
+            <input type="text" class="multiselect-search" placeholder="Type to filter...">
             {% for b in branches %}
             <label><input type="checkbox" name="branch_no" value="{{ b['branch_no'] }}" {{ 'checked' if b['branch_no'] in filters.branch_no else '' }}> {{ b['eng_name'] }}</label>
             {% endfor %}
@@ -26,7 +27,6 @@
             {% endif %}
           </div>
         </div>
-        <p class="muted" style="margin-top:0.3rem;">Only branches with at least one current asset are listed.</p>
       </div>
       <div>
         <label>Device</label>
@@ -36,6 +36,7 @@
             <span class="nav-caret">&#9662;</span>
           </button>
           <div class="multiselect-panel">
+            <input type="text" class="multiselect-search" placeholder="Type to filter...">
             {% for d in device_names %}
             <label><input type="checkbox" name="device_name" value="{{ d }}" {{ 'checked' if d in filters.device_name else '' }}> {{ d }}</label>
             {% endfor %}
@@ -50,6 +51,7 @@
             <span class="nav-caret">&#9662;</span>
           </button>
           <div class="multiselect-panel">
+            <input type="text" class="multiselect-search" placeholder="Type to filter...">
             {% for s in status_options %}
             <label><input type="checkbox" name="status" value="{{ s }}" {{ 'checked' if s in filters.status else '' }}> {{ s }}</label>
             {% endfor %}
@@ -57,13 +59,38 @@
         </div>
       </div>
       <div>
-        <label for="q">Search (serial, model, name, user ID, dept)</label>
+        <label>Period</label>
+        <div class="multiselect">
+          <button type="button" class="multiselect-toggle">
+            <span>{% if filters.period %}{{ filters.period | length }} selected{% else %}All periods{% endif %}</span>
+            <span class="nav-caret">&#9662;</span>
+          </button>
+          <div class="multiselect-panel">
+            <input type="text" class="multiselect-search" placeholder="Type to filter...">
+            {% for p in period_options %}
+            <label><input type="checkbox" name="period" value="{{ p }}" {{ 'checked' if p in filters.period else '' }}> {{ p }}</label>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      <div class="search-field">
+        <label for="q" title="Matches serial, model, full name, user ID, branch/dept, position, or remark.">Search</label>
         <input type="text" id="q" name="q" value="{{ filters.q }}" placeholder="e.g. NGO LE GIANG">
       </div>
-      <div style="flex: 0 0 auto; align-self: flex-end;"><button type="submit">Filter</button></div>
-      {% if filters.branch_no or filters.device_name or filters.status or filters.q %}
-      <div style="flex: 0 0 auto; align-self: flex-end;"><a class="btn secondary" href="{{ url_for('asset_edit.index') }}">Clear</a></div>
-      {% endif %}
+      <div>
+        <label for="per_page">Rows/page</label>
+        <select id="per_page" name="per_page">
+          {% for n in per_page_options %}
+          <option value="{{ n }}" {{ 'selected' if per_page == n else '' }}>{{ n }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="filter-actions">
+        <button type="submit">Filter</button>
+        {% if filters.branch_no or filters.device_name or filters.status or filters.period or filters.q %}
+        <a class="btn secondary" href="{{ url_for('asset_edit.index') }}">Clear</a>
+        {% endif %}
+      </div>
     </div>
   </form>
 </div>
@@ -80,7 +107,11 @@
 {% endif %}
 
 <div class="panel">
-  <p class="muted"><span id="asset-row-count">{{ total }}</span> asset(s) match these filters.</p>
+  <p class="muted">
+    <strong>{{ total }}</strong> asset(s) match these filters total &middot;
+    page {{ page }} of {{ total_pages }}
+    ({{ rows | length }} row(s) on this page).
+  </p>
   {% if rows %}
   <div class="actions" style="margin-top:0;">
     <a class="btn secondary" href="{{ url_for('asset_edit.export') }}?{{ request.query_string.decode() }}">Export to Excel</a>
@@ -90,25 +121,23 @@
       data-bulk-delete-next="{{ request.full_path }}">Delete Selected</button>
   </div>
   {% endif %}
+  {% if total_pages > 1 %}
+  <div class="pagination">
+    {% if page > 1 %}
+    <a class="btn secondary" href="{{ url_for('asset_edit.index') }}?{{ pagination_qs }}&page={{ page - 1 }}">&laquo; Prev</a>
+    {% endif %}
+    <span class="muted">Page {{ page }} / {{ total_pages }}</span>
+    {% if page < total_pages %}
+    <a class="btn secondary" href="{{ url_for('asset_edit.index') }}?{{ pagination_qs }}&page={{ page + 1 }}">Next &raquo;</a>
+    {% endif %}
+  </div>
+  {% endif %}
   <div class="table-scroll">
-  <table data-header-filter-table>
+  <table data-resizable-table="manage-assets">
     <thead>
       <tr>
         <th><input type="checkbox" data-select-all="asset-row-checkbox"></th>
-        <th>Branch</th><th>Device</th><th>Model</th><th>Serial/Tag</th><th>Status</th><th>Full Name</th><th>User ID</th><th>Handover Date</th><th>Period</th><th></th>
-      </tr>
-      <tr class="header-filter-row">
-        <th></th>
-        <th><select class="header-filter"><option value="">All</option></select></th>
-        <th><select class="header-filter"><option value="">All</option></select></th>
-        <th><select class="header-filter"><option value="">All</option></select></th>
-        <th><select class="header-filter"><option value="">All</option></select></th>
-        <th><select class="header-filter"><option value="">All</option></select></th>
-        <th><select class="header-filter"><option value="">All</option></select></th>
-        <th><select class="header-filter"><option value="">All</option></select></th>
-        <th><select class="header-filter"><option value="">All</option></select></th>
-        <th><select class="header-filter"><option value="">All</option></select></th>
-        <th></th>
+        <th>Branch</th><th>Device</th><th>Model</th><th>Serial/Tag</th><th>Status</th><th>Full Name</th><th>User ID</th><th>Position</th><th>Remark</th><th>Handover Date</th><th>Period</th><th></th>
       </tr>
     </thead>
     <tbody>
@@ -122,15 +151,28 @@
         <td>{{ a['status'] }}</td>
         <td>{{ a['full_name'] }}</td>
         <td>{{ a['user_id_raw'] }}</td>
+        <td>{{ a['position'] }}</td>
+        <td>{{ a['remark'] }}</td>
         <td>{{ a['handover_date'] }}</td>
         <td>{{ a['period'] }}</td>
         <td><a class="btn secondary" href="{{ url_for('asset_edit.edit', asset_id=a['id'], next=request.full_path) }}">Edit</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="11" class="muted">No assets match these filters.</td></tr>
+      <tr><td colspan="13" class="muted">No assets match these filters.</td></tr>
       {% endfor %}
     </tbody>
   </table>
   </div>
+  {% if total_pages > 1 %}
+  <div class="pagination">
+    {% if page > 1 %}
+    <a class="btn secondary" href="{{ url_for('asset_edit.index') }}?{{ pagination_qs }}&page={{ page - 1 }}">&laquo; Prev</a>
+    {% endif %}
+    <span class="muted">Page {{ page }} / {{ total_pages }}</span>
+    {% if page < total_pages %}
+    <a class="btn secondary" href="{{ url_for('asset_edit.index') }}?{{ pagination_qs }}&page={{ page + 1 }}">Next &raquo;</a>
+    {% endif %}
+  </div>
+  {% endif %}
 </div>
 {% endblock %}

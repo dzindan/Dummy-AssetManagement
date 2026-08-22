@@ -5,8 +5,24 @@ import time
 
 from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 
-from ..auth import current_account, generate_recovery_key, require_permission, set_recovery_key
-from ..db import get_connection, get_setting, init_db, prune_stale_unmapped, set_setting
+from ..auth import (
+    SECURITY_QUESTIONS,
+    SECURITY_QUESTIONS_BY_KEY,
+    current_account,
+    current_username,
+    require_permission,
+    set_security_question,
+)
+from ..db import (
+    get_connection,
+    get_setting,
+    get_setting_on,
+    init_db,
+    log_activity,
+    prune_stale_unmapped,
+    set_setting_on,
+)
+from ..exports import build_workbook, send_workbook
 from ..importer import (
     normalize_branch_text,
     record_unmapped_device,
@@ -17,7 +33,6 @@ from ..importer import (
 from ..paths import get_app_data_dir, get_default_app_data_dir, set_app_data_dir
 
 bp = Blueprint("settings", __name__, url_prefix="/settings")
-
 
 @bp.route("/")
 def index():
@@ -74,19 +89,21 @@ def index():
         ).fetchall()
 
         account = current_account()
-        has_recovery_key = False
+        current_question_key = None
         if account:
             row = conn.execute(
-                "SELECT recovery_key_hash FROM accounts WHERE id = ?", (account["id"],)
+                "SELECT security_question_key FROM accounts WHERE id = ?", (account["id"],)
             ).fetchone()
-            has_recovery_key = bool(row and row["recovery_key_hash"])
+            current_question_key = row["security_question_key"] if row else None
     finally:
         conn.close()
 
     return render_template(
         "settings.html",
         active_page="settings",
-        has_recovery_key=has_recovery_key,
+        security_questions=SECURITY_QUESTIONS,
+        current_question_key=current_question_key,
+        current_question_text=SECURITY_QUESTIONS_BY_KEY.get(current_question_key),
         branch_aliases=branch_aliases,
         branches=branches,
         standard_names=standard_names,
@@ -106,33 +123,58 @@ def index():
         data_dir=get_app_data_dir(),
         default_data_dir=get_default_app_data_dir(),
         lan_url=current_app.config.get("LAN_URL", ""),
+        reset_imported_data_options=RESET_IMPORTED_DATA_OPTIONS,
     )
 
 
-@bp.route("/account/recovery-key/generate", methods=["POST"])
-def generate_recovery_key_route():
+@bp.route("/account/security-question", methods=["POST"])
+def set_security_question_route():
     """No @require_permission gate - any logged-in account (any role) sets
-    up its own recovery key, same as it would set its own password. Shown
-    exactly once, in the flash message below - only its hash is stored, so
-    this is the only chance to copy it down."""
+    up its own security question, same as it would set its own password."""
     account = current_account()
-    key = generate_recovery_key()
-    set_recovery_key(account["id"], key)
-    flash(
-        f"New recovery key: {key} — save it now, it will not be shown again. "
-        "Use it on the \"Forgot password?\" link if you're ever locked out.",
-        "success",
-    )
+    question_key = request.form.get("question_key", "")
+    answer = request.form.get("answer", "").strip()
+
+    if question_key not in SECURITY_QUESTIONS_BY_KEY:
+        flash("Pick one of the questions from the list.", "error")
+    elif not answer:
+        flash("Enter an answer to your chosen question.", "error")
+    else:
+        set_security_question(account["id"], question_key, answer)
+        flash(
+            "Security question set. Use \"Forgot password?\" on the login page if you're ever locked out - "
+            "you'll be asked this same question.",
+            "success",
+        )
     return redirect(url_for("settings.index") + "#my-account")
+
+
+GENERAL_SETTINGS_FIELDS = [
+    ("ict_rep_name", True),
+    ("ict_rep_id", True),
+    ("asset_reports_folder", False),
+    ("id_files_folder", False),
+]
 
 
 @bp.route("/general", methods=["POST"])
 @require_permission("manage_settings")
 def save_general():
-    set_setting("ict_rep_name", request.form.get("ict_rep_name", "").strip().upper())
-    set_setting("ict_rep_id", request.form.get("ict_rep_id", "").strip().upper())
-    set_setting("asset_reports_folder", request.form.get("asset_reports_folder", "").strip())
-    set_setting("id_files_folder", request.form.get("id_files_folder", "").strip())
+    performed_by = current_username()
+    conn = get_connection()
+    try:
+        for key, uppercase in GENERAL_SETTINGS_FIELDS:
+            new_value = request.form.get(key, "").strip()
+            if uppercase:
+                new_value = new_value.upper()
+            old_value = get_setting_on(conn, key, "")
+            if new_value != old_value:
+                log_activity(conn, "settings", "Updated setting", performed_by=performed_by,
+                             target=key, field=key, old_value=old_value, new_value=new_value)
+            set_setting_on(conn, key, new_value)
+        conn.commit()
+    finally:
+        conn.close()
     flash("Settings saved.", "success")
     return redirect(url_for("settings.index"))
 
@@ -153,6 +195,8 @@ def add_branch_alias():
             (normalize_branch_text(alias_text), branch_no),
         )
         fixed_count = reresolve_unresolved_assets(conn, alias_text, branch_no)
+        log_activity(conn, "mapping", "Added branch alias", performed_by=current_username(),
+                     target=alias_text, new_value=branch_no)
         conn.commit()
     finally:
         conn.close()
@@ -170,6 +214,7 @@ def delete_branch_alias():
     conn = get_connection()
     try:
         conn.execute("DELETE FROM branch_aliases WHERE alias = ?", (alias,))
+        log_activity(conn, "mapping", "Deleted branch alias", performed_by=current_username(), target=alias)
         conn.commit()
     finally:
         conn.close()
@@ -200,6 +245,8 @@ def map_branch_hint():
         )
         conn.execute("DELETE FROM branch_unresolved WHERE raw_hint = ?", (raw_hint,))
         fixed_count = reresolve_unresolved_assets(conn, raw_hint, branch_no)
+        log_activity(conn, "mapping", "Mapped branch hint", performed_by=current_username(),
+                     target=raw_hint, new_value=branch_no)
         conn.commit()
     finally:
         conn.close()
@@ -220,6 +267,7 @@ def dismiss_branch_hint():
     conn = get_connection()
     try:
         conn.execute("DELETE FROM branch_unresolved WHERE raw_hint = ?", (raw_hint,))
+        log_activity(conn, "mapping", "Dismissed branch hint", performed_by=current_username(), target=raw_hint)
         conn.commit()
     finally:
         conn.close()
@@ -227,7 +275,9 @@ def dismiss_branch_hint():
     return redirect(url_for("settings.index"))
 
 
-def _rename_or_merge_standard(standard_table: str, alias_table: str, old_name: str, new_name: str) -> str:
+def _rename_or_merge_standard(
+    standard_table: str, alias_table: str, old_name: str, new_name: str, kind: str,
+) -> str:
     """Rename a standard name to `new_name` - shared by the Device/Status/
     Model "Rename" buttons, which all hit the exact same `name TEXT PRIMARY
     KEY` shape. A plain UPDATE crashes with a UNIQUE constraint error the
@@ -254,10 +304,14 @@ def _rename_or_merge_standard(standard_table: str, alias_table: str, old_name: s
                 (old_name, new_name),
             )
             conn.execute(f"DELETE FROM {standard_table} WHERE name = ?", (old_name,))
+            log_activity(conn, "mapping", f"Merged standard {kind}", performed_by=current_username(),
+                         old_value=old_name, new_value=new_name)
             conn.commit()
             return f'"{new_name}" already existed - merged "{old_name}" into it instead of renaming.'
         conn.execute(f"UPDATE {standard_table} SET name = ? WHERE name = ?", (new_name, old_name))
         conn.execute(f"UPDATE {alias_table} SET canonical_name = ? WHERE canonical_name = ?", (new_name, old_name))
+        log_activity(conn, "mapping", f"Renamed standard {kind}", performed_by=current_username(),
+                     old_value=old_name, new_value=new_name)
         conn.commit()
         return f'Renamed "{old_name}" to "{new_name}".'
     finally:
@@ -283,6 +337,7 @@ def add_standard_name():
         # If this exact name was sitting in the unmapped pool, it's now a
         # recognized standard name on its own - no separate alias needed.
         conn.execute("DELETE FROM device_unmapped WHERE raw_name = ?", (name,))
+        log_activity(conn, "mapping", "Added standard device", performed_by=current_username(), target=name)
         conn.commit()
     finally:
         conn.close()
@@ -299,7 +354,9 @@ def rename_standard_name():
         flash("A new name is required.", "error")
         return redirect(url_for("settings.index"))
 
-    message = _rename_or_merge_standard("device_standard_names", "device_aliases", old_name, new_name)
+    message = _rename_or_merge_standard(
+        "device_standard_names", "device_aliases", old_name, new_name, "device"
+    )
     flash(message, "success")
     return redirect(url_for("settings.index"))
 
@@ -338,6 +395,7 @@ def delete_standard_name():
         # zero real assets. prune_stale_unmapped() removes it right back out
         # if nothing in asset_items actually carries that value.
         prune_stale_unmapped(conn)
+        log_activity(conn, "mapping", "Deleted standard device", performed_by=current_username(), target=name)
         conn.commit()
     finally:
         conn.close()
@@ -363,6 +421,7 @@ def add_standard_status():
             (name,),
         )
         conn.execute("DELETE FROM status_unmapped WHERE raw_status = ?", (name,))
+        log_activity(conn, "mapping", "Added standard status", performed_by=current_username(), target=name)
         conn.commit()
     finally:
         conn.close()
@@ -379,7 +438,9 @@ def rename_standard_status():
         flash("A new name is required.", "error")
         return redirect(url_for("settings.index"))
 
-    message = _rename_or_merge_standard("status_standard_names", "status_aliases", old_name, new_name)
+    message = _rename_or_merge_standard(
+        "status_standard_names", "status_aliases", old_name, new_name, "status"
+    )
     flash(message, "success")
     return redirect(url_for("settings.index"))
 
@@ -404,6 +465,7 @@ def delete_standard_status():
             record_unmapped_status(conn, name)
         # See delete_standard_name()'s comment on prune_stale_unmapped().
         prune_stale_unmapped(conn)
+        log_activity(conn, "mapping", "Deleted standard status", performed_by=current_username(), target=name)
         conn.commit()
     finally:
         conn.close()
@@ -442,6 +504,8 @@ def map_status_alias():
             "WHERE status = UPPER(status_raw) AND UPPER(status_raw) = ?",
             (canonical_name, alias),
         )
+        log_activity(conn, "mapping", "Mapped status alias", performed_by=current_username(),
+                     target=alias, new_value=canonical_name)
         conn.commit()
     finally:
         conn.close()
@@ -478,6 +542,7 @@ def unmap_status_alias():
         # "move back to unmapped" - drop it right back out instead of
         # leaving a phantom entry Manage Assets can never show.
         prune_stale_unmapped(conn)
+        log_activity(conn, "mapping", "Unmapped status alias", performed_by=current_username(), target=alias)
         conn.commit()
     finally:
         conn.close()
@@ -503,6 +568,7 @@ def add_standard_model():
             (name,),
         )
         conn.execute("DELETE FROM model_unmapped WHERE raw_model = ?", (name,))
+        log_activity(conn, "mapping", "Added standard model", performed_by=current_username(), target=name)
         conn.commit()
     finally:
         conn.close()
@@ -519,7 +585,9 @@ def rename_standard_model():
         flash("A new name is required.", "error")
         return redirect(url_for("settings.index"))
 
-    message = _rename_or_merge_standard("model_standard_names", "model_aliases", old_name, new_name)
+    message = _rename_or_merge_standard(
+        "model_standard_names", "model_aliases", old_name, new_name, "model"
+    )
     flash(message, "success")
     return redirect(url_for("settings.index"))
 
@@ -544,6 +612,7 @@ def delete_standard_model():
             record_unmapped_model(conn, name)
         # See delete_standard_name()'s comment on prune_stale_unmapped().
         prune_stale_unmapped(conn)
+        log_activity(conn, "mapping", "Deleted standard model", performed_by=current_username(), target=name)
         conn.commit()
     finally:
         conn.close()
@@ -582,6 +651,8 @@ def map_model_alias():
             "WHERE model_device = UPPER(model_device_raw) AND UPPER(model_device_raw) = ?",
             (canonical_name, alias),
         )
+        log_activity(conn, "mapping", "Mapped model alias", performed_by=current_username(),
+                     target=alias, new_value=canonical_name)
         conn.commit()
     finally:
         conn.close()
@@ -610,6 +681,7 @@ def unmap_model_alias():
         record_unmapped_model(conn, alias)
         # See unmap_status_alias()'s comment on prune_stale_unmapped().
         prune_stale_unmapped(conn)
+        log_activity(conn, "mapping", "Unmapped model alias", performed_by=current_username(), target=alias)
         conn.commit()
     finally:
         conn.close()
@@ -656,6 +728,8 @@ def map_device_alias():
             "WHERE device_name = UPPER(device_name_raw) AND UPPER(device_name_raw) = ?",
             (canonical_name, alias),
         )
+        log_activity(conn, "mapping", "Mapped device alias", performed_by=current_username(),
+                     target=alias, new_value=canonical_name)
         conn.commit()
     finally:
         conn.close()
@@ -686,6 +760,7 @@ def unmap_device_alias():
         record_unmapped_device(conn, alias)
         # See unmap_status_alias()'s comment on prune_stale_unmapped().
         prune_stale_unmapped(conn)
+        log_activity(conn, "mapping", "Unmapped device alias", performed_by=current_username(), target=alias)
         conn.commit()
     finally:
         conn.close()
@@ -812,6 +887,18 @@ def change_data_location():
     # to make sure the schema/seed data exists there.
     init_db()
 
+    # Logged against the *new* location (get_connection() now resolves
+    # there, post set_app_data_dir/init_db above) rather than the old one
+    # being left behind - that's the database whose Activity Log page
+    # anyone will actually still be looking at afterward.
+    conn = get_connection()
+    try:
+        log_activity(conn, "settings", "Changed data storage location", performed_by=current_username(),
+                     old_value=old_dir, new_value=new_dir)
+        conn.commit()
+    finally:
+        conn.close()
+
     detail = f"Moved: {', '.join(moved)}." if moved else "The new folder was empty - starting fresh there."
     flash(f"Data location changed to {new_dir}. {detail}", "success")
     return redirect(url_for("settings.index"))
@@ -820,8 +907,152 @@ def change_data_location():
 @bp.route("/data-location/reset", methods=["POST"])
 @require_permission("manage_settings")
 def reset_data_location():
+    old_dir = get_app_data_dir()
     default_dir = get_default_app_data_dir()
     set_app_data_dir(default_dir)
     init_db()
+
+    conn = get_connection()
+    try:
+        log_activity(conn, "settings", "Reset data storage location to default", performed_by=current_username(),
+                     old_value=old_dir, new_value=default_dir)
+        conn.commit()
+    finally:
+        conn.close()
     flash(f"Data location reset to default: {default_dir}", "success")
     return redirect(url_for("settings.index"))
+
+
+# --- Reset Imported Data -----------------------------------------------
+# All imported data lives in the same app.db as mappings/settings/accounts/
+# handover_records, so there's no way to "start fresh" on imports alone by
+# just deleting a file - this lets an Admin clear specific imported-data
+# categories in place while leaving everything else (mappings, settings,
+# accounts/roles, hand-over records) untouched. Each checkbox key here maps
+# 1:1 to one block below in reset_imported_data().
+RESET_IMPORTED_DATA_OPTIONS = {
+    "asset_reports": "Asset Reports (asset items, import batches, diff reports, network check log)",
+    "id_data": "Branch Codes & User IDs (branches, users)",
+    "import_log": "Import History log",
+    "unmapped": "Unmapped queues (device / status / model / branch)",
+}
+
+
+@bp.route("/reset-imported-data", methods=["POST"])
+@require_permission("manage_settings")
+def reset_imported_data():
+    selected = [key for key in RESET_IMPORTED_DATA_OPTIONS if request.form.get(key)]
+    if not selected:
+        flash("Select at least one type of data to reset.", "error")
+        return redirect(url_for("settings.index"))
+
+    conn = get_connection()
+    try:
+        if "asset_reports" in selected:
+            # asset_items.batch_id references import_batches(id) - delete
+            # children before the parent or the FK check (PRAGMA
+            # foreign_keys=ON, see get_connection) rejects it.
+            conn.execute("DELETE FROM asset_items")
+            conn.execute("DELETE FROM import_batches")
+            conn.execute("DELETE FROM network_check_log")
+            for row in conn.execute("SELECT file_path FROM diff_reports").fetchall():
+                if row["file_path"] and os.path.exists(row["file_path"]):
+                    try:
+                        os.remove(row["file_path"])
+                    except OSError:
+                        pass
+            conn.execute("DELETE FROM diff_reports")
+
+        if "id_data" in selected:
+            conn.execute("DELETE FROM branches")
+            conn.execute("DELETE FROM users")
+
+        if "import_log" in selected:
+            conn.execute("DELETE FROM import_log")
+
+        if "unmapped" in selected:
+            conn.execute("DELETE FROM device_unmapped")
+            conn.execute("DELETE FROM status_unmapped")
+            conn.execute("DELETE FROM model_unmapped")
+            conn.execute("DELETE FROM branch_unresolved")
+        elif "asset_reports" in selected:
+            # asset_items rows are gone - any device/status/model unmapped
+            # entry that only existed to flag one of them is now stale.
+            # branch_unresolved isn't derived from asset_items, so it's
+            # untouched here (same as init_db()'s ordinary self-heal pass).
+            prune_stale_unmapped(conn)
+
+        log_activity(
+            conn, "settings", "Reset imported data", performed_by=current_username(),
+            new_value=", ".join(RESET_IMPORTED_DATA_OPTIONS[k] for k in selected),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    flash(
+        f"Reset: {', '.join(RESET_IMPORTED_DATA_OPTIONS[k] for k in selected)}. "
+        "Mappings, settings, accounts, and hand-over records were left untouched.",
+        "success",
+    )
+    return redirect(url_for("settings.index"))
+
+
+# --- Activity Log ------------------------------------------------------
+# General-purpose audit trail (see db.py's activity_log CREATE TABLE
+# comment) - everything that doesn't already have its own dedicated log
+# page (imports have Import History, Network Check has its own log).
+
+ACTIVITY_LOG_CATEGORIES = [
+    ("asset", "Manage Assets"),
+    ("mapping", "Settings / Mapping"),
+    ("settings", "Settings / General"),
+    ("user_admin", "Users & Roles"),
+]
+
+ACTIVITY_LOG_EXPORT_COLUMNS = [
+    ("Logged At", "logged_at"),
+    ("Performed By", lambda r: r["performed_by"] or "-"),
+    ("Category", "category"),
+    ("Action", "action"),
+    ("Target", "target"),
+    ("Field", "field"),
+    ("Old Value", "old_value"),
+    ("New Value", "new_value"),
+]
+
+
+def _activity_log_rows(category: str):
+    conn = get_connection()
+    try:
+        sql = "SELECT * FROM activity_log"
+        params = []
+        if category:
+            sql += " WHERE category = ?"
+            params.append(category)
+        sql += " ORDER BY id DESC LIMIT 500"
+        return conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+
+@bp.route("/activity-log")
+def activity_log():
+    category = request.args.get("category", "").strip()
+    rows = _activity_log_rows(category)
+    return render_template(
+        "activity_log.html",
+        active_page="settings",
+        rows=rows,
+        categories=ACTIVITY_LOG_CATEGORIES,
+        category_labels=dict(ACTIVITY_LOG_CATEGORIES),
+        filters={"category": category},
+    )
+
+
+@bp.route("/activity-log/export")
+def export_activity_log():
+    category = request.args.get("category", "").strip()
+    rows = _activity_log_rows(category)
+    wb = build_workbook("Activity Log", ACTIVITY_LOG_EXPORT_COLUMNS, rows)
+    return send_workbook(wb, "activity_log.xlsx")

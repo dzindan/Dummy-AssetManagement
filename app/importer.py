@@ -22,7 +22,7 @@ from unidecode import unidecode
 
 from .db import get_connection, log_import
 from .queries import get_branch
-from .text_utils import normalize_user_id, strip_bank_prefix
+from .text_utils import clean_ip, normalize_user_id, strip_bank_prefix
 
 
 def _now_iso() -> str:
@@ -420,6 +420,11 @@ class CleaningReport:
     unrecognized_devices: list[str] = field(default_factory=list)
     unrecognized_statuses: list[str] = field(default_factory=list)
     unrecognized_models: list[str] = field(default_factory=list)
+    # Raw IP cell text that didn't clean up into a valid address (see
+    # text_utils.clean_ip) and so got dropped to blank instead of being
+    # stored - listed here so the person importing can go fix the source
+    # file instead of the bad value silently vanishing.
+    invalid_ips: list[str] = field(default_factory=list)
     branch_hint: str = ""
     branch_matched: str = ""
     branch_no: str = ""
@@ -460,6 +465,7 @@ def _ingest_asset_rows(
     unrecognized_devices: set[str] = set()
     unrecognized_statuses: set[str] = set()
     unrecognized_models: set[str] = set()
+    invalid_ips: set[str] = set()
 
     known_device_aliases = {
         row["alias"] for row in conn.execute("SELECT alias FROM device_aliases").fetchall()
@@ -541,6 +547,11 @@ def _ingest_asset_rows(
         full_name_raw = _clean_str(get(row, "full_name"))
         full_name = user_names_by_norm.get(user_id_norm, full_name_raw.upper())
 
+        ip_raw = _clean_str(get(row, "ip"))
+        ip = clean_ip(ip_raw)
+        if ip_raw and not ip:
+            invalid_ips.add(ip_raw)
+
         cursor = conn.execute(
             """
             INSERT INTO asset_items (
@@ -568,7 +579,7 @@ def _ingest_asset_rows(
                 _clean_str(get(row, "remark")),
                 _clean_str(get(row, "position")),
                 _parse_date(get(row, "handover_date")),
-                _clean_str(get(row, "ip")),
+                ip,
                 None,
                 source_label,
             ),
@@ -587,6 +598,7 @@ def _ingest_asset_rows(
     report.unrecognized_devices = sorted(unrecognized_devices)
     report.unrecognized_statuses = sorted(unrecognized_statuses)
     report.unrecognized_models = sorted(unrecognized_models)
+    report.invalid_ips = sorted(invalid_ips)
     report.duplicate_serials = []
     for key, ids in sorted(duplicate_ids.items()):
         placeholders = ",".join("?" * len(ids))
@@ -637,14 +649,17 @@ def peek_asset_report_branch(conn, path: str) -> dict:
     return {"branch_no": branch_no, "branch_matched": branch_matched, "branch_hint": branch_hint}
 
 
-def import_asset_report(path: str, source_label: str | None = None, period: str | None = None) -> CleaningReport:
+def import_asset_report(
+    path: str, source_label: str | None = None, period: str | None = None, performed_by: str = ""
+) -> CleaningReport:
     report = CleaningReport(source_file=source_label or path)
     conn = get_connection()
     try:
         wb = openpyxl.load_workbook(path, data_only=True)
     except Exception as exc:  # noqa: BLE001 - surfaced to the user as-is
         report.error = f"Could not open file: {exc}"
-        log_import(conn, "asset_report", report.source_file, period=period or "", result=report.error)
+        log_import(conn, "asset_report", report.source_file, period=period or "", result=report.error,
+                   imported_by=performed_by)
         conn.commit()
         conn.close()
         return report
@@ -653,7 +668,8 @@ def import_asset_report(path: str, source_label: str | None = None, period: str 
     if not match:
         wb.close()
         report.error = "No equipment list sheet found (no header row matched DEVICE NAME + SERIAL columns)."
-        log_import(conn, "asset_report", report.source_file, period=period or "", result=report.error)
+        log_import(conn, "asset_report", report.source_file, period=period or "", result=report.error,
+                   imported_by=performed_by)
         conn.commit()
         conn.close()
         return report
@@ -715,13 +731,15 @@ def import_asset_report(path: str, source_label: str | None = None, period: str 
     except Exception as exc:  # noqa: BLE001 - surfaced to the user, mirrors the load_workbook guard above
         conn.rollback()
         report.error = f"Import failed while processing rows: {exc}"
-        log_import(conn, "asset_report", report.source_file, period=period or "", result=report.error)
+        log_import(conn, "asset_report", report.source_file, period=period or "", result=report.error,
+                   imported_by=performed_by)
         conn.commit()
         conn.close()
         wb.close()
         return report
 
-    log_import(conn, "asset_report", report.source_file, rows_processed=report.rows_imported, period=resolved_period)
+    log_import(conn, "asset_report", report.source_file, rows_processed=report.rows_imported, period=resolved_period,
+               imported_by=performed_by)
     conn.commit()
     conn.close()
     wb.close()
@@ -739,7 +757,7 @@ def _month_sort_key(month_text: str, year) -> tuple:
     return (year_num, month_num)
 
 
-def import_total_asset_history(path: str) -> list[CleaningReport]:
+def import_total_asset_history(path: str, performed_by: str = "") -> list[CleaningReport]:
     """Load the aggregated 'Total Asset' workbook, which packs several months of
     every branch's equipment list into one flat sheet (with Month/Years columns
     instead of one file per month). Each distinct (Month, Years) becomes its own
@@ -750,7 +768,7 @@ def import_total_asset_history(path: str) -> list[CleaningReport]:
     except Exception as exc:  # noqa: BLE001 - surfaced to the user as-is, mirrors import_asset_report's guard
         error = f"Could not open file: {exc}"
         conn = get_connection()
-        log_import(conn, "total_asset_baseline", path, result=error)
+        log_import(conn, "total_asset_baseline", path, result=error, imported_by=performed_by)
         conn.commit()
         conn.close()
         return [CleaningReport(source_file=path, error=error)]
@@ -760,7 +778,7 @@ def import_total_asset_history(path: str) -> list[CleaningReport]:
         wb.close()
         error = "No equipment list sheet found in Total Asset file."
         conn = get_connection()
-        log_import(conn, "total_asset_baseline", path, result=error)
+        log_import(conn, "total_asset_baseline", path, result=error, imported_by=performed_by)
         conn.commit()
         conn.close()
         return [CleaningReport(source_file=path, error=error)]
@@ -802,7 +820,8 @@ def import_total_asset_history(path: str) -> list[CleaningReport]:
         ).lastrowid
         report.batch_id = batch_id
         _ingest_asset_rows(conn, batch_id, rows, match.col_map, "", report.source_file, report)
-        log_import(conn, "total_asset_baseline", report.source_file, rows_processed=report.rows_imported, period=period)
+        log_import(conn, "total_asset_baseline", report.source_file, rows_processed=report.rows_imported, period=period,
+                   imported_by=performed_by)
         reports.append(report)
 
     conn.commit()
@@ -813,13 +832,13 @@ def import_total_asset_history(path: str) -> list[CleaningReport]:
 
 # --- ID master files (branches / users) -----------------------------------
 
-def import_branch_file(path: str) -> dict:
+def import_branch_file(path: str, performed_by: str = "") -> dict:
     try:
         wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     except Exception as exc:  # noqa: BLE001 - surfaced to the user as-is, mirrors import_asset_report's guard
         error = f"Could not open file: {exc}"
         conn = get_connection()
-        log_import(conn, "branch_codes", path, result=error)
+        log_import(conn, "branch_codes", path, result=error, imported_by=performed_by)
         conn.commit()
         conn.close()
         return {"error": error}
@@ -832,7 +851,7 @@ def import_branch_file(path: str) -> dict:
         wb.close()
         error = f"Unrecognized branch file layout: {header}"
         conn = get_connection()
-        log_import(conn, "branch_codes", path, result=error)
+        log_import(conn, "branch_codes", path, result=error, imported_by=performed_by)
         conn.commit()
         conn.close()
         return {"error": error}
@@ -862,20 +881,20 @@ def import_branch_file(path: str) -> dict:
             (branch_no, local_name, eng_name, now),
         )
         count += 1
-    log_import(conn, "branch_codes", path, rows_processed=count)
+    log_import(conn, "branch_codes", path, rows_processed=count, imported_by=performed_by)
     conn.commit()
     conn.close()
     wb.close()
     return {"rows": count}
 
 
-def import_user_file(path: str) -> dict:
+def import_user_file(path: str, performed_by: str = "") -> dict:
     try:
         wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     except Exception as exc:  # noqa: BLE001 - surfaced to the user as-is, mirrors import_asset_report's guard
         error = f"Could not open file: {exc}"
         conn = get_connection()
-        log_import(conn, "user_ids", path, result=error)
+        log_import(conn, "user_ids", path, result=error, imported_by=performed_by)
         conn.commit()
         conn.close()
         return {"error": error}
@@ -888,7 +907,7 @@ def import_user_file(path: str) -> dict:
         wb.close()
         error = f"Unrecognized user file layout: {header}"
         conn = get_connection()
-        log_import(conn, "user_ids", path, result=error)
+        log_import(conn, "user_ids", path, result=error, imported_by=performed_by)
         conn.commit()
         conn.close()
         return {"error": error}
@@ -922,21 +941,21 @@ def import_user_file(path: str) -> dict:
             (user_no, user_no_norm, branch_no, user_name, eng_name, banker_key, status, now),
         )
         count += 1
-    log_import(conn, "user_ids", path, rows_processed=count)
+    log_import(conn, "user_ids", path, rows_processed=count, imported_by=performed_by)
     conn.commit()
     conn.close()
     wb.close()
     return {"rows": count}
 
 
-def import_id_file(path: str) -> dict:
+def import_id_file(path: str, performed_by: str = "") -> dict:
     """Detect whether a file from IDFromAither/ is a branch list or a user list."""
     try:
         wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     except Exception as exc:  # noqa: BLE001 - surfaced to the user as-is, mirrors import_asset_report's guard
         error = f"Could not open file: {exc}"
         conn = get_connection()
-        log_import(conn, "id_file", path, result=error)
+        log_import(conn, "id_file", path, result=error, imported_by=performed_by)
         conn.commit()
         conn.close()
         return {"error": error, "file_type": "unknown"}
@@ -946,11 +965,11 @@ def import_id_file(path: str) -> dict:
     wb.close()
 
     if "LOCAL BRANCH NAME" in keys:
-        result = import_branch_file(path)
+        result = import_branch_file(path, performed_by=performed_by)
         result["file_type"] = "branches"
         return result
     if "USER NO" in keys:
-        result = import_user_file(path)
+        result = import_user_file(path, performed_by=performed_by)
         result["file_type"] = "users"
         return result
     return {"error": f"Unrecognized ID file layout (header: {sorted(keys)})", "file_type": "unknown"}

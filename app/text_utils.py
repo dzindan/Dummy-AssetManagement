@@ -1,6 +1,7 @@
 """Tiny, dependency-free string helpers shared across importer/db/routes
 (kept separate from importer.py to avoid a circular import with db.py)."""
 
+import ipaddress
 import re
 
 # "VIETNAM"/"VIETNAME" (a typo variant seen in the real data) with or without
@@ -39,3 +40,40 @@ def normalize_user_id(raw) -> tuple[str, str]:
     if digits:
         return raw_display, str(int(digits))
     return raw_display, raw_display.upper()
+
+
+_IP_MULTI_DOT_RE = re.compile(r"\.{2,}")
+
+
+def clean_ip(value) -> str:
+    """Clean a free-text "IP" cell from an imported asset report.
+
+    Collapses an accidental double-dot typo (e.g. "10.95..71.209" ->
+    "10.95.71.209" - a real pattern seen in the source Excel files) and then
+    validates the result is an actual IP address. Anything still not valid
+    after that - a placeholder someone typed instead of a real IP ("DYNAMIC
+    IP", "Dây"), or an incomplete address missing an octet ("10.95.71.") -
+    is dropped to blank rather than kept as literal text.
+
+    This is deliberately different from device_name/status/model_device,
+    which always keep the raw value even when unrecognized (see
+    importer.py's normalize_* functions): those are free-text descriptions
+    with display/audit value on their own. An IP cell has none - it exists
+    only to be handed straight to Network Check as a scan target (see
+    routes/network_check.py's start_scan, which pings whatever non-empty
+    string is stored here), so keeping garbage would just make a real,
+    reachable asset misreport as "No response", indistinguishable from one
+    that's genuinely offline. Lives here (not importer.py) so both
+    importer.py and db.py can call it without a circular import - db.py
+    uses it to self-heal already-imported bad values, the same reasoning as
+    normalize_user_id above.
+    """
+    text = "" if value is None else str(value).strip()
+    if not text:
+        return ""
+    candidate = _IP_MULTI_DOT_RE.sub(".", text).strip(" .")
+    try:
+        ipaddress.ip_address(candidate)
+    except ValueError:
+        return ""
+    return candidate

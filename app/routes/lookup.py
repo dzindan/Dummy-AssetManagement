@@ -2,7 +2,7 @@ import datetime as dt
 
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
-from ..auth import require_permission
+from ..auth import current_username, require_permission
 from ..db import get_connection, get_setting
 from ..handover import ASSET_CONDITIONS, HO_TYPES, REASONS, record_handover, render_handover_docx
 from ..importer import find_user, normalize_user_id
@@ -180,7 +180,7 @@ def generate():
     # Only this action - clicking "Confirm & Download" past the review step -
     # writes the .docx and logs it. Reviewing never touches the log.
     docx_path = render_handover_docx(data)
-    record_id = record_handover(data, docx_path)
+    record_id = record_handover(data, docx_path, created_by=current_username())
 
     return redirect(url_for("lookup.success", record_id=record_id))
 

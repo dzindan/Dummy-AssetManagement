@@ -5,6 +5,33 @@
 <p class="muted">Every asset_diff_report.xlsx generated after a Monthly Asset Reports import is automatically saved here - newest first - so it can be downloaded again later without re-running anything.</p>
 
 <div class="panel">
+  <form method="get" action="{{ url_for('import_data.diff_reports') }}">
+    <div class="field-row">
+      <div>
+        <label for="branch_no">Branch</label>
+        <select id="branch_no" name="branch_no">
+          <option value="">All branches</option>
+          {% for b in branches %}
+          <option value="{{ b['branch_no'] }}" {{ 'selected' if filters['branch_no'] == b['branch_no'] else '' }}>{{ b['eng_name'] }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="period">Period</label>
+        <select id="period" name="period">
+          <option value="">All periods</option>
+          {% for p in periods %}
+          <option value="{{ p }}" {{ 'selected' if filters['period'] == p else '' }}>{{ p }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <button type="submit">Search</button>
+    <a class="btn secondary" href="{{ url_for('import_data.diff_reports') }}">Clear</a>
+  </form>
+</div>
+
+<div class="panel">
   <div class="table-scroll">
   <table>
     <thead><tr><th>Saved</th><th>Period</th><th>Branches Covered</th><th>File</th><th></th></tr></thead>
@@ -18,7 +45,13 @@
         <td><a class="btn secondary" href="{{ url_for('import_data.download_diff_report', report_id=r['id']) }}">Download</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="5" class="muted">No diff reports saved yet - import a Monthly Asset Report to generate one.</td></tr>
+      <tr><td colspan="5" class="muted">
+        {% if filters['branch_no'] or filters['period'] %}
+        No saved diff reports match this filter.
+        {% else %}
+        No diff reports saved yet - import a Monthly Asset Report to generate one.
+        {% endif %}
+      </td></tr>
       {% endfor %}
     </tbody>
   </table>

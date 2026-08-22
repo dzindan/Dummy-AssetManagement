@@ -14,6 +14,7 @@ HO_TYPE_LABELS = dict(HO_TYPES)
 HANDOVER_EXPORT_COLUMNS = [
     ("Hand-Over Date", "ho_date"),
     ("Logged At", lambda r: r["created_at"][:16] if r["created_at"] else ""),
+    ("Created By", lambda r: r["created_by"] or ""),
     ("User ID", "user_no"),
     ("Branch", lambda r: r["branch_eng_name"] or r["branch_no"]),
     ("Type", lambda r: HO_TYPE_LABELS.get(r["ho_type"], r["ho_type"])),

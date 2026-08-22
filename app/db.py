@@ -2,7 +2,7 @@ import os
 import sqlite3
 
 from .paths import get_app_data_dir, is_network_path
-from .text_utils import normalize_user_id, strip_bank_prefix
+from .text_utils import clean_ip, normalize_user_id, strip_bank_prefix
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS branches (
@@ -91,7 +91,8 @@ CREATE TABLE IF NOT EXISTS handover_records (
     receiving_id TEXT,
     signature_receiving_name TEXT,
     signature_prepared_by TEXT,
-    docx_path TEXT
+    docx_path TEXT,
+    created_by TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_handover_user ON handover_records (user_no);
@@ -192,8 +193,32 @@ CREATE TABLE IF NOT EXISTS import_log (
     source_file TEXT,
     period TEXT,
     rows_processed INTEGER,
-    result TEXT
+    result TEXT,
+    imported_by TEXT
 );
+
+-- General-purpose audit trail for every hand-edit that doesn't already have
+-- its own dedicated log table (imports have import_log, Network Check has
+-- network_check_log) - Manage Assets edits/deletes, Settings/Mapping
+-- changes, and Users & Roles changes. `category` groups entries for the
+-- Activity Log page's filter (asset/mapping/settings/user_admin);
+-- field/old_value/new_value are populated for a field-level edit and left
+-- blank for a create/delete/action-only entry, where `target` alone
+-- (plus `action`) already says what happened.
+CREATE TABLE IF NOT EXISTS activity_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    logged_at TEXT NOT NULL,
+    performed_by TEXT,
+    category TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target TEXT,
+    field TEXT,
+    old_value TEXT,
+    new_value TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_activity_log_logged_at ON activity_log (logged_at);
+CREATE INDEX IF NOT EXISTS idx_activity_log_category ON activity_log (category);
 
 CREATE INDEX IF NOT EXISTS idx_import_log_imported_at ON import_log (imported_at);
 
@@ -228,7 +253,8 @@ CREATE TABLE IF NOT EXISTS accounts (
     is_active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT,
     last_login_at TEXT,
-    recovery_key_hash TEXT
+    security_question_key TEXT,
+    security_answer_hash TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_accounts_role ON accounts (role_id);
@@ -412,6 +438,7 @@ def init_db() -> None:
                 (alias, canonical),
             )
         _backfill_branch_names(conn)
+        _clean_existing_ip_data(conn)
         _backfill_unmapped(conn, "asset_items", "device_name", "device_aliases", "device_standard_names",
                             "device_unmapped", "raw_name")
         _backfill_unmapped(conn, "asset_items", "status", "status_aliases", "status_standard_names",
@@ -456,8 +483,18 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE import_batches ADD COLUMN unmapped_columns_json TEXT")
 
     existing_account_cols = {row["name"] for row in conn.execute("PRAGMA table_info(accounts)").fetchall()}
-    if "recovery_key_hash" not in existing_account_cols:
-        conn.execute("ALTER TABLE accounts ADD COLUMN recovery_key_hash TEXT")
+    if "security_question_key" not in existing_account_cols:
+        conn.execute("ALTER TABLE accounts ADD COLUMN security_question_key TEXT")
+    if "security_answer_hash" not in existing_account_cols:
+        conn.execute("ALTER TABLE accounts ADD COLUMN security_answer_hash TEXT")
+
+    existing_import_log_cols = {row["name"] for row in conn.execute("PRAGMA table_info(import_log)").fetchall()}
+    if "imported_by" not in existing_import_log_cols:
+        conn.execute("ALTER TABLE import_log ADD COLUMN imported_by TEXT")
+
+    existing_handover_cols = {row["name"] for row in conn.execute("PRAGMA table_info(handover_records)").fetchall()}
+    if "created_by" not in existing_handover_cols:
+        conn.execute("ALTER TABLE handover_records ADD COLUMN created_by TEXT")
 
 
 def _backfill_user_no_norm(conn: sqlite3.Connection) -> None:
@@ -548,6 +585,22 @@ def _backfill_branch_names(conn: sqlite3.Connection) -> None:
             )
 
 
+def _clean_existing_ip_data(conn: sqlite3.Connection) -> None:
+    """One-time-per-value self-heal for `asset_items.ip` cells that predate
+    text_utils.clean_ip's validation (e.g. an accidental double-dot typo, or
+    free text like "DYNAMIC IP" typed into the IP column instead of an
+    actual address) - same idea as _backfill_branch_names above. Without
+    this, an already-imported bad value stays broken until that branch
+    happens to be re-imported, and in the meantime Network Check keeps
+    trying to ping literal garbage instead of a real, reachable machine.
+    Cheap no-op once every stored value is already clean."""
+    for row in conn.execute("SELECT DISTINCT ip FROM asset_items WHERE ip IS NOT NULL AND ip != ''").fetchall():
+        old = row["ip"]
+        new = clean_ip(old)
+        if new != old:
+            conn.execute("UPDATE asset_items SET ip = ? WHERE ip = ?", (new, old))
+
+
 def _seed_permissions_and_roles(conn: sqlite3.Connection) -> None:
     """Keeps the `permissions` catalog and the 3 built-in roles in sync with
     the canonical PERMISSIONS/BUILTIN_ROLES definitions above, every launch.
@@ -577,37 +630,73 @@ def _seed_permissions_and_roles(conn: sqlite3.Connection) -> None:
         )
 
 
+def get_setting_on(conn, key: str, default: str | None = None) -> str | None:
+    """Same read as get_setting(), against an already-open connection - for
+    a caller batching several settings reads/writes (+ other work, e.g. an
+    activity_log entry) into one connection/transaction instead of paying
+    for a fresh get_connection() per call. See routes/settings.py's
+    save_general() for the caller this exists for."""
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
 def get_setting(key: str, default: str | None = None) -> str | None:
     conn = get_connection()
     try:
-        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-        return row["value"] if row else default
+        return get_setting_on(conn, key, default)
     finally:
         conn.close()
+
+
+def set_setting_on(conn, key: str, value: str) -> None:
+    """Same upsert as set_setting(), against an already-open connection -
+    same reasoning as get_setting_on() above. Doesn't commit; the caller
+    batches this into its own transaction."""
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
 
 
 def set_setting(key: str, value: str) -> None:
     conn = get_connection()
     try:
-        conn.execute(
-            "INSERT INTO settings (key, value) VALUES (?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            (key, value),
-        )
+        set_setting_on(conn, key, value)
         conn.commit()
     finally:
         conn.close()
 
 
 def log_import(conn, kind: str, source_file: str, rows_processed: int | None = None,
-                period: str = "", result: str = "OK") -> None:
+                period: str = "", result: str = "OK", imported_by: str = "") -> None:
     """Record one row per import action (branch codes, user IDs, an asset
     report, a Total Asset baseline period) to a permanent audit log, viewable
     on the Import History page - independent of import_batches, which only
     exists for asset-report "current state"/diffing and is never shown as a
-    plain list on its own."""
+    plain list on its own.
+
+    `imported_by` is the logged-in account's username - importer.py can't
+    read that itself (it deliberately never talks to Flask/session state,
+    see its module docstring), so every caller in routes/import_data.py
+    passes it down from auth.current_account() instead."""
     conn.execute(
-        "INSERT INTO import_log (imported_at, kind, source_file, period, rows_processed, result) "
-        "VALUES (datetime('now'), ?, ?, ?, ?, ?)",
-        (kind, source_file, period, rows_processed, result),
+        "INSERT INTO import_log (imported_at, kind, source_file, period, rows_processed, result, imported_by) "
+        "VALUES (datetime('now'), ?, ?, ?, ?, ?, ?)",
+        (kind, source_file, period, rows_processed, result, imported_by),
+    )
+
+
+def log_activity(
+    conn, category: str, action: str, performed_by: str = "", target: str = "",
+    field: str = "", old_value: str = "", new_value: str = "",
+) -> None:
+    """Record one row to the general-purpose activity_log - see its
+    CREATE TABLE comment above for what belongs here vs. import_log/
+    network_check_log. Doesn't commit - same convention as log_import,
+    callers batch this into their own transaction."""
+    conn.execute(
+        "INSERT INTO activity_log (logged_at, performed_by, category, action, target, field, old_value, new_value) "
+        "VALUES (datetime('now'), ?, ?, ?, ?, ?, ?, ?)",
+        (performed_by, category, action, target, field, old_value, new_value),
     )

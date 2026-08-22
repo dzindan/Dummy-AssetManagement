@@ -24,6 +24,40 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// Every fetch() below reads this instead of calling resp.json() directly.
+// A session that expires mid-scan makes the server redirect to the login
+// page's HTML instead of returning JSON - resp.json() would throw and, left
+// uncaught, that failure is invisible (no error banner, results just never
+// show up again). Centralizing the parse means every call site gets the
+// same clear "session expired" message instead of a silent dead end.
+async function readJson(resp) {
+  let data = null;
+  try {
+    data = await resp.json();
+  } catch {
+    // Not JSON - most likely a login-page redirect from an expired session.
+  }
+  if (resp.status === 401) {
+    throw new Error((data && data.error) || "Your session has expired. Please log in again.");
+  }
+  if (data === null) {
+    throw new Error(`Unexpected response from server (HTTP ${resp.status}).`);
+  }
+  return data;
+}
+
+// Shared by poll() and the scan-start submit handler below - both reset the
+// same set of controls and show the same error banner on failure; poll()
+// additionally needs its interval stopped since a mid-poll failure would
+// otherwise keep retrying against a scan it can no longer reach.
+function showScanError(message, { stopPolling = false } = {}) {
+  if (stopPolling) clearInterval(pollTimer);
+  scanBtn.disabled = false;
+  stopBtn.style.display = "none";
+  errorEl.style.display = "block";
+  errorEl.textContent = message;
+}
+
 function matchBadge(value) {
   if (value === null || value === undefined) return '<span class="badge badge-unchanged">N/A</span>';
   return value
@@ -123,10 +157,16 @@ async function applyUpdates(updates) {
   if (!currentScanId || updates.length === 0) return;
   const resp = await fetch(`/network-check/scan/${currentScanId}/apply`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-Requested-With": "fetch" },
     body: JSON.stringify({ updates }),
   });
-  const data = await resp.json();
+  let data;
+  try {
+    data = await readJson(resp);
+  } catch (err) {
+    bulkStatus.textContent = err.message;
+    return;
+  }
   if (!resp.ok) {
     bulkStatus.textContent = data.error || "Error applying update.";
     return;
@@ -153,15 +193,20 @@ ignoreAllBtn.addEventListener("click", () => {
 });
 
 async function poll(scanId) {
-  const resp = await fetch(`/network-check/scan/${scanId}`);
-  if (!resp.ok) {
-    clearInterval(pollTimer);
-    scanBtn.disabled = false;
-    errorEl.style.display = "block";
-    errorEl.textContent = "Error fetching scan results.";
+  const resp = await fetch(`/network-check/scan/${scanId}`, {
+    headers: { "X-Requested-With": "fetch" },
+  });
+  let data;
+  try {
+    data = await readJson(resp);
+  } catch (err) {
+    showScanError(err.message, { stopPolling: true });
     return;
   }
-  const data = await resp.json();
+  if (!resp.ok) {
+    showScanError(data.error || "Error fetching scan results.", { stopPolling: true });
+    return;
+  }
   progressEl.textContent = `Scanning ${data.branch_label}: ${data.done}/${data.total}`;
   table.style.display = "table";
   emptyHint.style.display = "none";
@@ -184,7 +229,10 @@ stopBtn.addEventListener("click", async () => {
   if (!currentScanId) return;
   stopBtn.disabled = true;
   stopBtn.textContent = "Stopping...";
-  await fetch(`/network-check/scan/${currentScanId}/stop`, { method: "POST" });
+  await fetch(`/network-check/scan/${currentScanId}/stop`, {
+    method: "POST",
+    headers: { "X-Requested-With": "fetch" },
+  });
 });
 
 form.addEventListener("submit", async (e) => {
@@ -213,16 +261,19 @@ form.addEventListener("submit", async (e) => {
 
   const resp = await fetch("/network-check/scan", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-Requested-With": "fetch" },
     body: JSON.stringify({ branch_no: branchNo }),
   });
-  const data = await resp.json();
+  let data;
+  try {
+    data = await readJson(resp);
+  } catch (err) {
+    showScanError(err.message);
+    return;
+  }
 
   if (!resp.ok) {
-    scanBtn.disabled = false;
-    stopBtn.style.display = "none";
-    errorEl.style.display = "block";
-    errorEl.textContent = data.error || "Unknown error.";
+    showScanError(data.error || "Unknown error.");
     return;
   }
 

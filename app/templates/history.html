@@ -38,13 +38,14 @@
   <div class="table-scroll">
   <table>
     <thead>
-      <tr><th>Hand-Over Date</th><th>Logged At</th><th>User</th><th>Branch</th><th>Type</th><th>Reason</th><th>Receiving Party</th><th></th></tr>
+      <tr><th>Hand-Over Date</th><th>Logged At</th><th>Created By</th><th>User</th><th>Branch</th><th>Type</th><th>Reason</th><th>Receiving Party</th><th></th></tr>
     </thead>
     <tbody>
       {% for r in records %}
       <tr>
         <td>{{ r['ho_date'] or '-' }}</td>
         <td>{{ r['created_at'][:16] }}</td>
+        <td>{{ r['created_by'] or '-' }}</td>
         <td>{{ r['user_no'] }}</td>
         <td>{{ r['branch_no'] or '-' }}</td>
         <td>{{ ho_type_labels.get(r['ho_type'], r['ho_type']) }}</td>
@@ -53,7 +54,7 @@
         <td><a href="{{ url_for('history.download', record_id=r['id']) }}">Download</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="8" class="muted">No hand-over forms generated yet.</td></tr>
+      <tr><td colspan="9" class="muted">No hand-over forms generated yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>

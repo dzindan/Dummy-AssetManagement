@@ -107,7 +107,7 @@ def render_handover_docx(data: dict) -> str:
     return out_path
 
 
-def record_handover(data: dict, docx_path: str) -> int:
+def record_handover(data: dict, docx_path: str, created_by: str = "") -> int:
     conn = get_connection()
     try:
         now = dt.datetime.now().isoformat(timespec="seconds")
@@ -117,8 +117,8 @@ def record_handover(data: dict, docx_path: str) -> int:
             INSERT INTO handover_records (
                 created_at, ho_date, user_no, user_name, branch_no, ho_type, reason, assets_json,
                 ict_rep_name, ict_rep_id, receiving_name, receiving_title, receiving_dept,
-                receiving_id, signature_receiving_name, signature_prepared_by, docx_path
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                receiving_id, signature_receiving_name, signature_prepared_by, docx_path, created_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 now,
@@ -138,6 +138,7 @@ def record_handover(data: dict, docx_path: str) -> int:
                 data.get("signature_receiving_name", ""),
                 data.get("signature_prepared_by", ""),
                 docx_path,
+                created_by,
             ),
         )
         conn.commit()

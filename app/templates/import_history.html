@@ -8,11 +8,12 @@
 <div class="panel">
   <div class="table-scroll">
   <table>
-    <thead><tr><th>When</th><th>Kind</th><th>Source File</th><th>Period</th><th>Rows</th><th>Result</th></tr></thead>
+    <thead><tr><th>When</th><th>Imported By</th><th>Kind</th><th>Source File</th><th>Period</th><th>Rows</th><th>Result</th></tr></thead>
     <tbody>
       {% for r in rows %}
       <tr>
         <td>{{ r['imported_at'] }}</td>
+        <td>{{ r['imported_by'] or '-' }}</td>
         <td>{{ r['kind'] }}</td>
         <td>{{ r['source_file'] }}</td>
         <td>{{ r['period'] or '-' }}</td>
@@ -23,7 +24,7 @@
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="6" class="muted">No imports recorded yet.</td></tr>
+      <tr><td colspan="7" class="muted">No imports recorded yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>

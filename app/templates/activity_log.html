@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Activity Log - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>Activity Log</h1>
+<p class="muted">Every hand-edit made in the app that doesn't already have its own log page - Manage Assets edits/deletes, Settings/Mapping changes, and Users &amp; Roles changes - newest first. Imports have their own <a href="{{ url_for('import_data.history') }}">Import History</a>, and Network Check has its own <a href="{{ url_for('network_check.log') }}">log</a>.</p>
+
+<div class="panel">
+  <form method="get" action="{{ url_for('settings.activity_log') }}">
+    <div class="field-row">
+      <div>
+        <label for="category">Category</label>
+        <select id="category" name="category">
+          <option value="">All categories</option>
+          {% for key, label in categories %}
+          <option value="{{ key }}" {{ 'selected' if filters['category'] == key else '' }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <button type="submit">Search</button>
+    <a class="btn secondary" href="{{ url_for('settings.activity_log') }}">Clear</a>
+    <a class="btn secondary" href="{{ url_for('settings.export_activity_log', category=filters['category']) }}">Export to Excel</a>
+  </form>
+</div>
+
+<div class="panel">
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>When</th><th>Performed By</th><th>Category</th><th>Action</th><th>Target</th><th>Field</th><th>Old Value</th><th>New Value</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r['logged_at'] }}</td>
+        <td>{{ r['performed_by'] or '-' }}</td>
+        <td>{{ category_labels.get(r['category'], r['category']) }}</td>
+        <td>{{ r['action'] }}</td>
+        <td>{{ r['target'] or '-' }}</td>
+        <td>{{ r['field'] or '-' }}</td>
+        <td>{{ r['old_value'] or '-' }}</td>
+        <td>{{ r['new_value'] or '-' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="muted">
+        {% if filters['category'] %}
+        No activity recorded in this category.
+        {% else %}
+        No activity recorded yet.
+        {% endif %}
+      </td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<a class="btn secondary" href="{{ url_for('settings.index') }}">Back to Settings</a>
+{% endblock %}

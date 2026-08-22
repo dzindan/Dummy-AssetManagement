@@ -20,6 +20,95 @@
   }
 })();
 
+// Keeps --topbar-h (style.css) in sync with the sticky topbar's actual
+// rendered height, since it wraps onto two lines at narrow widths - the
+// table's own sticky header rows read this variable to sit directly below
+// the topbar instead of both fighting over top:0.
+(function () {
+  const topbar = document.querySelector(".topbar");
+  if (!topbar) return;
+  function syncTopbarHeight() {
+    document.documentElement.style.setProperty("--topbar-h", topbar.offsetHeight + "px");
+  }
+  syncTopbarHeight();
+  window.addEventListener("resize", syncTopbarHeight);
+})();
+
+// Resizable table columns - opt-in via <table data-resizable-table="some-id">
+// (Manage Assets: 13 columns is too wide for everyone's monitor to show
+// comfortably at once). Widths start at whatever the browser's normal
+// content-based auto layout already picked (measured before switching to
+// table-layout:fixed, so nothing jumps on load), then a drag handle on each
+// header's right edge lets a column be narrowed/widened from there. Saved
+// per column index in localStorage, keyed by page path + the table's id, so
+// a resize survives a reload or a re-filter instead of resetting every time.
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll("[data-resizable-table]").forEach(function (table) {
+    const headerRow = table.querySelector("thead tr");
+    if (!headerRow) return;
+    const ths = Array.from(headerRow.children);
+
+    const storageKey = "colwidths:" + location.pathname + ":" + table.dataset.resizableTable;
+    let saved = {};
+    try {
+      saved = JSON.parse(localStorage.getItem(storageKey) || "{}");
+    } catch (e) {
+      saved = {};
+    }
+
+    // Measure every column's auto-computed width *before* setting any of
+    // them - setting th[0]'s width while the table is still auto-layout
+    // can itself shift how the browser auto-sizes the still-unmeasured
+    // th[1], th[2]... (they all collapse to an equal share otherwise),
+    // so all the reads have to happen first, then all the writes.
+    const autoWidths = ths.map(function (th) {
+      return th.getBoundingClientRect().width;
+    });
+    ths.forEach(function (th, i) {
+      th.style.width = autoWidths[i] + "px";
+    });
+    table.classList.add("resizable-table-active");
+    ths.forEach(function (th, i) {
+      if (saved[i]) th.style.width = saved[i] + "px";
+
+      const handle = document.createElement("div");
+      handle.className = "col-resize-handle";
+      th.appendChild(handle);
+
+      handle.addEventListener("mousedown", function (e) {
+        e.preventDefault();
+        const startX = e.clientX;
+        const startWidth = th.getBoundingClientRect().width;
+        handle.classList.add("resizing");
+
+        function onMove(moveEvent) {
+          th.style.width = Math.max(40, startWidth + (moveEvent.clientX - startX)) + "px";
+        }
+        function onUp() {
+          document.removeEventListener("mousemove", onMove);
+          document.removeEventListener("mouseup", onUp);
+          handle.classList.remove("resizing");
+          saved[i] = parseInt(th.style.width, 10);
+          localStorage.setItem(storageKey, JSON.stringify(saved));
+        }
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+      });
+    });
+  });
+});
+
+// Floating scroll-to-top/scroll-to-bottom buttons (every page, see base.html).
+document.addEventListener("click", function (e) {
+  const btn = e.target.closest("[data-scroll-to]");
+  if (!btn) return;
+  if (btn.dataset.scrollTo === "top") {
+    window.scrollTo(0, 0);
+  } else {
+    window.scrollTo(0, document.body.scrollHeight);
+  }
+});
+
 // Multi-select filter dropdowns (Manage Assets: Branch/Device/Status) - a
 // checkbox panel that opens/closes on click rather than hover, since the
 // user needs it to stay open while checking several boxes. Native
@@ -33,7 +122,19 @@ document.addEventListener("click", function (e) {
     document.querySelectorAll(".multiselect.open").forEach(function (el) {
       el.classList.remove("open");
     });
-    if (!wasOpen) container.classList.add("open");
+    if (!wasOpen) {
+      container.classList.add("open");
+      // Reopening fresh always shows the full list - a leftover filter
+      // from last time would otherwise silently hide options the user
+      // never meant to exclude.
+      const search = container.querySelector(".multiselect-search");
+      if (search && search.value) {
+        search.value = "";
+        container.querySelectorAll(".multiselect-panel label").forEach(function (label) {
+          label.style.display = "";
+        });
+      }
+    }
     return;
   }
   if (!e.target.closest(".multiselect-panel")) {
@@ -41,6 +142,19 @@ document.addEventListener("click", function (e) {
       el.classList.remove("open");
     });
   }
+});
+
+// Type-to-filter inside a multiselect panel (Manage Assets: Branch has 100+
+// options, tedious to scroll through) - narrows the visible checkboxes by
+// substring match; doesn't touch which ones are checked, so typing to find
+// one more option never un-checks ones already picked.
+document.addEventListener("input", function (e) {
+  if (!e.target.matches(".multiselect-search")) return;
+  const query = e.target.value.trim().toLowerCase();
+  const panel = e.target.closest(".multiselect-panel");
+  panel.querySelectorAll("label").forEach(function (label) {
+    label.style.display = label.textContent.toLowerCase().includes(query) ? "" : "none";
+  });
 });
 
 // Auto-uppercase any input/textarea marked with the "uc" class, as the user
@@ -155,72 +269,4 @@ document.addEventListener("click", function (e) {
 
   document.body.appendChild(form);
   form.submit();
-});
-
-// Manage Assets: per-column header filter dropdowns - built once from the
-// distinct values actually present in the (unpaginated) table, then a
-// plain exact-match <select> per column. An earlier free-text version
-// re-scanned every row's text on every keystroke, which visibly lagged
-// against a table this long; a <select> only re-filters on "change", and
-// each row's per-column text is cached once here instead of re-read from
-// the DOM on every filter change.
-document.addEventListener("DOMContentLoaded", function () {
-  const table = document.querySelector("[data-header-filter-table]");
-  if (!table) return;
-  const filterRow = table.querySelector(".header-filter-row");
-  if (!filterRow) return;
-
-  const bodyRows = Array.from(table.querySelectorAll("tbody tr"));
-  const selects = Array.from(filterRow.children).map(function (th) {
-    return th.querySelector(".header-filter");
-  });
-
-  const rowTexts = bodyRows.map(function (row) {
-    return Array.from(row.children).map(function (cell) {
-      return cell.textContent.trim();
-    });
-  });
-
-  selects.forEach(function (select, colIndex) {
-    if (!select) return;
-    const values = new Set();
-    rowTexts.forEach(function (cells) {
-      if (cells[colIndex]) values.add(cells[colIndex]);
-    });
-    Array.from(values)
-      .sort(function (a, b) {
-        return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
-      })
-      .forEach(function (value) {
-        const opt = document.createElement("option");
-        opt.value = value;
-        opt.textContent = value;
-        select.appendChild(opt);
-      });
-  });
-
-  function applyFilters() {
-    const activeFilters = selects.map(function (select) {
-      return select ? select.value : "";
-    });
-    let visibleCount = 0;
-    bodyRows.forEach(function (row, i) {
-      let visible = true;
-      for (let c = 0; c < activeFilters.length; c++) {
-        if (!activeFilters[c]) continue;
-        if (rowTexts[i][c] !== activeFilters[c]) {
-          visible = false;
-          break;
-        }
-      }
-      row.style.display = visible ? "" : "none";
-      if (visible) visibleCount++;
-    });
-    const counter = document.getElementById("asset-row-count");
-    if (counter) counter.textContent = visibleCount;
-  }
-
-  selects.forEach(function (select) {
-    if (select) select.addEventListener("change", applyFilters);
-  });
 });

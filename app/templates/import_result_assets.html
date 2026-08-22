@@ -34,6 +34,10 @@
     <p><span class="badge badge-changed">{{ r.unrecognized_models | length }} unrecognized model(s)</span> {{ r.unrecognized_models | join(', ') }}</p>
     <a class="btn" href="{{ url_for('settings.index') }}#model-mapping">Go to Model Mapping</a>
     {% endif %}
+    {% if r.invalid_ips %}
+    <p><span class="badge badge-removed">{{ r.invalid_ips | length }} invalid IP value(s) - stored blank</span> {{ r.invalid_ips | join(', ') }}</p>
+    <p class="muted">These didn't look like a real IP address (typo, placeholder text, or a missing octet) and won't be scanned by Network Check. Fix the IP column in the source file and re-import to recover them.</p>
+    {% endif %}
     {% if r.duplicate_serials %}
     <p style="margin-top:0.9rem;"><span class="badge badge-changed">{{ r.duplicate_serials | length }} duplicate serial(s) - same serial appears more than once in this import</span></p>
     <div class="actions" style="margin-top:0;">

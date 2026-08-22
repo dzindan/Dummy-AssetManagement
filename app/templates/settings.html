@@ -6,22 +6,29 @@
 <div class="panel" id="my-account">
   <h2>My Account</h2>
   <p class="muted">
-    A recovery key lets you reset your own password from the "Forgot password?" link on the login page if you
-    ever forget it - without needing another Admin to do it for you. It's shown only once, right after you
-    generate it, so save it somewhere safe (a password manager, or printed and locked away). Generating a new
-    one immediately replaces (and invalidates) any previous key.
+    A security question lets you reset your own password from the "Forgot password?" link on the login page if
+    you ever forget it - without needing another Admin to do it for you. Pick whichever question you'll actually
+    remember the answer to. Setting a new question/answer replaces the previous one.
   </p>
   <p>
-    Recovery key status:
-    {% if has_recovery_key %}
-    <span class="badge badge-added">Set</span>
+    Security question status:
+    {% if current_question_text %}
+    <span class="badge badge-added">Set</span> - "{{ current_question_text }}"
     {% else %}
     <span class="badge badge-changed">Not set</span>
     {% endif %}
   </p>
-  <form method="post" action="{{ url_for('settings.generate_recovery_key_route') }}"
-        onsubmit="return {% if has_recovery_key %}confirm('This replaces your current recovery key - the old one will stop working. Continue?'){% else %}true{% endif %};">
-    <button type="submit" class="secondary">{% if has_recovery_key %}Generate New Recovery Key{% else %}Generate Recovery Key{% endif %}</button>
+  <form method="post" action="{{ url_for('settings.set_security_question_route') }}">
+    <label for="question_key">Question</label>
+    <select id="question_key" name="question_key" required>
+      <option value="">Choose a question...</option>
+      {% for key, text in security_questions %}
+      <option value="{{ key }}" {{ 'selected' if current_question_key == key else '' }}>{{ text }}</option>
+      {% endfor %}
+    </select>
+    <label for="answer">Your answer</label>
+    <input type="text" id="answer" name="answer" required>
+    <button type="submit" class="secondary">{% if current_question_text %}Update Security Question{% else %}Set Security Question{% endif %}</button>
   </form>
 </div>
 
@@ -32,6 +39,12 @@
   <a class="btn secondary" href="{{ url_for('user_admin.index') }}">Manage Users &amp; Roles</a>
 </div>
 {% endif %}
+
+<div class="panel">
+  <h2>Activity Log</h2>
+  <p class="muted">Who changed what: Manage Assets edits/deletes, Settings/Mapping changes, and Users &amp; Roles changes.</p>
+  <a class="btn secondary" href="{{ url_for('settings.activity_log') }}">View Activity Log</a>
+</div>
 
 <div class="panel">
   <h2>Default ICT Representative</h2>
@@ -421,6 +434,24 @@
       <div><input type="text" name="new_data_dir" placeholder="e.g. D:\AssetManagementData or \\server\share\AssetManagementData" required></div>
       <div style="flex: 0 0 auto;"><button type="submit">Change Location</button></div>
     </div>
+  </form>
+</div>
+
+<div class="panel">
+  <h2>Reset Imported Data</h2>
+  <p class="muted">
+    Permanently delete specific categories of imported data, without touching Mappings, Settings,
+    Accounts &amp; Roles, or Hand-Over Records. Pick only the categories you want cleared - anything
+    left unchecked stays exactly as it is.
+  </p>
+  <form method="post" action="{{ url_for('settings.reset_imported_data') }}"
+        onsubmit="return confirm('This permanently deletes the checked data - it cannot be undone. Continue?');">
+    {% for key, label in reset_imported_data_options.items() %}
+    <label style="display:block; margin-bottom:0.4rem;">
+      <input type="checkbox" name="{{ key }}"> {{ label }}
+    </label>
+    {% endfor %}
+    <button type="submit" class="danger" style="margin-top:0.5rem;">Reset Selected Data</button>
   </form>
 </div>
 

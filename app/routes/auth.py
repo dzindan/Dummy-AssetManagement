@@ -1,8 +1,8 @@
 from flask import Blueprint, flash, redirect, render_template, request, session, url_for
 
 from ..auth import (
+    SECURITY_QUESTIONS_BY_KEY,
     accounts_table_is_empty,
-    clear_recovery_key,
     create_account,
     find_account_by_username,
     hash_password,
@@ -10,7 +10,7 @@ from ..auth import (
     login_account,
     logout_account,
     verify_password,
-    verify_recovery_key,
+    verify_security_answer,
 )
 from ..db import get_connection
 
@@ -48,21 +48,32 @@ def login():
 
 @bp.route("/forgot-password", methods=["GET", "POST"])
 def forgot_password():
+    """Two-step, no-JS flow: step 1 is just a username field; submitting it
+    reloads this same page with ?username=, which (if that account has a
+    security question set) reveals the question plus the answer/new-password
+    fields. Unlike the recovery key this replaced, the question/answer isn't
+    cleared after a successful reset - it's meant to be reusable, the same
+    way the question itself never changes."""
     if accounts_table_is_empty():
         return redirect(url_for("auth.setup"))
 
+    no_question_error = (
+        "That username doesn't exist, isn't active, or doesn't have a security question set. "
+        "Ask another Admin to reset your password from Settings > Users & Roles."
+    )
+
     if request.method == "POST":
         username = request.form.get("username", "")
-        recovery_key = request.form.get("recovery_key", "")
+        answer = request.form.get("answer", "")
         password = request.form.get("password", "")
         confirm = request.form.get("confirm", "")
 
         account = find_account_by_username(username)
         # Same generic message whether the username doesn't exist, isn't
-        # active, has no recovery key set, or the key just doesn't match -
-        # doesn't hint to an attacker which of those is true.
-        error = "Username or recovery key is incorrect."
-        if account and account["is_active"] and verify_recovery_key(account, recovery_key):
+        # active, has no security question set, or the answer just doesn't
+        # match - doesn't hint to an attacker which of those is true.
+        error = "Username or answer is incorrect."
+        if account and account["is_active"] and verify_security_answer(account, answer):
             error = None
         if error is None and password != confirm:
             error = "Passwords do not match."
@@ -71,21 +82,34 @@ def forgot_password():
 
         if error:
             flash(error, "error")
-        else:
-            conn = get_connection()
-            try:
-                conn.execute(
-                    "UPDATE accounts SET password_hash = ? WHERE id = ?",
-                    (hash_password(password), account["id"]),
-                )
-                conn.commit()
-            finally:
-                conn.close()
-            clear_recovery_key(account["id"])
-            flash("Password reset. You can now log in with your new password.", "success")
-            return redirect(url_for("auth.login"))
+            question_text = (
+                SECURITY_QUESTIONS_BY_KEY.get(account["security_question_key"]) if account else None
+            )
+            return render_template("forgot_password.html", username=username, question_text=question_text)
 
-    return render_template("forgot_password.html")
+        conn = get_connection()
+        try:
+            conn.execute(
+                "UPDATE accounts SET password_hash = ? WHERE id = ?",
+                (hash_password(password), account["id"]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        flash("Password reset. You can now log in with your new password.", "success")
+        return redirect(url_for("auth.login"))
+
+    username = request.args.get("username", "").strip()
+    question_text = None
+    if username:
+        account = find_account_by_username(username)
+        if account and account["is_active"] and account["security_question_key"]:
+            question_text = SECURITY_QUESTIONS_BY_KEY.get(account["security_question_key"])
+        else:
+            flash(no_question_error, "error")
+            username = ""
+
+    return render_template("forgot_password.html", username=username, question_text=question_text)
 
 
 @bp.route("/logout", methods=["POST"])

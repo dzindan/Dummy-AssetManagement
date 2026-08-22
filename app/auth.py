@@ -1,5 +1,4 @@
 import functools
-import secrets
 from datetime import timedelta
 
 from flask import flash, g, jsonify, redirect, request, session, url_for
@@ -7,8 +6,19 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from .db import PERMISSIONS, get_connection
 
-# Unambiguous on-screen/on-paper: no 0/O or 1/I/L mixups.
-_RECOVERY_KEY_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+# Deliberately silly - these exist so the answer is something the account
+# holder will actually remember (and enjoy typing), not a serious "mother's
+# maiden name" style question. Keyed (not just indexed) so stored answers
+# stay tied to the right question even if this list is ever reordered -
+# only ever append here, never renumber an existing key.
+SECURITY_QUESTIONS = [
+    ("useless_talent", "What's your most useless talent?"),
+    ("weird_nickname", "What's the weirdest nickname anyone's ever called you?"),
+    ("wifi_name", "If you were a Wi-Fi network, what would your name be?"),
+    ("food_fight", "What food would you fight someone over?"),
+    ("lame_excuse", "What's the lamest excuse you've used to skip a meeting?"),
+]
+SECURITY_QUESTIONS_BY_KEY = dict(SECURITY_QUESTIONS)
 
 
 def hash_password(password: str) -> str:
@@ -87,49 +97,32 @@ def create_account(username: str, password: str, role_id: int) -> int:
         conn.close()
 
 
-def generate_recovery_key() -> str:
-    """A one-time-use "forgot password" credential, shown to the account
-    holder exactly once when (re)generated - only its hash is ever stored,
-    same as a password. Formatted in dashed groups of 4 purely for
-    readability when copying it down; the dashes carry no meaning and
-    aren't required when it's typed back in (see verify_recovery_key)."""
-    raw = "".join(secrets.choice(_RECOVERY_KEY_ALPHABET) for _ in range(16))
-    return "-".join(raw[i : i + 4] for i in range(0, 16, 4))
+def _normalize_answer(answer: str) -> str:
+    """Case/whitespace-insensitive so "Pizza" and " pizza " count as the
+    same answer - the point is remembering *what* you answered, not
+    reproducing its exact capitalization months later."""
+    return (answer or "").strip().lower()
 
 
-def set_recovery_key(account_id: int, key: str) -> None:
+def set_security_question(account_id: int, question_key: str, answer: str) -> None:
+    if question_key not in SECURITY_QUESTIONS_BY_KEY:
+        raise ValueError(f"unknown security question key: {question_key!r}")
     conn = get_connection()
     try:
         conn.execute(
-            "UPDATE accounts SET recovery_key_hash = ? WHERE id = ?",
-            (hash_password(key), account_id),
+            "UPDATE accounts SET security_question_key = ?, security_answer_hash = ? WHERE id = ?",
+            (question_key, hash_password(_normalize_answer(answer)), account_id),
         )
         conn.commit()
     finally:
         conn.close()
 
 
-def clear_recovery_key(account_id: int) -> None:
-    """Recovery keys are single-use: a successful /forgot-password reset
-    clears it immediately, so a leaked-and-since-used key can't reset the
-    password a second time. The account holder generates a fresh one from
-    Settings after logging back in."""
-    conn = get_connection()
-    try:
-        conn.execute("UPDATE accounts SET recovery_key_hash = NULL WHERE id = ?", (account_id,))
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def verify_recovery_key(account, key: str) -> bool:
-    key_hash = account["recovery_key_hash"] if account else None
-    if not key_hash or not key:
+def verify_security_answer(account, answer: str) -> bool:
+    answer_hash = account["security_answer_hash"] if account else None
+    if not answer_hash or not answer:
         return False
-    normalized = key.strip().upper().replace(" ", "")
-    if "-" not in normalized and len(normalized) == 16:
-        normalized = "-".join(normalized[i : i + 4] for i in range(0, 16, 4))
-    return check_password_hash(key_hash, normalized)
+    return check_password_hash(answer_hash, _normalize_answer(answer))
 
 
 def would_orphan_manage_users(exclude_account_id: int | None = None, exclude_role_id: int | None = None) -> bool:
@@ -176,8 +169,25 @@ def current_account():
     return getattr(g, "current_account", None)
 
 
+def current_username() -> str:
+    """The logged-in account's username, "" if none - the one piece of
+    `current_account()` every activity-log call site actually needs (see
+    routes/asset_edit.py, import_data.py, settings.py, user_admin.py),
+    without each of them re-deriving it from current_account() themselves."""
+    account = current_account()
+    return account["username"] if account else ""
+
+
 def current_permissions() -> set:
     return getattr(g, "current_permissions", set())
+
+
+def _wants_json_response() -> bool:
+    """True when this request is a fetch()/AJAX call expecting a JSON
+    response rather than a full-page HTML redirect - shared by
+    require_permission's 403 branch and _enforce_login's 401 branch below,
+    so the two never drift on what counts as "a fetch call"."""
+    return request.is_json or request.headers.get("X-Requested-With") == "fetch"
 
 
 def require_permission(permission: str):
@@ -191,7 +201,7 @@ def require_permission(permission: str):
         @functools.wraps(view_func)
         def wrapped(*args, **kwargs):
             if permission not in current_permissions():
-                if request.is_json or request.headers.get("X-Requested-With") == "fetch":
+                if _wants_json_response():
                     return jsonify({"error": "You do not have permission to do that."}), 403
                 flash("You do not have permission to do that. Contact an administrator if you need access.", "error")
                 return redirect(request.referrer or url_for("dashboard.index"))
@@ -226,6 +236,16 @@ def register_auth(app) -> None:
         account = load_active_account(session.get("account_id"))
         if account is None:
             session.pop("account_id", None)
+            # Same fetch-detection as require_permission's 403 branch (see
+            # _wants_json_response) - without it, a session that expires
+            # mid-page (e.g. during a long-running Network Check scan) makes
+            # every subsequent fetch() silently receive the login page's
+            # HTML instead of JSON. None of the JS callers expect that, so
+            # resp.json() throws and the failure is invisible: no error
+            # banner, results just never arrive - indistinguishable from the
+            # scan being stuck.
+            if _wants_json_response():
+                return jsonify({"error": "Your session has expired. Please log in again."}), 401
             return redirect(url_for("auth.login", next=request.full_path))
         g.current_account = account
         g.current_permissions = load_permissions_for_role(account["role_id"])

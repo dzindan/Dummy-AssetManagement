@@ -1,4 +1,9 @@
 :root {
+  /* Actual rendered height of the now-sticky .topbar - kept in sync by
+     app.js (it wraps onto two lines at narrow widths, so this can't be a
+     fixed constant) and used to offset the table's own sticky header rows
+     below it instead of them both fighting for top:0. */
+  --topbar-h: 64px;
   --bg: #f4f6f8;
   --panel: #ffffff;
   --border: #dfe3e8;
@@ -38,6 +43,10 @@ body {
   padding: 0.75rem 2rem;
   flex-wrap: wrap;
   gap: 0.5rem;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
 }
 
 .topbar .brand {
@@ -213,18 +222,118 @@ th, td {
   white-space: nowrap;
 }
 
-th { background: #f0f2f5; font-weight: 600; position: sticky; top: 0; }
+th { background: #f0f2f5; font-weight: 600; }
 tr:hover td { background: #fafbfc; }
 
-/* Manage Assets: per-column filter inputs row, stacked directly under the
-   sticky column-header row (both stay pinned while scrolling a long,
-   unpaginated table). */
-.header-filter-row th {
-  position: sticky;
-  top: 2.3rem;
-  background: #f0f2f5;
-  padding: 0.3rem 0.5rem;
+/* Resizable columns (opt-in via [data-resizable-table], see app.js) - every
+   rule here is gated on .resizable-table-active (added by app.js), not the
+   raw [data-resizable-table] attribute, and deliberately not applied until
+   *after* app.js has measured each column's normal auto-layout width.
+   Any of these rules active during that measurement (table-layout:fixed
+   itself, but also overflow:hidden/nowrap changing how the browser sizes
+   a cell's "preferred" width) would distort it into equal-width columns
+   instead of their real content-based ones. Once active: fixed layout so a
+   column's set width actually sticks instead of the browser re-flowing
+   everything around content on every render, and clipped with an ellipsis
+   rather than wrapping or bleeding into the next cell once a column's been
+   dragged narrower than its content. */
+table.resizable-table-active { table-layout: fixed; }
+table.resizable-table-active th,
+table.resizable-table-active td {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+table[data-resizable-table] th { position: relative; }
+.col-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  user-select: none;
+  touch-action: none;
+}
+.col-resize-handle:hover, .col-resize-handle.resizing { background: rgba(29, 78, 216, 0.35); }
+
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+}
+
+/* Manage Assets' filter panel - stays pinned right under the sticky .topbar
+   while scrolling down a long result page, so the filters/rows-per-page/
+   search box never scroll out of reach. */
+.filter-bar {
+  position: sticky;
+  top: var(--topbar-h);
+  z-index: 60;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.08);
+  padding-bottom: 1rem;
+}
+
+/* Compact layout, scoped to this one form (not the shared .field-row rule
+   used elsewhere) - the Branch/Device/Status/Period toggles and Rows/page
+   select only ever display a short summary ("All X" / "N selected" / a
+   number), so they don't need the same width as a free-text field. Kept
+   narrow so more of the row fits without wrapping - this panel is sticky
+   (see above), and every extra wrapped line is more of the table it covers
+   while scrolling. */
+.filter-bar .field-row {
+  gap: 0.75rem;
+  row-gap: 0.6rem;
+}
+.filter-bar .field-row > div {
+  flex: 0 1 150px;
+  min-width: 130px;
+}
+.filter-bar .field-row > .search-field {
+  flex: 2 1 220px;
+  min-width: 200px;
+}
+.filter-bar label {
+  margin-top: 0;
+}
+.filter-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+}
+.filter-actions button,
+.filter-actions .btn {
+  margin-top: 0;
+}
+
+.scroll-fabs {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  z-index: 90;
+}
+
+.scroll-fab {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: none;
+  background: var(--brand-dark);
+  color: #fff;
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scroll-fab:hover { background: var(--brand); }
 
 .header-filter {
   width: 100%;
@@ -288,6 +397,17 @@ input[type=checkbox] { width: auto; }
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
 }
 .multiselect.open .multiselect-panel { display: block; }
+.multiselect-search {
+  position: sticky;
+  top: 0;
+  width: 100%;
+  margin: 0 0 0.35rem;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fff;
+}
 .multiselect-panel label {
   display: block;
   font-size: 0.9rem;

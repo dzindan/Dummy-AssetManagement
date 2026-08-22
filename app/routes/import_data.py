@@ -7,7 +7,7 @@ import uuid
 
 from flask import Blueprint, flash, redirect, render_template, request, send_file, url_for
 
-from ..auth import require_permission
+from ..auth import current_username, require_permission
 from ..db import get_connection, get_setting
 from ..diffing import diff_batch
 from ..exports import build_diff_workbook, build_duplicates_workbook, build_import_template_workbook, build_workbook, send_workbook
@@ -95,6 +95,7 @@ IMPORT_LOG_SQL = "SELECT * FROM import_log ORDER BY id DESC LIMIT 500"
 
 IMPORT_HISTORY_EXPORT_COLUMNS = [
     ("Imported At", "imported_at"),
+    ("Imported By", lambda r: r["imported_by"] or "-"),
     ("Kind", "kind"),
     ("Source File", "source_file"),
     ("Period", "period"),
@@ -126,12 +127,44 @@ def export_history():
 
 @bp.route("/diff-reports")
 def diff_reports():
+    branch_no = (request.args.get("branch_no") or "").strip()
+    period = (request.args.get("period") or "").strip()
+
     conn = get_connection()
     try:
         rows = conn.execute("SELECT * FROM diff_reports ORDER BY id DESC LIMIT 500").fetchall()
+        branches = conn.execute("SELECT branch_no, eng_name FROM branches ORDER BY eng_name").fetchall()
+        periods = [
+            r["period"] for r in conn.execute(
+                "SELECT DISTINCT period FROM diff_reports WHERE period != '' ORDER BY period DESC"
+            ).fetchall()
+        ]
     finally:
         conn.close()
-    return render_template("diff_reports.html", active_page="import", rows=rows)
+
+    # branch_labels (set on save - see _save_diff_report) is a ", "-joined
+    # list of branches.eng_name values, not branch_no, since one report can
+    # cover several branches imported together in the same upload. Filtering
+    # in Python (rather than a SQL LIKE) avoids one branch's eng_name
+    # accidentally substring-matching a different, unrelated one.
+    if branch_no:
+        branch_row = next((b for b in branches if b["branch_no"] == branch_no), None)
+        eng_name = branch_row["eng_name"] if branch_row else None
+        rows = [
+            r for r in rows
+            if eng_name and eng_name in [s.strip() for s in (r["branch_labels"] or "").split(",")]
+        ]
+    if period:
+        rows = [r for r in rows if r["period"] == period]
+
+    return render_template(
+        "diff_reports.html",
+        active_page="import",
+        rows=rows,
+        branches=branches,
+        periods=periods,
+        filters={"branch_no": branch_no, "period": period},
+    )
 
 
 @bp.route("/diff-reports/<int:report_id>/download")
@@ -187,10 +220,11 @@ def _upload_id_files(importer_fn, file_type: str):
         return redirect(url_for("import_data.index"))
 
     results = []
+    performed_by = current_username()
     for f in files:
         path = _save_upload(f)
         try:
-            result = importer_fn(path)
+            result = importer_fn(path, performed_by=performed_by)
             result.setdefault("file_type", file_type)
         finally:
             os.remove(path)
@@ -336,12 +370,13 @@ def _run_asset_report_imports(files: list[dict], period: str, source: str) -> li
     files sourced from a configured folder are the user's own and are
     never touched."""
     batch_ids = []
+    performed_by = current_username()
     for item in files:
         path, filename = item["path"], item["filename"]
         if not os.path.exists(path):
             flash(f"{filename}: file no longer available, skipped.", "error")
             continue
-        report = import_asset_report(path, source_label=filename, period=period)
+        report = import_asset_report(path, source_label=filename, period=period, performed_by=performed_by)
         if report.error:
             flash(f"{report.source_file}: {report.error}", "error")
         elif report.batch_id:
@@ -482,7 +517,7 @@ def upload_total_asset():
 
     path = _save_upload(f)
     try:
-        reports = import_total_asset_history(path)
+        reports = import_total_asset_history(path, performed_by=current_username())
     finally:
         os.remove(path)
 
@@ -539,7 +574,8 @@ def import_from_folder():
         batch_ids = _run_asset_report_imports(saved, period, "folder")
         return _result_redirect(batch_ids)
 
-    results = [(os.path.basename(path), import_id_file(path)) for path in xlsx_files]
+    performed_by = current_username()
+    results = [(os.path.basename(path), import_id_file(path, performed_by=performed_by)) for path in xlsx_files]
     return render_template("import_result_id.html", active_page="import", results=results)
 
 
