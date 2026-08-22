@@ -335,15 +335,6 @@ table[data-resizable-table] th { position: relative; }
 
 .scroll-fab:hover { background: var(--brand); }
 
-.header-filter {
-  width: 100%;
-  padding: 0.3rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: 0.82rem;
-  font-weight: 400;
-}
-
 label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.25rem; margin-top: 0.85rem; }
 
 input[type=text], input[type=number], input[type=date], input[type=month], input[type=file], select, textarea {

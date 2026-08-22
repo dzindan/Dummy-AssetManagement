@@ -154,8 +154,9 @@ def search_assets(conn, filters: dict, page: int = 1, per_page: int | None = Non
     rather than one value at a time.
 
     `per_page=None` (the default) returns every matching row unpaginated -
-    the Manage Assets page shows the full result set at once and filters
-    further client-side. Pass a real per_page to paginate instead.
+    used by the Excel export, which dumps the full filtered set rather than
+    just whatever page happens to be on screen. The Manage Assets page
+    itself always passes a real page/per_page.
     """
     where = []
     params: list = []

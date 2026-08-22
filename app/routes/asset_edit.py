@@ -19,8 +19,7 @@ bp = Blueprint("asset_edit", __name__, url_prefix="/assets")
 # Manage Assets used to load every matching row at once (see search_assets'
 # docstring) - fine at a few hundred rows, but painfully slow to render once
 # a deployment's asset_items grew into the thousands. Paginated server-side
-# now; the per-column header filter (app.js) still runs client-side, just
-# scoped to whatever page is currently on screen.
+# now.
 PER_PAGE_OPTIONS = [100, 200, 300, 400, 500, 1000, 2000, 3000, 4000, 5000]
 DEFAULT_PER_PAGE = 200
 
@@ -48,6 +47,7 @@ def _pagination_qs() -> str:
     stale page number along for the ride."""
     pairs = [(k, v) for k in request.args if k != "page" for v in request.args.getlist(k)]
     return urlencode(pairs)
+
 
 # Free-text fields a user can correct by hand (e.g. to resolve a duplicate
 # serial flagged by the cleaning report). branch_no/batch_id/asset_key are

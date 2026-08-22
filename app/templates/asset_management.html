@@ -1,5 +1,20 @@
 {% extends "base.html" %}
 {% block title %}Manage Assets - Asset Management Tool{% endblock %}
+
+{% macro pager() %}
+{% if total_pages > 1 %}
+<div class="pagination">
+  {% if page > 1 %}
+  <a class="btn secondary" href="{{ url_for('asset_edit.index') }}?{{ pagination_qs }}&page={{ page - 1 }}">&laquo; Prev</a>
+  {% endif %}
+  <span class="muted">Page {{ page }} / {{ total_pages }}</span>
+  {% if page < total_pages %}
+  <a class="btn secondary" href="{{ url_for('asset_edit.index') }}?{{ pagination_qs }}&page={{ page + 1 }}">Next &raquo;</a>
+  {% endif %}
+</div>
+{% endif %}
+{% endmacro %}
+
 {% block content %}
 <h1>Manage Assets</h1>
 <p class="muted">
@@ -121,17 +136,7 @@
       data-bulk-delete-next="{{ request.full_path }}">Delete Selected</button>
   </div>
   {% endif %}
-  {% if total_pages > 1 %}
-  <div class="pagination">
-    {% if page > 1 %}
-    <a class="btn secondary" href="{{ url_for('asset_edit.index') }}?{{ pagination_qs }}&page={{ page - 1 }}">&laquo; Prev</a>
-    {% endif %}
-    <span class="muted">Page {{ page }} / {{ total_pages }}</span>
-    {% if page < total_pages %}
-    <a class="btn secondary" href="{{ url_for('asset_edit.index') }}?{{ pagination_qs }}&page={{ page + 1 }}">Next &raquo;</a>
-    {% endif %}
-  </div>
-  {% endif %}
+  {{ pager() }}
   <div class="table-scroll">
   <table data-resizable-table="manage-assets">
     <thead>
@@ -163,16 +168,6 @@
     </tbody>
   </table>
   </div>
-  {% if total_pages > 1 %}
-  <div class="pagination">
-    {% if page > 1 %}
-    <a class="btn secondary" href="{{ url_for('asset_edit.index') }}?{{ pagination_qs }}&page={{ page - 1 }}">&laquo; Prev</a>
-    {% endif %}
-    <span class="muted">Page {{ page }} / {{ total_pages }}</span>
-    {% if page < total_pages %}
-    <a class="btn secondary" href="{{ url_for('asset_edit.index') }}?{{ pagination_qs }}&page={{ page + 1 }}">Next &raquo;</a>
-    {% endif %}
-  </div>
-  {% endif %}
+  {{ pager() }}
 </div>
 {% endblock %}
