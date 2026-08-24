@@ -92,6 +92,7 @@ def create_app() -> Flask:
     from .routes.user_history import bp as user_history_bp
     from .routes.network_check import bp as network_check_bp
     from .routes.user_admin import bp as user_admin_bp
+    from .routes.cucm_scan import bp as cucm_scan_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
@@ -105,6 +106,7 @@ def create_app() -> Flask:
     app.register_blueprint(user_history_bp)
     app.register_blueprint(network_check_bp)
     app.register_blueprint(user_admin_bp)
+    app.register_blueprint(cucm_scan_bp)
 
     register_auth(app)
 

@@ -13,6 +13,7 @@ from ..auth import (
     require_permission,
     set_security_question,
 )
+from ..cucm import get_cucm_config
 from ..db import (
     get_connection,
     get_setting,
@@ -124,6 +125,7 @@ def index():
         default_data_dir=get_default_app_data_dir(),
         lan_url=current_app.config.get("LAN_URL", ""),
         reset_imported_data_options=RESET_IMPORTED_DATA_OPTIONS,
+        cucm_config=get_cucm_config(),
     )
 
 
@@ -177,6 +179,36 @@ def save_general():
         conn.close()
     flash("Settings saved.", "success")
     return redirect(url_for("settings.index"))
+
+
+@bp.route("/cucm", methods=["POST"])
+@require_permission("manage_settings")
+def save_cucm():
+    """CUCM connection details for the CUCM Phone Scan page (app/cucm.py) -
+    same key/value settings table as everything else here, just prefixed
+    (cucm_*) so it can't collide with any other feature's settings."""
+    performed_by = current_username()
+    conn = get_connection()
+    try:
+        for key in ("ip", "axluser", "axlpassword", "riswsdl", "scan_prefixes"):
+            new_value = request.form.get(key, "").strip()
+            setting_key = f"cucm_{key}"
+            old_value = get_setting_on(conn, setting_key, "")
+            if new_value != old_value:
+                # Never write the actual AXL password into the audit trail -
+                # only that it changed, unlike every other setting here.
+                if key == "axlpassword":
+                    logged_old, logged_new = "(hidden)", "(changed)"
+                else:
+                    logged_old, logged_new = old_value, new_value
+                log_activity(conn, "settings", "Updated setting", performed_by=performed_by,
+                             target=setting_key, field=setting_key, old_value=logged_old, new_value=logged_new)
+            set_setting_on(conn, setting_key, new_value)
+        conn.commit()
+    finally:
+        conn.close()
+    flash("CUCM connection settings saved.", "success")
+    return redirect(url_for("settings.index") + "#cucm-settings")
 
 
 @bp.route("/branch-alias/add", methods=["POST"])

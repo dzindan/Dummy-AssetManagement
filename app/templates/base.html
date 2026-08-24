@@ -18,12 +18,13 @@
         <a href="{{ url_for('dashboard.index') }}" class="{{ 'active' if active_page == 'dashboard' else '' }}">Dashboard</a>
         <a href="{{ url_for('import_data.index') }}" class="{{ 'active' if active_page == 'import' else '' }}">Import Data</a>
 
-        <div class="nav-dropdown {{ 'active' if active_page in ('assets', 'user_history', 'network_check') else '' }}">
+        <div class="nav-dropdown {{ 'active' if active_page in ('assets', 'user_history', 'network_check', 'cucm_scan') else '' }}">
           <button type="button" class="nav-dropdown-toggle">Assets <span class="nav-caret">&#9662;</span></button>
           <div class="nav-dropdown-menu">
             <a href="{{ url_for('asset_edit.index') }}" class="{{ 'active' if active_page == 'assets' else '' }}">Manage Assets</a>
             <a href="{{ url_for('user_history.index') }}" class="{{ 'active' if active_page == 'user_history' else '' }}">User History</a>
             <a href="{{ url_for('network_check.index') }}" class="{{ 'active' if active_page == 'network_check' else '' }}">Network Check</a>
+            <a href="{{ url_for('cucm_scan.index') }}" class="{{ 'active' if active_page == 'cucm_scan' else '' }}">CUCM Phone Scan</a>
           </div>
         </div>
 

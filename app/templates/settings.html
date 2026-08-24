@@ -77,6 +77,46 @@
   </form>
 </div>
 
+<div class="panel" id="cucm-settings">
+  <h2>CUCM Connection (IP Phone Scan)</h2>
+  <p class="muted">
+    Lets <a href="{{ url_for('cucm_scan.index') }}">CUCM Phone Scan</a> query your Cisco Call Manager
+    directly for registered IP phones (extension, model, IP) and read each one's serial number from its
+    own web page. Needs an account with the "Standard AXL API Access" role on CUCM.
+  </p>
+  <form method="post" action="{{ url_for('settings.save_cucm') }}">
+    <div class="field-row">
+      <div>
+        <label for="cucm_ip">CUCM IP / hostname</label>
+        <input type="text" id="cucm_ip" name="ip" value="{{ cucm_config.ip }}">
+      </div>
+      <div>
+        <label for="cucm_axluser">AXL username</label>
+        <input type="text" id="cucm_axluser" name="axluser" value="{{ cucm_config.axluser }}">
+      </div>
+      <div>
+        <label for="cucm_axlpassword">AXL password</label>
+        <input type="password" id="cucm_axlpassword" name="axlpassword" value="{{ cucm_config.axlpassword }}">
+      </div>
+      <div>
+        <label for="cucm_riswsdl">Local RISService70 WSDL path (optional)</label>
+        <input type="text" id="cucm_riswsdl" name="riswsdl" value="{{ cucm_config.riswsdl }}"
+               placeholder="Leave blank to fetch it from the CUCM server above">
+      </div>
+      <div>
+        <label for="cucm_scan_prefixes">Auto-split number-mask ranges</label>
+        <input type="text" id="cucm_scan_prefixes" name="scan_prefixes" value="{{ cucm_config.scan_prefixes }}"
+               placeholder="e.g. 1*,2*,3* - blank uses 0* through 9*">
+      </div>
+    </div>
+    <p class="muted" style="margin-top:0.3rem;">
+      The number-mask ranges are used by CUCM Phone Scan's "Auto-split scan" option to cover more phones than
+      CUCM's ~1000-per-request limit - each mask is queried separately and the results are merged.
+    </p>
+    <button type="submit">Save CUCM Settings</button>
+  </form>
+</div>
+
 <div class="panel">
   <h2>Branch Name Aliases</h2>
   <p class="muted">Asset report files often label a branch differently from the official branch master list (e.g. "South Saigon T.O" vs. "South Sai Gon Transaction Office"). Add an alias to map a free-text label straight to the correct branch.</p>

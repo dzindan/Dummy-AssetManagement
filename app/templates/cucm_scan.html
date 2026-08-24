@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}CUCM Phone Scan - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>CUCM Phone Scan</h1>
+<p class="muted">
+  Live IP-phone inventory pulled directly from CUCM (extension, model, IP), plus each phone's serial number
+  scraped from its own web page - finds phones CUCM knows about even before they're imported into Manage Assets.
+  Cross-checked against the current Manage Assets state by IP.
+  <a href="{{ url_for('settings.index') }}#cucm-settings">CUCM connection settings</a>
+</p>
+
+{% if not configured %}
+<div class="flash flash-error">
+  CUCM connection isn't configured yet - set the CUCM IP, AXL username, and AXL password in
+  <a href="{{ url_for('settings.index') }}#cucm-settings">Settings &gt; CUCM Connection</a> first.
+</div>
+{% endif %}
+
+{% if error %}
+<div class="flash flash-error">{{ error }}</div>
+{% endif %}
+
+<div class="panel">
+  <form method="post" action="{{ url_for('cucm_scan.scan') }}">
+    <div class="field-row">
+      <div>
+        <label for="num">Number mask</label>
+        <input type="text" id="num" name="num" value="{{ filters.num }}" maxlength="5" placeholder="*">
+        <p class="muted" style="margin-top:0.3rem;">Ignored when IP mask is filled in, or when Auto-split is checked.</p>
+      </div>
+      <div>
+        <label for="ip">IP mask</label>
+        <input type="text" id="ip" name="ip" value="{{ filters.ip }}" maxlength="18" placeholder="e.g. 10.10.1.*">
+        <p class="muted" style="margin-top:0.3rem;">Takes priority over Number mask when filled in.</p>
+      </div>
+      <div>
+        <label for="model">Model</label>
+        <select id="model" name="model">
+          {% for value, label in model_options %}
+          <option value="{{ value }}" {{ 'selected' if filters.model == value else '' }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label><input type="checkbox" name="autosplit" {{ 'checked' if filters.autosplit else '' }}> Auto-split scan</label>
+        <p class="muted" style="margin-top:0.3rem;">For 1000+ phones (see Settings for the number-mask ranges used).</p>
+      </div>
+      <div style="flex: 0 0 auto; align-self: flex-end;">
+        <button type="submit" {{ 'disabled' if not configured else '' }}>Scan</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+{% if devices is not none %}
+<div class="panel">
+  <p class="muted"><strong>{{ devices | length }}</strong> phone(s) found.</p>
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr>
+        <th>Extension</th><th>IP</th><th>Description</th>
+        <th>Live Model</th><th>Imported Model</th><th>Model</th>
+        <th>Live SN</th><th>Imported Serial</th><th>Serial</th>
+        <th>Branch/Dept</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for d in devices %}
+      <tr>
+        <td>{{ d.num }}</td>
+        <td>{{ d.ip }}</td>
+        <td>{{ d.desc }}</td>
+        <td>{{ d.model }}</td>
+        <td>{{ d.imported_model }}</td>
+        <td>
+          {% if not d.imported %}
+          <span class="badge badge-changed">NOT IMPORTED</span>
+          {% elif d.model_match is none %}
+          <span class="badge badge-unchanged">N/A</span>
+          {% elif d.model_match %}
+          <span class="badge badge-added">MATCH</span>
+          {% else %}
+          <span class="badge badge-removed">MISMATCH</span>
+          {% endif %}
+        </td>
+        <td>{{ d.sn }}</td>
+        <td>{{ d.imported_serial }}</td>
+        <td>
+          {% if not d.imported %}
+          <span class="badge badge-changed">NOT IMPORTED</span>
+          {% elif d.serial_match is none %}
+          <span class="badge badge-unchanged">N/A</span>
+          {% elif d.serial_match %}
+          <span class="badge badge-added">MATCH</span>
+          {% else %}
+          <span class="badge badge-removed">MISMATCH</span>
+          {% endif %}
+        </td>
+        <td>{{ d.imported_branch }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="10" class="muted">No phones matched.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -340,8 +340,13 @@ DEFAULT_STANDARD_MODELS = [
     "HP LASERJET PRO 400 M404DN", "HP LASERJET PRO MFP M1536DNF",
     "HP PROBOOK 440 G1",
     # Cisco (IP phones)
-    "CISCO CP-7821", "CISCO CP-7911G", "CISCO CP-6921", "CISCO CP-7941",
+    "CISCO CP-7821", "CISCO CP-7911G", "CISCO CP-6921", "CISCO CP-6961", "CISCO CP-7941",
     "CISCO CP-7942", "CISCO CP-7962",
+    # Yealink (IP phones) - a different brand mixed into the same IP PHONE
+    # device category as the Cisco phones above; kept as its own manufacturer
+    # section rather than folded into the Cisco aliases, same as every other
+    # brand in this list.
+    "YEALINK SIP-T19 E2",
     # Samsung (monitors)
     "SAMSUNG S22F350FHE", "SAMSUNG S22A330NHE", "SAMSUNG S22F355FHE",
     "SAMSUNG S22D300NY", "SAMSUNG S22E310HY",
@@ -361,18 +366,78 @@ DEFAULT_STANDARD_MODELS = [
 # so this stays conservative on purpose.
 DEFAULT_MODEL_ALIASES = {
     "DELL OPTIPLEX  5080": "DELL OPTIPLEX 5080",
+    # CP-7821 - "-K9" is Cisco's own worldwide-locale SKU suffix (not a
+    # different model), and "CISO" is a plain spelling typo of "CISCO" seen
+    # directly in an imported file - both safe to fold in here, unlike a
+    # genuinely different model number (see the module-level caution above).
     "CP-7821": "CISCO CP-7821",
     "CP - 7821": "CISCO CP-7821",
     "CISCO 7821": "CISCO CP-7821",
     "CP7821": "CISCO CP-7821",
+    "CP 7821-K9": "CISCO CP-7821",
+    "CISCO CP 7821-K9": "CISCO CP-7821",
+    "CISCO CP7821-K9": "CISCO CP-7821",
+    "CISO-7821": "CISCO CP-7821",
+    "CISO 7821": "CISCO CP-7821",
+    # 7822/7823/7824/7825 aren't real Cisco model numbers (confirmed against
+    # Cisco's own RisPort70 model enum - see app/cucm.py's MODEL_NAMES) -
+    # a sequential typo of 7821 seen across several imported files, not
+    # genuinely different hardware, confirmed by the user rather than
+    # guessed (see the module-level caution above on why that matters here).
+    "CISCO CP-7822": "CISCO CP-7821",
+    "CP - 7822": "CISCO CP-7821",
+    "CP-7822": "CISCO CP-7821",
+    "CP-7823": "CISCO CP-7821",
+    "CP-7824": "CISCO CP-7821",
+    "CP-7825": "CISCO CP-7821",
+    "CP7822": "CISCO CP-7821",
+    "CP7823": "CISCO CP-7821",
+    "CP7824": "CISCO CP-7821",
+    "CP7825": "CISCO CP-7821",
+    # CP-7911G
     "CP - 7911": "CISCO CP-7911G",
     "CISCO 7911": "CISCO CP-7911G",
     "CP-7911G": "CISCO CP-7911G",
+    "CP-7911": "CISCO CP-7911G",
+    "CP7911": "CISCO CP-7911G",
+    # CP-6921
     "CP - 6921": "CISCO CP-6921",
     "CISCO 6921": "CISCO CP-6921",
+    "CP-6921": "CISCO CP-6921",
+    "CP6921": "CISCO CP-6921",
+    # CP-6961 - not previously a standard name at all, despite being seen
+    # in real imported files (see the module-level comment above this list).
+    "CP - 6961": "CISCO CP-6961",
+    "CISCO 6961": "CISCO CP-6961",
+    "CP-6961": "CISCO CP-6961",
+    "CP6961": "CISCO CP-6961",
+    # CP-7941
     "CP - 7941": "CISCO CP-7941",
     "CISCO 7941": "CISCO CP-7941",
+    "CP-7941": "CISCO CP-7941",
+    "CP7941": "CISCO CP-7941",
+    # CP-7942
     "CP - 7942": "CISCO CP-7942",
+    "CISCO 7942": "CISCO CP-7942",
+    "CP-7942": "CISCO CP-7942",
+    "CP7942": "CISCO CP-7942",
+    "CP-7942G": "CISCO CP-7942",
+    "CP7942G": "CISCO CP-7942",
+    # CP-7962
+    "CP - 7962": "CISCO CP-7962",
+    "CISCO 7962": "CISCO CP-7962",
+    "CP-7962": "CISCO CP-7962",
+    "CP7962": "CISCO CP-7962",
+    "CP-7962G": "CISCO CP-7962",
+    "CP7962G": "CISCO CP-7962",
+    # Yealink SIP-T19 E2 - confirmed against Yealink's own product page
+    # (yealink.com/en/product-resource/ip-phone-t19pe2). The PoE variant is
+    # officially "SIP-T19P E2", not aliased here since nothing in the real
+    # data distinguishes which variant is actually in use.
+    "T19 E2": "YEALINK SIP-T19 E2",
+    "T19E2": "YEALINK SIP-T19 E2",
+    "SIP-T19 E2": "YEALINK SIP-T19 E2",
+    "YEALINK T19 E2": "YEALINK SIP-T19 E2",
     "SGI-SK5310": "SYNKEY SK5310",
     "SK5310": "SYNKEY SK5310",
     "SGI-SK5320": "SYNKEY SK5320",
@@ -439,6 +504,7 @@ def init_db() -> None:
             )
         _backfill_branch_names(conn)
         _clean_existing_ip_data(conn)
+        _renormalize_model_device(conn)
         _backfill_unmapped(conn, "asset_items", "device_name", "device_aliases", "device_standard_names",
                             "device_unmapped", "raw_name")
         _backfill_unmapped(conn, "asset_items", "status", "status_aliases", "status_standard_names",
@@ -599,6 +665,31 @@ def _clean_existing_ip_data(conn: sqlite3.Connection) -> None:
         new = clean_ip(old)
         if new != old:
             conn.execute("UPDATE asset_items SET ip = ? WHERE ip = ?", (new, old))
+
+
+def _renormalize_model_device(conn: sqlite3.Connection) -> None:
+    """One-time-per-value self-heal for `asset_items.model_device`: it's
+    normalized against model_aliases at import time (see
+    importer.normalize_model_device), but only using whatever aliases
+    existed *then* - a row imported before an alias was added (e.g.
+    "CP-7942G" sitting unmapped because the alias for it didn't exist yet)
+    keeps that stale, un-normalized text forever otherwise, with nothing to
+    ever re-check it. Re-applies the (possibly now more complete) alias
+    table to every distinct existing value; cheap no-op once everything's
+    already canonical. Must run before the model_device _backfill_unmapped()
+    call below, so a value this just resolved isn't queued into Unmapped."""
+    for row in conn.execute(
+        "SELECT DISTINCT model_device FROM asset_items WHERE model_device != ''"
+    ).fetchall():
+        old = row["model_device"]
+        alias_row = conn.execute(
+            "SELECT canonical_name FROM model_aliases WHERE alias = ?", (old.upper(),)
+        ).fetchone()
+        if alias_row and alias_row["canonical_name"] != old:
+            conn.execute(
+                "UPDATE asset_items SET model_device = ? WHERE model_device = ?",
+                (alias_row["canonical_name"], old),
+            )
 
 
 def _seed_permissions_and_roles(conn: sqlite3.Connection) -> None:
