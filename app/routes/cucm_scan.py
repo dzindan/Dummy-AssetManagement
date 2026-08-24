@@ -27,8 +27,12 @@ from ..queries import CURRENT_ASSETS_CTE
 
 bp = Blueprint("cucm_scan", __name__, url_prefix="/cucm-scan")
 
+# 255 is excluded from the sorted, dict-derived part - CUCM's own enum
+# already defines it as "Unknown" (used as the API's wildcard/no-filter
+# value), which would otherwise show up as a second, competing option
+# with the same value as the friendlier "Any" prepended below.
 MODEL_OPTIONS = [("255", "Any")] + sorted(
-    ((str(k), v) for k, v in MODEL_NAMES.items()), key=lambda kv: kv[1]
+    ((str(k), v) for k, v in MODEL_NAMES.items() if k != 255), key=lambda kv: kv[1]
 )
 
 
