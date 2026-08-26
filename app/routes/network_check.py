@@ -169,6 +169,12 @@ def start_scan():
     if not branch_no:
         return jsonify({"error": "Select a branch first."}), 400
 
+    # Hardware (WMI system/disk/monitor/CPU/memory) is by far the slowest
+    # part of a per-host scan - see HARDWARE_TIMEOUT_S in scanner.py - so
+    # it's opt-out per scan rather than always-on, for branches where a
+    # quick alive/hostname/session/uptime pass is all that's needed.
+    include_hardware = bool(body.get("include_hardware", True))
+
     conn = get_connection()
     try:
         rows = get_current_assets(conn, branch_no=branch_no)
@@ -199,6 +205,7 @@ def start_scan():
             "snapshot": snapshot,
             "branch_no": branch_no,
             "branch_label": branch_row["eng_name"] if branch_row else branch_no,
+            "include_hardware": include_hardware,
             "stop_requested": False,
             "worker_done": False,
         }
@@ -214,12 +221,25 @@ def start_scan():
                 state["results"].append(result)
                 state["done"] += 1
 
-        run_scan(targets, on_result, max_workers=DEFAULT_CONCURRENCY, include_hardware=True, should_stop=should_stop)
+        run_scan(
+            targets,
+            on_result,
+            max_workers=DEFAULT_CONCURRENCY,
+            include_hardware=include_hardware,
+            should_stop=should_stop,
+        )
         with _LOCK:
             _SCANS[scan_id]["worker_done"] = True
 
     threading.Thread(target=worker, daemon=True).start()
-    return jsonify({"scan_id": scan_id, "total": len(targets), "branch_label": _SCANS[scan_id]["branch_label"]})
+    return jsonify(
+        {
+            "scan_id": scan_id,
+            "total": len(targets),
+            "branch_label": _SCANS[scan_id]["branch_label"],
+            "include_hardware": include_hardware,
+        }
+    )
 
 
 @bp.route("/scan/<scan_id>/stop", methods=["POST"])
@@ -312,6 +332,7 @@ def scan_status(scan_id: str):
                 "finished": state["worker_done"],
                 "stopped": state["stop_requested"],
                 "branch_label": state["branch_label"],
+                "include_hardware": state["include_hardware"],
                 "results": results,
             }
         )

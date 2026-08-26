@@ -27,6 +27,10 @@
           {% endfor %}
         </select>
       </div>
+      <div>
+        <label><input type="checkbox" id="include_hardware" name="include_hardware" checked> Scan hardware</label>
+        <p class="muted" style="margin-top:0.3rem;">PC/monitor serial, MAC, CPU, RAM. Uncheck for a faster scan (hostname/session/uptime only).</p>
+      </div>
     </div>
     <div class="actions" style="margin-top: 1rem;">
       <button type="submit" id="scan-btn">Start Scan</button>

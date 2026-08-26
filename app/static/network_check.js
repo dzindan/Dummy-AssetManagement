@@ -1,5 +1,6 @@
 const form = document.getElementById("scan-form");
 const branchSelect = document.getElementById("branch_no");
+const includeHardwareCheckbox = document.getElementById("include_hardware");
 const scanBtn = document.getElementById("scan-btn");
 const stopBtn = document.getElementById("stop-btn");
 const progressEl = document.getElementById("progress");
@@ -17,6 +18,7 @@ let pollTimer = null;
 let currentScanId = null;
 let lastResults = [];
 let ignoredAll = false;
+let scanIncludesHardware = true;
 
 function escapeHtml(str) {
   const div = document.createElement("div");
@@ -70,6 +72,15 @@ function listOrValue(list, value) {
   return escapeHtml(value) || "-";
 }
 
+// Hardware-derived live cells (PC/monitor serial, MAC) read as a plain "-"
+// when nothing came back, indistinguishable from "we asked and got nothing"
+// - which is misleading when hardware scanning was unchecked entirely and
+// nothing was ever asked for.
+function hardwareCell(list, value) {
+  if (!scanIncludesHardware) return '<span class="muted">Not scanned</span>';
+  return listOrValue(list, value);
+}
+
 // Every field a mismatch can be corrected on: how to read its live value off
 // a compare object, which asset_items id(s) an "Update" writes to, and the
 // field key the /apply endpoint expects.
@@ -114,11 +125,11 @@ function renderResults(results) {
         <td>${escapeHtml(r.ip)}</td>
         <td>${r.alive ? "Alive" : "No response"}</td>
         <td>${escapeHtml(r.hostname) || "-"}</td>
-        <td>${escapeHtml(c.live_mac) || "-"}</td>
-        <td>${listOrValue(null, c.live_pc_serial)}</td>
+        <td>${hardwareCell(null, c.live_mac)}</td>
+        <td>${hardwareCell(null, c.live_pc_serial)}</td>
         <td>${importedCell(r.ip, UPDATABLE_FIELDS[0], c, c.imported_pc_serial)}</td>
         <td>${matchBadge(c.pc_match)}</td>
-        <td>${listOrValue(c.live_monitor_serials)}</td>
+        <td>${hardwareCell(c.live_monitor_serials)}</td>
         <td>${importedCell(r.ip, UPDATABLE_FIELDS[1], c, c.imported_monitor_serial)}</td>
         <td>${matchBadge(c.monitor_match)}</td>
         <td>${listOrValue(c.live_users)}</td>
@@ -207,6 +218,7 @@ async function poll(scanId) {
     showScanError(data.error || "Error fetching scan results.", { stopPolling: true });
     return;
   }
+  scanIncludesHardware = data.include_hardware !== false;
   progressEl.textContent = `Scanning ${data.branch_label}: ${data.done}/${data.total}`;
   table.style.display = "table";
   emptyHint.style.display = "none";
@@ -262,7 +274,7 @@ form.addEventListener("submit", async (e) => {
   const resp = await fetch("/network-check/scan", {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Requested-With": "fetch" },
-    body: JSON.stringify({ branch_no: branchNo }),
+    body: JSON.stringify({ branch_no: branchNo, include_hardware: includeHardwareCheckbox.checked }),
   });
   let data;
   try {
@@ -278,6 +290,7 @@ form.addEventListener("submit", async (e) => {
   }
 
   currentScanId = data.scan_id;
+  scanIncludesHardware = data.include_hardware !== false;
   progressEl.textContent = `Scanning ${data.branch_label}: 0/${data.total}`;
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(() => poll(data.scan_id), 1000);
