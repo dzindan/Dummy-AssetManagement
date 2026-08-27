@@ -35,7 +35,7 @@
 })();
 
 // Resizable table columns - opt-in via <table data-resizable-table="some-id">
-// (Manage Assets: 13 columns is too wide for everyone's monitor to show
+// (Manage Assets: 14 columns is too wide for everyone's monitor to show
 // comfortably at once). Widths start at whatever the browser's normal
 // content-based auto layout already picked (measured before switching to
 // table-layout:fixed, so nothing jumps on load), then a drag handle on each

@@ -1,6 +1,7 @@
 """Tiny, dependency-free string helpers shared across importer/db/routes
 (kept separate from importer.py to avoid a circular import with db.py)."""
 
+import datetime as dt
 import ipaddress
 import re
 
@@ -77,3 +78,18 @@ def clean_ip(value) -> str:
     except ValueError:
         return ""
     return candidate
+
+
+def usage_duration_years(handover_date: str) -> str:
+    """How long a device has been in use, as a plain calendar-year count
+    (current year minus the handover_date's own year), not a precise
+    day-accurate elapsed time. Blank/unparseable/future-dated input
+    returns "" so callers (Manage Assets table, Branch Detail, their
+    exports) render a plain dash rather than a bogus "0 years"."""
+    text = (handover_date or "").strip()
+    if len(text) < 4 or not text[:4].isdigit():
+        return ""
+    years = dt.date.today().year - int(text[:4])
+    if years < 0:
+        return ""
+    return f"{years} year" if years == 1 else f"{years} years"

@@ -14,6 +14,7 @@ from openpyxl.styles import Font
 from openpyxl.worksheet.worksheet import Worksheet
 
 from .diffing import COMPARE_FIELDS, FIELD_LABELS
+from .text_utils import usage_duration_years
 
 XLSX_MIMETYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -89,6 +90,7 @@ ASSET_ROW_COLUMNS: list[ColumnSpec] = [
     ("Position", "position"),
     ("Remark", "remark"),
     ("Handover Date", "handover_date"),
+    ("Usage Duration", lambda r: usage_duration_years(r["handover_date"])),
 ]
 
 

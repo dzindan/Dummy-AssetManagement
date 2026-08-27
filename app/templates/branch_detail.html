@@ -94,7 +94,7 @@
   <div class="table-scroll">
   <table>
     <thead>
-      <tr><th>Device</th><th>Model</th><th>Serial/Tag</th><th>Status</th><th>Full Name</th><th>User ID</th><th>Position</th><th>Handover Date</th><th></th></tr>
+      <tr><th>Device</th><th>Model</th><th>Serial/Tag</th><th>Status</th><th>Full Name</th><th>User ID</th><th>Position</th><th>Handover Date</th><th>Usage Duration</th><th></th></tr>
     </thead>
     <tbody>
       {% for a in assets %}
@@ -107,10 +107,11 @@
         <td>{{ a['user_id_raw'] }}</td>
         <td>{{ a['position'] }}</td>
         <td>{{ a['handover_date'] }}</td>
+        <td>{{ a['handover_date'] | usage_duration }}</td>
         <td><a class="btn secondary" href="{{ url_for('asset_edit.edit', asset_id=a['id'], next=request.path) }}">Edit</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="9" class="muted">No assets on record for this branch.</td></tr>
+      <tr><td colspan="10" class="muted">No assets on record for this branch.</td></tr>
       {% endfor %}
     </tbody>
   </table>

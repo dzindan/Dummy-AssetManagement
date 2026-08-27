@@ -6,6 +6,7 @@ from flask import Flask, Response
 from .auth import register_auth
 from .db import get_setting, init_db, set_setting
 from .paths import get_app_data_dir_status, get_bundle_dir
+from .text_utils import usage_duration_years
 from .version import APP_VERSION
 
 
@@ -41,6 +42,11 @@ def create_app() -> Flask:
         static_folder=os.path.join(bundle_dir, "app", "static"),
     )
     app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # 64 MB upload cap
+    # "3 years" from a handover_date - used by Manage Assets/Branch Detail's
+    # HTML tables (their .xlsx exports use the same usage_duration_years()
+    # directly, via exports.ASSET_ROW_COLUMNS, since a workbook cell has no
+    # Jinja filter to run).
+    app.jinja_env.filters["usage_duration"] = usage_duration_years
 
     # get_app_data_dir_status() (used by init_db -> get_connection -> get_db_path)
     # already falls back to the default location on its own if a configured

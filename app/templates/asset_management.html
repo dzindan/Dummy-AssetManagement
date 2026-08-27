@@ -142,7 +142,7 @@
     <thead>
       <tr>
         <th><input type="checkbox" data-select-all="asset-row-checkbox"></th>
-        <th>Branch</th><th>Device</th><th>Model</th><th>Serial/Tag</th><th>Status</th><th>Full Name</th><th>User ID</th><th>Position</th><th>Remark</th><th>Handover Date</th><th>Period</th><th></th>
+        <th>Branch</th><th>Device</th><th>Model</th><th>Serial/Tag</th><th>Status</th><th>Full Name</th><th>User ID</th><th>Position</th><th>Remark</th><th>Handover Date</th><th>Usage Duration</th><th>Period</th><th></th>
       </tr>
     </thead>
     <tbody>
@@ -159,11 +159,12 @@
         <td>{{ a['position'] }}</td>
         <td>{{ a['remark'] }}</td>
         <td>{{ a['handover_date'] }}</td>
+        <td>{{ a['handover_date'] | usage_duration }}</td>
         <td>{{ a['period'] }}</td>
         <td><a class="btn secondary" href="{{ url_for('asset_edit.edit', asset_id=a['id'], next=request.full_path) }}">Edit</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="13" class="muted">No assets match these filters.</td></tr>
+      <tr><td colspan="14" class="muted">No assets match these filters.</td></tr>
       {% endfor %}
     </tbody>
   </table>
