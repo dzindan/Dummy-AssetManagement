@@ -89,6 +89,12 @@ computers on the same office network.
     just shows every IP as "No response," which is a network/permissions
     condition, not a data problem. See §4 for how live results are matched
     against imported rows.
+    A **Scan hardware** checkbox (checked by default) can be unchecked to
+    skip the WMI hardware queries entirely - by far the slowest step per
+    host - for a much faster pass when only "is it alive / who's logged in"
+    is needed. The hardware-derived columns show "Not scanned" instead of a
+    bare "-" when this is off, so that's never confused with a live read
+    that came back empty.
 14. **Export duplicates to Excel**: wherever duplicate serials are shown -
     the per-import Cleaning Report, and the system-wide Duplicate Check
     page - an **Export to Excel** link downloads exactly those flagged rows
@@ -128,7 +134,13 @@ computers on the same office network.
     password?" on the login page asks it back) rather than needing another
     Admin to reset it. See §8 for what this login system does and doesn't
     cover.
-19. **Activity Log** (Settings → Activity Log): a general-purpose audit
+19. **Usage Duration** column (Manage Assets, Branch Detail, and their
+    Excel exports, right next to Handover Date): a computed "how long has
+    this been in use" figure - a plain calendar-year count (current year
+    minus the Handover Date's own year), not a day-accurate elapsed time.
+    Blank or unparseable Handover Date shows as blank rather than a bogus
+    "0 years".
+20. **Activity Log** (Settings → Activity Log): a general-purpose audit
     trail (`activity_log` table, `db.log_activity()`) for every hand-edit
     that doesn't already have its own dedicated log page - Manage Assets
     edits (field-level old/new value, only for fields that actually
@@ -142,6 +154,23 @@ computers on the same office network.
     over forms record who generated them in `handover_records.created_by`
     directly rather than through this table, since History already is
     their dedicated log.
+21. **CUCM Phone Scan** (Assets → CUCM Phone Scan): queries a Cisco Call
+    Manager (CUCM) directly over its AXL/RisPort70 API for currently-
+    registered IP phones (by extension mask, IP mask, or model), rather
+    than only checking phones already sitting in imported data - finds
+    phones CUCM knows about even before they're imported into Manage
+    Assets. Each phone's serial number is scraped from its own embedded web
+    page (CUCM's API doesn't expose serial numbers). Cross-checks every
+    scanned phone against the current Manage Assets state by IP: Serial and
+    Model both get a MATCH/MISMATCH/NOT IMPORTED badge - Model comparison
+    runs the live model name through the same Model Mapping standard-name
+    table used at import time, not an ad-hoc rule. An **Auto-split scan**
+    option splits the query across configurable number-mask ranges
+    (Settings → CUCM Connection) to work around CUCM's ~1000-device-per-
+    request limit. Connection details (CUCM IP, AXL username/password,
+    optional local WSDL path, auto-split ranges) live in Settings → CUCM
+    Connection - the AXL password is never written in plaintext to the
+    Activity Log, only that it changed.
 
 ---
 
@@ -177,10 +206,19 @@ app/
   diffing.py                Per-branch two-batch diff (added/removed/changed)
   analytics.py               Item-count-by-month trend queries
   charts.py                   Inline-SVG line chart renderer
-  handover.py                  Hand-over .docx rendering + history logging
+  handover.py                  Hand-over .docx rendering + history logging +
+                                 stamping asset_items.handover_date (§6)
+  text_utils.py                 Tiny string/date helpers (IP cleaning,
+                                 usage_duration_years, ...) shared across
+                                 importer/db/routes
+  scanner.py                     Network Check's ping/quser/WMI probes
+  cucm.py                         CUCM AXL/RisPort70 client for CUCM Phone
+                                   Scan (§1 #21) - connection config lives in
+                                   the settings table, not a file
   routes/                       One module per page (dashboard, import_data,
                                  lookup, history, settings, branch_detail,
-                                 asset_edit, user_history) - asset_edit.py
+                                 asset_edit, user_history, network_check,
+                                 cucm_scan, user_admin) - asset_edit.py
                                  serves both the Manage Assets list/filter
                                  page and the single-asset edit form;
                                  update_compare.py is now just the Excel
@@ -709,7 +747,13 @@ other folder (a drive with more space, a shared network path, etc.):
    Nothing is saved yet.
 5. **Confirm & Download** is the only action that renders the `.docx` and
    writes a row to the hand-over history — clicking Review, or navigating
-   away, never logs anything.
+   away, never logs anything. It also stamps every included asset's
+   `handover_date` in Manage Assets with the form's own Hand-Over Date
+   (`handover.apply_handover_date()`) — previously only the history log knew
+   this date; Manage Assets kept whatever an import last carried, often
+   blank. Logged to Activity Log like a manual edit, only when the value
+   actually changes (re-generating a form with the same date doesn't spam
+   the log).
 
 ### The template itself
 
