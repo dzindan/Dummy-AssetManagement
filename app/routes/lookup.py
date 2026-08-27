@@ -4,7 +4,7 @@ from flask import Blueprint, flash, redirect, render_template, request, url_for
 
 from ..auth import current_username, require_permission
 from ..db import get_connection, get_setting
-from ..handover import ASSET_CONDITIONS, HO_TYPES, REASONS, record_handover, render_handover_docx
+from ..handover import ASSET_CONDITIONS, HO_TYPES, REASONS, apply_handover_date, record_handover, render_handover_docx
 from ..importer import find_user, normalize_user_id
 from ..queries import get_branch, get_current_assets, search_current_assets_by_serial
 from ..text_utils import strip_bank_prefix
@@ -181,6 +181,15 @@ def generate():
     # writes the .docx and logs it. Reviewing never touches the log.
     docx_path = render_handover_docx(data)
     record_id = record_handover(data, docx_path, created_by=current_username())
+
+    # The date on the form itself becomes each included asset's recorded
+    # hand-over date in Manage Assets - the same "ho_date" already used on
+    # the printed form/handover_records, applied to asset_items too, since
+    # that's the actual field an import or manual edit would otherwise
+    # leave blank/stale.
+    apply_handover_date(
+        [a["id"] for a in assets], data["ho_date"], performed_by=current_username()
+    )
 
     return redirect(url_for("lookup.success", record_id=record_id))
 

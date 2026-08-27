@@ -9,7 +9,7 @@ import os
 
 from docxtpl import DocxTemplate
 
-from .db import get_connection
+from .db import get_connection, log_activity
 from .paths import get_handover_template_path, get_handovers_dir
 
 # ASSIGNMENT/TEMP hand equipment OUT to the employee; RETURN gets it back IN.
@@ -32,7 +32,7 @@ def _box(selected: bool) -> str:
     return CHECKED if selected else UNCHECKED
 
 
-def _resolve_ho_date(ho_date: str | None) -> dt.date:
+def resolve_ho_date(ho_date: str | None) -> dt.date:
     """`ho_date` is an HTML <input type=date> value ("YYYY-MM-DD"). Falls
     back to today (the system date) if missing or unparseable."""
     if ho_date:
@@ -52,7 +52,7 @@ def render_handover_docx(data: dict) -> str:
     .docx path.
     """
     now = dt.datetime.now()
-    ho_date = _resolve_ho_date(data.get("ho_date"))
+    ho_date = resolve_ho_date(data.get("ho_date"))
     assets = []
     for i, a in enumerate(data.get("assets", []), start=1):
         assets.append(
@@ -111,7 +111,7 @@ def record_handover(data: dict, docx_path: str, created_by: str = "") -> int:
     conn = get_connection()
     try:
         now = dt.datetime.now().isoformat(timespec="seconds")
-        ho_date = _resolve_ho_date(data.get("ho_date")).isoformat()
+        ho_date = resolve_ho_date(data.get("ho_date")).isoformat()
         cur = conn.execute(
             """
             INSERT INTO handover_records (
@@ -143,5 +143,34 @@ def record_handover(data: dict, docx_path: str, created_by: str = "") -> int:
         )
         conn.commit()
         return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def apply_handover_date(asset_ids: list[int], ho_date: str | None, performed_by: str = "") -> None:
+    """Stamps asset_items.handover_date with the hand-over form's own date
+    for every asset actually included on that form, once the form is
+    generated - so Manage Assets reflects when the equipment was really
+    handed over, rather than whatever date (often blank) an import last
+    happened to carry for that row. Mirrors asset_edit.py's edit route:
+    only rows whose handover_date is actually changing get updated/logged."""
+    new_value = resolve_ho_date(ho_date).isoformat()
+    conn = get_connection()
+    try:
+        for asset_id in asset_ids:
+            row = conn.execute(
+                "SELECT handover_date FROM asset_items WHERE id = ?", (asset_id,)
+            ).fetchone()
+            if row is None or (row["handover_date"] or "") == new_value:
+                continue
+            conn.execute(
+                "UPDATE asset_items SET handover_date = ? WHERE id = ?", (new_value, asset_id)
+            )
+            log_activity(
+                conn, "asset", "Hand-over form generated", performed_by=performed_by,
+                target=f"Asset #{asset_id}", field="handover_date",
+                old_value=row["handover_date"] or "", new_value=new_value,
+            )
+        conn.commit()
     finally:
         conn.close()
