@@ -624,7 +624,7 @@ def peek_asset_report_branch(conn, path: str) -> dict:
     changes made for this peek."""
     try:
         wb = openpyxl.load_workbook(path, data_only=True)
-    except Exception as exc:  # noqa: BLE001 - just means the check is skipped, real import will report it
+    except Exception:  # noqa: BLE001 - just means the check is skipped, real import will report it
         return {"branch_no": "", "branch_matched": "", "branch_hint": ""}
 
     match = detect_equipment_sheet(wb)

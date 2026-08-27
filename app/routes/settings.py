@@ -13,7 +13,7 @@ from ..auth import (
     require_permission,
     set_security_question,
 )
-from ..cucm import get_cucm_config
+from ..cucm import CUCM_SETTING_KEYS, get_cucm_config
 from ..db import (
     get_connection,
     get_setting,
@@ -190,7 +190,7 @@ def save_cucm():
     performed_by = current_username()
     conn = get_connection()
     try:
-        for key in ("ip", "axluser", "axlpassword", "riswsdl", "scan_prefixes"):
+        for key in CUCM_SETTING_KEYS:
             new_value = request.form.get(key, "").strip()
             setting_key = f"cucm_{key}"
             old_value = get_setting_on(conn, setting_key, "")

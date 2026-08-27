@@ -35,10 +35,11 @@ disable_warnings(InsecureRequestWarning)
 # Settings value instead of a hardcoded list.
 DEFAULT_SCAN_PREFIXES = ["0*", "1*", "2*", "3*", "4*", "5*", "6*", "7*", "8*", "9*"]
 
-# settings-table keys, all prefixed so they can't collide with any other
-# feature's own settings (see db.py's settings table - a flat key/value
-# store shared by every feature).
-CUCM_SETTING_KEYS = ("cucm_ip", "cucm_axluser", "cucm_axlpassword", "cucm_riswsdl", "cucm_scan_prefixes")
+# Config field names - each stored in the settings table under a
+# "cucm_" prefix (see db.py's settings table, a flat key/value store
+# shared by every feature) so they can't collide with any other
+# feature's own settings.
+CUCM_SETTING_KEYS = ("ip", "axluser", "axlpassword", "riswsdl", "scan_prefixes")
 
 
 def get_cucm_config() -> dict:
@@ -47,13 +48,7 @@ def get_cucm_config() -> dict:
     derived URL when none is explicitly set."""
     conn = get_connection()
     try:
-        return {
-            "ip": get_setting_on(conn, "cucm_ip", "") or "",
-            "axluser": get_setting_on(conn, "cucm_axluser", "") or "",
-            "axlpassword": get_setting_on(conn, "cucm_axlpassword", "") or "",
-            "riswsdl": get_setting_on(conn, "cucm_riswsdl", "") or "",
-            "scan_prefixes": get_setting_on(conn, "cucm_scan_prefixes", "") or "",
-        }
+        return {key: get_setting_on(conn, f"cucm_{key}", "") or "" for key in CUCM_SETTING_KEYS}
     finally:
         conn.close()
 
@@ -61,7 +56,7 @@ def get_cucm_config() -> dict:
 def save_cucm_config(values: dict) -> None:
     conn = get_connection()
     try:
-        for key in ("ip", "axluser", "axlpassword", "riswsdl", "scan_prefixes"):
+        for key in CUCM_SETTING_KEYS:
             set_setting_on(conn, f"cucm_{key}", values.get(key, ""))
         conn.commit()
     finally:
