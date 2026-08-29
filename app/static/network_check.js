@@ -20,33 +20,35 @@ let lastResults = [];
 let ignoredAll = false;
 let scanIncludesHardware = true;
 
+// Persisted so results survive navigating away and back (nav links are real
+// page loads, not SPA routes) or reopening the tab - cleared only when a new
+// scan actually starts, per "keep results until the next scan" requirement.
+const SCAN_STORAGE_KEY = "networkCheckScan";
+
+function saveScanState(scanId, branchNo, includeHardware) {
+  try {
+    sessionStorage.setItem(SCAN_STORAGE_KEY, JSON.stringify({ scanId, branchNo, includeHardware }));
+  } catch {
+    // Storage unavailable (private mode, quota) - restoring on reload just won't work.
+  }
+}
+
+function clearScanState() {
+  try {
+    sessionStorage.removeItem(SCAN_STORAGE_KEY);
+  } catch {
+    // See saveScanState.
+  }
+}
+
 function escapeHtml(str) {
   const div = document.createElement("div");
   div.textContent = str ?? "";
   return div.innerHTML;
 }
 
-// Every fetch() below reads this instead of calling resp.json() directly.
-// A session that expires mid-scan makes the server redirect to the login
-// page's HTML instead of returning JSON - resp.json() would throw and, left
-// uncaught, that failure is invisible (no error banner, results just never
-// show up again). Centralizing the parse means every call site gets the
-// same clear "session expired" message instead of a silent dead end.
-async function readJson(resp) {
-  let data = null;
-  try {
-    data = await resp.json();
-  } catch {
-    // Not JSON - most likely a login-page redirect from an expired session.
-  }
-  if (resp.status === 401) {
-    throw new Error((data && data.error) || "Your session has expired. Please log in again.");
-  }
-  if (data === null) {
-    throw new Error(`Unexpected response from server (HTTP ${resp.status}).`);
-  }
-  return data;
-}
+// readJson() (every fetch() below reads its response through it) now lives
+// in api_utils.js, loaded by network_check.html before this file.
 
 // Shared by poll() and the scan-start submit handler below - both reset the
 // same set of controls and show the same error banner on failure; poll()
@@ -215,6 +217,7 @@ async function poll(scanId) {
     return;
   }
   if (!resp.ok) {
+    if (resp.status === 404) clearScanState();
     showScanError(data.error || "Error fetching scan results.", { stopPolling: true });
     return;
   }
@@ -256,8 +259,10 @@ form.addEventListener("submit", async (e) => {
   progressEl.textContent = "";
   bulkStatus.textContent = "";
   bulkActions.style.display = "none";
+  emptyHint.style.display = "block";
   ignoredAll = false;
   lastResults = [];
+  clearScanState();
 
   const branchNo = branchSelect.value;
   if (!branchNo) {
@@ -292,7 +297,68 @@ form.addEventListener("submit", async (e) => {
   currentScanId = data.scan_id;
   scanIncludesHardware = data.include_hardware !== false;
   progressEl.textContent = `Scanning ${data.branch_label}: 0/${data.total}`;
+  saveScanState(data.scan_id, branchNo, includeHardwareCheckbox.checked);
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(() => poll(data.scan_id), 1000);
   poll(data.scan_id);
 });
+
+// Runs once on every page load. A saved scan id from a previous visit (same
+// tab) means the user navigated away and back, or reopened this tab - pull
+// the latest state for it straight from the server and, if it's still
+// running, keep polling. A 404 (server restarted, scan_id unknown) or any
+// other fetch failure just means there's nothing to restore - fall back to
+// the normal empty state silently rather than surfacing an error banner for
+// a scan the user never asked about this load.
+async function restoreScan() {
+  let saved = null;
+  try {
+    saved = JSON.parse(sessionStorage.getItem(SCAN_STORAGE_KEY) || "null");
+  } catch {
+    saved = null;
+  }
+  if (!saved || !saved.scanId) return;
+
+  let resp;
+  try {
+    resp = await fetch(`/network-check/scan/${saved.scanId}`, { headers: { "X-Requested-With": "fetch" } });
+  } catch {
+    return;
+  }
+  if (!resp.ok) {
+    if (resp.status === 404) clearScanState();
+    return;
+  }
+  let data;
+  try {
+    data = await readJson(resp);
+  } catch {
+    return;
+  }
+
+  if (saved.branchNo) branchSelect.value = saved.branchNo;
+  includeHardwareCheckbox.checked = saved.includeHardware !== false;
+  currentScanId = saved.scanId;
+  scanIncludesHardware = data.include_hardware !== false;
+  table.style.display = "table";
+  emptyHint.style.display = "none";
+  renderResults(data.results);
+
+  if (data.finished) {
+    progressEl.textContent = data.stopped
+      ? `Stopped: ${data.done}/${data.total}`
+      : `Done: ${data.done}/${data.total}`;
+    exportLink.href = `/network-check/scan/${saved.scanId}/export.xlsx`;
+    exportLink.style.display = "inline-block";
+  } else {
+    progressEl.textContent = `Scanning ${data.branch_label}: ${data.done}/${data.total}`;
+    scanBtn.disabled = true;
+    stopBtn.disabled = false;
+    stopBtn.textContent = "Stop";
+    stopBtn.style.display = "inline-block";
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(() => poll(saved.scanId), 1000);
+  }
+}
+
+restoreScan();

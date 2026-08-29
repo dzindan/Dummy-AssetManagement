@@ -23,7 +23,7 @@ from flask import Blueprint, jsonify, render_template, request
 
 from ..auth import require_permission
 from ..db import get_connection
-from ..exports import build_workbook, send_workbook
+from ..exports import build_workbook, dated_download_name, match_text, send_workbook
 from ..paths import safe_filename
 from ..queries import get_branch, get_branches_with_current_assets, get_current_assets
 from ..scanner import DEFAULT_CONCURRENCY, run_scan
@@ -338,12 +338,6 @@ def scan_status(scan_id: str):
         )
 
 
-def _match_text(value: bool | None) -> str:
-    if value is None:
-        return "N/A"
-    return "MATCH" if value else "MISMATCH"
-
-
 NETWORK_CHECK_COLUMNS = [
     ("IP", "ip"),
     ("Alive", lambda r: "Yes" if r["alive"] else "No"),
@@ -351,13 +345,13 @@ NETWORK_CHECK_COLUMNS = [
     ("MAC Address", lambda r: r["compare"]["live_mac"]),
     ("PC Serial (Live)", lambda r: r["compare"]["live_pc_serial"]),
     ("PC Serial (Imported)", lambda r: r["compare"]["imported_pc_serial"]),
-    ("PC Match", lambda r: _match_text(r["compare"]["pc_match"])),
+    ("PC Match", lambda r: match_text(r["compare"]["pc_match"])),
     ("Monitor Serial (Live)", lambda r: ", ".join(r["compare"]["live_monitor_serials"])),
     ("Monitor Serial (Imported)", lambda r: r["compare"]["imported_monitor_serial"]),
-    ("Monitor Match", lambda r: _match_text(r["compare"]["monitor_match"])),
+    ("Monitor Match", lambda r: match_text(r["compare"]["monitor_match"])),
     ("Logged-on User (Live)", lambda r: ", ".join(r["compare"]["live_users"])),
     ("User (Imported)", lambda r: r["compare"]["imported_user"]),
-    ("User Match", lambda r: _match_text(r["compare"]["user_match"])),
+    ("User Match", lambda r: match_text(r["compare"]["user_match"])),
 ]
 NETWORK_CHECK_COLUMN_WIDTHS = [16, 8, 20, 18, 22, 22, 12, 22, 22, 14, 22, 22, 12]
 
@@ -373,7 +367,7 @@ def export_xlsx(scan_id: str):
 
     wb = build_workbook("Network Check", NETWORK_CHECK_COLUMNS, results, widths=NETWORK_CHECK_COLUMN_WIDTHS)
     safe_branch = safe_filename(branch_label, fallback="branch")
-    return send_workbook(wb, f"network_check_{safe_branch}.xlsx")
+    return send_workbook(wb, dated_download_name(f"network_check_{safe_branch}", with_time=True))
 
 
 NETWORK_CHECK_LOG_SQL = """
@@ -412,4 +406,4 @@ def export_log():
     finally:
         conn.close()
     wb = build_workbook("Network Check Log", NETWORK_CHECK_LOG_EXPORT_COLUMNS, rows)
-    return send_workbook(wb, "network_check_log.xlsx")
+    return send_workbook(wb, dated_download_name("network_check_log"))

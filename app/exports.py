@@ -5,6 +5,7 @@ into a downloadable .xlsx, instead of constructing a Workbook inline."""
 
 from __future__ import annotations
 
+import datetime as dt
 import io
 from typing import Any, Callable, Iterable, Sequence
 
@@ -17,6 +18,31 @@ from .diffing import COMPARE_FIELDS, FIELD_LABELS
 from .text_utils import usage_duration_years
 
 XLSX_MIMETYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def dated_download_name(base: str, *, with_time: bool = False) -> str:
+    """`base` (no extension) -> "{base}_{today}.xlsx" so a downloaded report
+    carries the date it was generated - repeated exports of the same report
+    type don't silently overwrite each other in a Downloads folder, and a
+    file is identifiable on its own once it's sitting next to others.
+    `with_time=True` also appends a time-of-day, for reports (live network/
+    CUCM scans) that can reasonably be re-run and re-exported several times
+    within the same day."""
+    stamp = dt.datetime.now().strftime("%Y-%m-%d_%H%M%S") if with_time else dt.date.today().isoformat()
+    return f"{base}_{stamp}.xlsx"
+
+
+def match_text(value: bool | None) -> str:
+    """Renders one of the tri-state MATCH/MISMATCH/N/A comparison flags
+    live-scan cross-checks produce (Network Check's pc_match/monitor_match/
+    user_match, CUCM Phone Scan's model_match/serial_match/user_match - see
+    each module's compare_result()/_with_import_crosscheck()) as export
+    text. None means "nothing live to compare against" (see those
+    functions' own docstrings on when that happens), not a mismatch."""
+    if value is None:
+        return "N/A"
+    return "MATCH" if value else "MISMATCH"
+
 
 # A column is (header_label, key_or_getter). A string key reads row[key]
 # (works for both sqlite3.Row and dict); a callable is called as getter(row)

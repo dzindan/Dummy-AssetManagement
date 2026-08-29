@@ -5,8 +5,13 @@
 <p class="muted">
   Live IP-phone inventory pulled directly from CUCM (extension, model, IP), plus each phone's serial number
   scraped from its own web page - finds phones CUCM knows about even before they're imported into Manage Assets.
-  Cross-checked against the current Manage Assets state by IP.
+  Cross-checked against the current Manage Assets state by IP: model, serial, and the assigned user recorded
+  there. When Model or Serial is mismatched, click Update on that row to write the live CUCM value into the
+  database. CUCM's API doesn't report a phone's actual assigned owner, so the User column is a best-effort match
+  against the phone's Description text instead - treat a MISMATCH there as "worth double-checking", not certain,
+  which is why User has no Update button.
   <a href="{{ url_for('settings.index') }}#cucm-settings">CUCM connection settings</a>
+  &middot; <a href="{{ url_for('network_check.log') }}">View Update Log</a>
 </p>
 
 {% if not configured %}
@@ -55,25 +60,34 @@
 {% if devices is not none %}
 <div class="panel">
   <p class="muted"><strong>{{ devices | length }}</strong> phone(s) found.</p>
+  {% if scan_id %}
+  <p>
+    <a class="btn secondary" href="{{ url_for('cucm_scan.export_xlsx', scan_id=scan_id) }}">Export to Excel</a>
+  </p>
+  {% endif %}
+  <div id="cucm-bulk-actions" class="actions" style="display:none; margin-bottom:1rem;">
+    <button type="button" id="cucm-update-all-btn">Update All Mismatches</button>
+    <span id="cucm-bulk-status" class="muted"></span>
+  </div>
   <div class="table-scroll">
   <table>
     <thead>
       <tr>
-        <th>Extension</th><th>IP</th><th>Description</th>
+        <th>Extension</th><th>IP</th>
         <th>Live Model</th><th>Imported Model</th><th>Model</th>
         <th>Live SN</th><th>Imported Serial</th><th>Serial</th>
+        <th>Imported User</th><th>Imported User ID</th><th>User</th>
         <th>Branch/Dept</th>
       </tr>
     </thead>
-    <tbody>
+    <tbody id="cucm-results-body">
       {% for d in devices %}
-      <tr>
+      <tr data-ip="{{ d.ip }}">
         <td>{{ d.num }}</td>
         <td>{{ d.ip }}</td>
-        <td>{{ d.desc }}</td>
         <td>{{ d.model }}</td>
-        <td>{{ d.imported_model }}</td>
-        <td>
+        <td class="cucm-imported-cell" data-field="model">{{ d.imported_model }}</td>
+        <td class="cucm-match-cell" data-field="model">
           {% if not d.imported %}
           <span class="badge badge-changed">NOT IMPORTED</span>
           {% elif d.model_match is none %}
@@ -82,11 +96,14 @@
           <span class="badge badge-added">MATCH</span>
           {% else %}
           <span class="badge badge-removed">MISMATCH</span>
+          {% if d.imported_asset_id and d.live_model_normalized %}
+          <button type="button" class="update-btn" data-update='{{ {"asset_id": d.imported_asset_id, "field": "model", "value": d.live_model_normalized, "ip": d.ip, "scan_id": scan_id} | tojson }}'>Update</button>
+          {% endif %}
           {% endif %}
         </td>
         <td>{{ d.sn }}</td>
-        <td>{{ d.imported_serial }}</td>
-        <td>
+        <td class="cucm-imported-cell" data-field="serial">{{ d.imported_serial }}</td>
+        <td class="cucm-match-cell" data-field="serial">
           {% if not d.imported %}
           <span class="badge badge-changed">NOT IMPORTED</span>
           {% elif d.serial_match is none %}
@@ -95,16 +112,34 @@
           <span class="badge badge-added">MATCH</span>
           {% else %}
           <span class="badge badge-removed">MISMATCH</span>
+          {% if d.imported_asset_id and d.sn %}
+          <button type="button" class="update-btn" data-update='{{ {"asset_id": d.imported_asset_id, "field": "serial", "value": d.sn, "ip": d.ip, "scan_id": scan_id} | tojson }}'>Update</button>
+          {% endif %}
+          {% endif %}
+        </td>
+        <td>{{ d.imported_user }}</td>
+        <td>{{ d.imported_user_id }}</td>
+        <td>
+          {% if not d.imported %}
+          <span class="badge badge-changed">NOT IMPORTED</span>
+          {% elif d.user_match is none %}
+          <span class="badge badge-unchanged">N/A</span>
+          {% elif d.user_match %}
+          <span class="badge badge-added">MATCH</span>
+          {% else %}
+          <span class="badge badge-removed">MISMATCH</span>
           {% endif %}
         </td>
         <td>{{ d.imported_branch }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="10" class="muted">No phones matched.</td></tr>
+      <tr><td colspan="12" class="muted">No phones matched.</td></tr>
       {% endfor %}
     </tbody>
   </table>
   </div>
 </div>
 {% endif %}
+<script src="{{ url_for('static', filename='api_utils.js') }}"></script>
+<script src="{{ url_for('static', filename='cucm_scan.js') }}"></script>
 {% endblock %}
