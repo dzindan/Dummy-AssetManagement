@@ -73,6 +73,7 @@ HEADER_ALIASES = {
     "user_id": ["USER ID", "USERID"],
     "full_name": ["FULL NAME", "FULLNAME"],
     "model_device": ["MODEL DEVICE", "MODEL"],
+    "ip": ["IP"],
     "serial_tag": [
         "SERIAL/ SERVICE TAG",
         "SERIAL / SERVICE TAG",
@@ -85,7 +86,6 @@ HEADER_ALIASES = {
     "remark": ["REMARK", "NOTE", "NOTES"],
     "position": ["POSITION", "CURRENT POSITION", "TITLE"],
     "handover_date": ["HANDOVER DATE", "HANDOVERDAY", "HANDOVER DAY", "HANDOVER\nDAY"],
-    "ip": ["IP"],
 }
 
 # Sheets we should never treat as the equipment list even if a stray header matches.

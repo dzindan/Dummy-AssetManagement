@@ -53,17 +53,17 @@
     <div class="table-scroll">
     <table>
       <thead>
-        <tr><th></th><th>Device</th><th>Model</th><th>Full Name</th><th>User ID</th><th>Branch / Dept</th><th>Status</th><th></th></tr>
+        <tr><th></th><th>Branch / Dept</th><th>Device</th><th>User ID</th><th>Full Name</th><th>Model</th><th>Status</th><th></th></tr>
       </thead>
       <tbody>
         {% for row in d.rows %}
         <tr>
           <td><input type="checkbox" class="dupe-row-checkbox-{{ r.batch_id }}" value="{{ row['id'] }}"></td>
-          <td>{{ row['device_name'] }}</td>
-          <td>{{ row['model_device'] }}</td>
-          <td>{{ row['full_name'] }}</td>
-          <td>{{ row['user_id_raw'] }}</td>
           <td>{{ row['branch_dept'] }}</td>
+          <td>{{ row['device_name'] }}</td>
+          <td>{{ row['user_id_raw'] }}</td>
+          <td>{{ row['full_name'] }}</td>
+          <td>{{ row['model_device'] }}</td>
           <td>{{ row['status'] }}</td>
           <td>
             <a class="btn secondary" href="{{ url_for('asset_edit.edit', asset_id=row['id'], next=request.url) }}">Edit #{{ row['id'] }}</a>
@@ -108,10 +108,10 @@
   <h3>Added <span class="badge badge-added">{{ d.added | length }}</span></h3>
   <div class="table-scroll">
   <table>
-    <thead><tr><th>Device</th><th>Model</th><th>Serial/Tag</th><th>Full Name</th><th>Status</th></tr></thead>
+    <thead><tr><th>Device</th><th>Full Name</th><th>Model</th><th>Serial/Tag</th><th>Status</th></tr></thead>
     <tbody>
       {% for row in d.added %}
-      <tr><td>{{ row['device_name'] }}</td><td>{{ row['model_device'] }}</td><td>{{ row['serial_tag'] }}</td><td>{{ row['full_name'] }}</td><td>{{ row['status'] }}</td></tr>
+      <tr><td>{{ row['device_name'] }}</td><td>{{ row['full_name'] }}</td><td>{{ row['model_device'] }}</td><td>{{ row['serial_tag'] }}</td><td>{{ row['status'] }}</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -122,10 +122,10 @@
   <h3>Removed <span class="badge badge-removed">{{ d.removed | length }}</span></h3>
   <div class="table-scroll">
   <table>
-    <thead><tr><th>Device</th><th>Model</th><th>Serial/Tag</th><th>Full Name</th><th>Status</th></tr></thead>
+    <thead><tr><th>Device</th><th>Full Name</th><th>Model</th><th>Serial/Tag</th><th>Status</th></tr></thead>
     <tbody>
       {% for row in d.removed %}
-      <tr><td>{{ row['device_name'] }}</td><td>{{ row['model_device'] }}</td><td>{{ row['serial_tag'] }}</td><td>{{ row['full_name'] }}</td><td>{{ row['status'] }}</td></tr>
+      <tr><td>{{ row['device_name'] }}</td><td>{{ row['full_name'] }}</td><td>{{ row['model_device'] }}</td><td>{{ row['serial_tag'] }}</td><td>{{ row['status'] }}</td></tr>
       {% endfor %}
     </tbody>
   </table>

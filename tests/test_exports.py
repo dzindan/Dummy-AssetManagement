@@ -104,8 +104,8 @@ class ExportRouteSmokeTests(unittest.TestCase):
         self._assert_valid_xlsx(
             resp,
             expected_header=(
-                "Branch", "Device", "Model", "Serial/Service Tag", "Status",
-                "Full Name", "User ID", "Position", "Remark", "Handover Date", "Usage Duration", "Period",
+                "Branch", "Device", "User ID", "Full Name", "Model", "Serial/Service Tag",
+                "Status", "Remark", "Position", "Handover Date", "Usage Duration", "Period",
             ),
             expected_rows=1,
         )
@@ -115,8 +115,8 @@ class ExportRouteSmokeTests(unittest.TestCase):
         self._assert_valid_xlsx(
             resp,
             expected_header=(
-                "Device", "Model", "Serial/Service Tag", "Status", "Full Name",
-                "User ID", "Position", "Remark", "Handover Date", "Usage Duration",
+                "Device", "User ID", "Full Name", "Model", "Serial/Service Tag",
+                "Status", "Remark", "Position", "Handover Date", "Usage Duration",
             ),
             expected_rows=1,
         )
@@ -135,7 +135,7 @@ class ExportRouteSmokeTests(unittest.TestCase):
         resp = self.client.get("/assets/duplicates/export")
         self._assert_valid_xlsx(
             resp,
-            expected_header=("Serial", "Branch", "Device", "Model", "Full Name", "User ID", "Status", "Asset ID"),
+            expected_header=("Serial", "Branch", "Device", "User ID", "Full Name", "Model", "Status", "Asset ID"),
             expected_rows=2,
         )
 
@@ -168,7 +168,7 @@ class ExportRouteSmokeTests(unittest.TestCase):
         self._assert_valid_xlsx(
             resp,
             expected_header=(
-                "Period", "Device", "Model", "Serial/Tag", "Status", "Branch", "Handover Date", "Change",
+                "Branch", "Device", "Model", "Serial/Tag", "Status", "Handover Date", "Period", "Change",
             ),
             expected_rows=1,
         )

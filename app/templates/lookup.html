@@ -29,15 +29,15 @@
       <p class="muted">Pick a row to open the normal hand-over builder for that person.</p>
       <div class="table-scroll">
       <table>
-        <thead><tr><th>Device</th><th>Model</th><th>Serial / Service Tag</th><th>Branch</th><th>Current Holder</th><th>Handover Date</th><th></th></tr></thead>
+        <thead><tr><th>Branch</th><th>Device</th><th>Current Holder</th><th>Model</th><th>Serial / Service Tag</th><th>Handover Date</th><th></th></tr></thead>
         <tbody>
           {% for m in serial_matches %}
           <tr>
+            <td>{{ m['branch_dept'] }}</td>
             <td>{{ m['device_name'] }}</td>
+            <td>{{ m['full_name'] or m['user_id_raw'] or '-' }}</td>
             <td>{{ m['model_device'] }}</td>
             <td>{{ m['serial_tag'] }}</td>
-            <td>{{ m['branch_dept'] }}</td>
-            <td>{{ m['full_name'] or m['user_id_raw'] or '-' }}</td>
             <td>{{ m['handover_date'] }}</td>
             <td>
               {% if m['user_id_raw'] %}
@@ -87,17 +87,17 @@
     <div class="table-scroll">
     <table>
       <thead>
-        <tr><th></th><th>Device</th><th>Model</th><th>Serial / Service Tag</th><th>Status</th><th>Branch</th><th>Last Handover Date</th><th>Hand-Over Condition</th></tr>
+        <tr><th></th><th>Branch</th><th>Device</th><th>Model</th><th>Serial / Service Tag</th><th>Status</th><th>Last Handover Date</th><th>Hand-Over Condition</th></tr>
       </thead>
       <tbody>
         {% for a in assets %}
         <tr>
           <td><input type="checkbox" name="asset_id" value="{{ a['id'] }}" checked></td>
+          <td>{{ a['branch_dept'] }}</td>
           <td>{{ a['device_name'] }}</td>
           <td>{{ a['model_device'] }}</td>
           <td>{{ a['serial_tag'] }}</td>
           <td>{{ a['status'] }}</td>
-          <td>{{ a['branch_dept'] }}</td>
           <td>{{ a['handover_date'] }}</td>
           <td>
             <select name="condition_{{ a['id'] }}">

@@ -35,15 +35,15 @@
   <h2>{{ group.period }}{% if group.batch_label %} <span class="muted">- {{ group.batch_label }}</span>{% endif %}</h2>
   <div class="table-scroll">
   <table>
-    <thead><tr><th>Device</th><th>Model</th><th>Serial/Tag</th><th>Status</th><th>Branch</th><th>Handover Date</th><th></th></tr></thead>
+    <thead><tr><th>Branch</th><th>Device</th><th>Model</th><th>Serial/Tag</th><th>Status</th><th>Handover Date</th><th></th></tr></thead>
     <tbody>
       {% for item in group.assets %}
       <tr>
+        <td>{{ item['branch_dept'] }}</td>
         <td>{{ item['device_name'] }}</td>
         <td>{{ item['model_device'] }}</td>
         <td>{{ item['serial_tag'] }}</td>
         <td>{{ item['status'] }}</td>
-        <td>{{ item['branch_dept'] }}</td>
         <td>{{ item['handover_date'] }}</td>
         <td><a class="btn secondary" href="{{ url_for('asset_edit.edit', asset_id=item['id'], next=url_for('user_history.index', q=q)) }}">Edit</a></td>
       </tr>

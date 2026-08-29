@@ -9,9 +9,9 @@ from ..queries import get_user_asset_history
 bp = Blueprint("user_history", __name__, url_prefix="/user-history")
 
 USER_HISTORY_EXPORT_COLUMNS = [
-    ("Period", "period"), ("Device", "device_name"), ("Model", "model_device"),
-    ("Serial/Tag", "serial_tag"), ("Status", "status"), ("Branch", "branch_dept"),
-    ("Handover Date", "handover_date"), ("Change", "change"),
+    ("Branch", "branch_dept"), ("Device", "device_name"), ("Model", "model_device"),
+    ("Serial/Tag", "serial_tag"), ("Status", "status"), ("Handover Date", "handover_date"),
+    ("Period", "period"), ("Change", "change"),
 ]
 
 

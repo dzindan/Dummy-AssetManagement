@@ -82,13 +82,13 @@ def send_workbook(wb: openpyxl.Workbook, download_name: str) -> Response:
 # site stays explicit about what it adds.
 ASSET_ROW_COLUMNS: list[ColumnSpec] = [
     ("Device", "device_name"),
+    ("User ID", "user_id_raw"),
+    ("Full Name", "full_name"),
     ("Model", "model_device"),
     ("Serial/Service Tag", "serial_tag"),
     ("Status", "status"),
-    ("Full Name", "full_name"),
-    ("User ID", "user_id_raw"),
-    ("Position", "position"),
     ("Remark", "remark"),
+    ("Position", "position"),
     ("Handover Date", "handover_date"),
     ("Usage Duration", lambda r: usage_duration_years(r["handover_date"])),
 ]
@@ -123,9 +123,9 @@ DUPLICATE_COLUMNS: list[ColumnSpec] = [
     ("Branch", lambda item: (item[1]["branch_eng_name"] if "branch_eng_name" in item[1].keys() else "")
      or item[1]["branch_dept"]),
     ("Device", lambda item: item[1]["device_name"]),
-    ("Model", lambda item: item[1]["model_device"]),
-    ("Full Name", lambda item: item[1]["full_name"]),
     ("User ID", lambda item: item[1]["user_id_raw"]),
+    ("Full Name", lambda item: item[1]["full_name"]),
+    ("Model", lambda item: item[1]["model_device"]),
     ("Status", lambda item: item[1]["status"]),
     ("Asset ID", lambda item: item[1]["id"]),
 ]
@@ -139,7 +139,7 @@ def build_duplicates_workbook(dupes: list) -> openpyxl.Workbook:
     branch_eng_name column in the per-import case since that query has no
     branches JOIN."""
     flat_rows = [(d["serial"], row) for d in dupes for row in d["rows"]]
-    return build_workbook("Duplicates", DUPLICATE_COLUMNS, flat_rows, widths=[16, 26, 14, 18, 22, 14, 12, 10])
+    return build_workbook("Duplicates", DUPLICATE_COLUMNS, flat_rows, widths=[16, 26, 14, 14, 22, 18, 12, 10])
 
 
 # --- Diff/compare workbook (moved from update_compare.py) -------------------
@@ -168,18 +168,18 @@ def build_diff_workbook(all_diffs) -> openpyxl.Workbook:
     # changed/added/removed row can be located and cross-checked against the
     # source spreadsheet without guessing which physical asset it was.
     header = [
-        "Branch (Matched)", "Branch / Dept (as in file)", "Device Name", "Model Device",
-        "User ID", "Full Name", "Serial / Service Tag", "Status", "Remark", "Position",
-        "Handover Date", "IP",
+        "Branch (Matched)", "Branch / Dept (as in file)", "Device Name", "User ID",
+        "Full Name", "Model Device", "IP", "Serial / Service Tag", "Status", "Remark",
+        "Position", "Handover Date",
         "Change Type", "Field Changed", "Old Value", "New Value",
     ]
     detail_ws.append(header)
 
     def _row_columns(branch_label: str, row) -> list:
         return [
-            branch_label, row["branch_dept"], row["device_name"], row["model_device"],
-            row["user_id_raw"], row["full_name"], row["serial_tag"], row["status"],
-            row["remark"], row["position"], row["handover_date"], row["ip"],
+            branch_label, row["branch_dept"], row["device_name"], row["user_id_raw"],
+            row["full_name"], row["model_device"], row["ip"], row["serial_tag"], row["status"],
+            row["remark"], row["position"], row["handover_date"],
         ]
 
     for d in all_diffs:

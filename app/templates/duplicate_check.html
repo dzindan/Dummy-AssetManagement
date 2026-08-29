@@ -25,7 +25,7 @@
   <div class="table-scroll">
   <table>
     <thead>
-      <tr><th></th><th>Branch</th><th>Device</th><th>Model</th><th>Full Name</th><th>User ID</th><th>Status</th><th></th></tr>
+      <tr><th></th><th>Branch</th><th>Device</th><th>User ID</th><th>Full Name</th><th>Model</th><th>Status</th><th></th></tr>
     </thead>
     <tbody>
       {% for row in d.rows %}
@@ -33,9 +33,9 @@
         <td><input type="checkbox" class="dupe-row-checkbox" value="{{ row['id'] }}"></td>
         <td>{{ row['branch_eng_name'] or row['branch_dept'] }}</td>
         <td>{{ row['device_name'] }}</td>
-        <td>{{ row['model_device'] }}</td>
-        <td>{{ row['full_name'] }}</td>
         <td>{{ row['user_id_raw'] }}</td>
+        <td>{{ row['full_name'] }}</td>
+        <td>{{ row['model_device'] }}</td>
         <td>{{ row['status'] }}</td>
         <td>
           <a class="btn secondary" href="{{ url_for('asset_edit.edit', asset_id=row['id'], next=url_for('asset_edit.duplicates')) }}">Edit #{{ row['id'] }}</a>

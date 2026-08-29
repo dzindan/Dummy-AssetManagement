@@ -142,7 +142,7 @@
     <thead>
       <tr>
         <th><input type="checkbox" data-select-all="asset-row-checkbox"></th>
-        <th>Branch</th><th>Device</th><th>Model</th><th>Serial/Tag</th><th>Status</th><th>Full Name</th><th>User ID</th><th>Position</th><th>Remark</th><th>Handover Date</th><th>Usage Duration</th><th>Period</th><th></th>
+        <th>Branch</th><th>Device</th><th>User ID</th><th>Full Name</th><th>Model</th><th>Serial/Tag</th><th>Status</th><th>Remark</th><th>Position</th><th>Handover Date</th><th>Usage Duration</th><th>Period</th><th></th>
       </tr>
     </thead>
     <tbody>
@@ -151,13 +151,13 @@
         <td><input type="checkbox" class="asset-row-checkbox" value="{{ a['id'] }}"></td>
         <td>{{ a['branch_eng_name'] or a['branch_dept'] }}</td>
         <td>{{ a['device_name'] }}</td>
+        <td>{{ a['user_id_raw'] }}</td>
+        <td>{{ a['full_name'] }}</td>
         <td>{{ a['model_device'] }}</td>
         <td>{{ a['serial_tag'] }}</td>
         <td>{{ a['status'] }}</td>
-        <td>{{ a['full_name'] }}</td>
-        <td>{{ a['user_id_raw'] }}</td>
-        <td>{{ a['position'] }}</td>
         <td>{{ a['remark'] }}</td>
+        <td>{{ a['position'] }}</td>
         <td>{{ a['handover_date'] }}</td>
         <td>{{ a['handover_date'] | usage_duration }}</td>
         <td>{{ a['period'] }}</td>
