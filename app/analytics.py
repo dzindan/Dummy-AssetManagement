@@ -10,7 +10,12 @@ consistent with how "current state" is computed elsewhere (queries.py).
 
 from __future__ import annotations
 
-MAX_SERIES = 10  # cap distinct item lines per chart; the rest fold into "OTHER"
+import datetime as dt
+
+# Caps distinct item series per chart; the rest fold into "OTHER" - 7 real
+# series + OTHER = 8, matching the categorical palette's full slot count
+# (see app/charts.py) so a chart never needs a 9th generated hue.
+MAX_SERIES = 7
 
 BRANCH_TREND_SQL = """
 WITH rows AS (
@@ -142,18 +147,28 @@ def _walk_period_changes(rows: list[tuple[str, str, str]]) -> dict[str, dict]:
     return result
 
 
-VISIBLE_MONTHS = 6  # how many recent months Branch Detail's rolling-window table displays
-
-
 def get_available_report_years(conn) -> list[str]:
     """Distinct calendar years ("YYYY") with at least one asset-report/
-    baseline import on file, newest first - backs the Dashboard's year
-    selector and the year comparison table below."""
+    baseline import on file, newest first - backs the Dashboard's and
+    Branch Detail's year selectors and the year comparison table below."""
     rows = conn.execute(
         "SELECT DISTINCT substr(period, 1, 4) AS y FROM import_batches "
         "WHERE period IS NOT NULL AND period != '' ORDER BY y DESC"
     ).fetchall()
     return [r["y"] for r in rows]
+
+
+def resolve_report_year(requested: str | None, available_years: list[str]) -> str:
+    """`requested` (typically request.args.get("year")) if it's one of the
+    years that actually has data, else the newest year that does, else
+    today's calendar year (only reachable with zero imports on file at
+    all) - shared by the Dashboard and Branch Detail year selectors so a
+    stale/tampered/missing ?year= falls back the same way on both."""
+    if requested and requested in available_years:
+        return requested
+    if available_years:
+        return available_years[0]
+    return str(dt.date.today().year)
 
 
 def _month_periods_for_year(year: str) -> list[str]:
@@ -162,12 +177,11 @@ def _month_periods_for_year(year: str) -> list[str]:
 
 def _prepare_year_columns(by_group: dict[str, dict], year: str):
     """Slice a _walk_period_changes result down to the 12 fixed months of
-    `year`, unlike Branch Detail's rolling _limit_to_recent_months window:
-    every shown column keeps its own added/removed (diffed against
+    `year`: every shown column keeps its own added/removed (diffed against
     whatever period actually preceded it - possibly outside the visible
-    year, e.g. January's delta lands against December of the year before),
-    not just the single most recent column. A group with no data at all in
-    `year` is dropped entirely rather than shown as an all-blank row."""
+    year, e.g. January's delta lands against December of the year before).
+    A group with no data at all in `year` is dropped entirely rather than
+    shown as an all-blank row."""
     visible_periods = _month_periods_for_year(year)
     prepared: dict[str, dict] = {}
     for key, data in by_group.items():
@@ -187,36 +201,22 @@ def _prepare_year_columns(by_group: dict[str, dict], year: str):
     return visible_periods, prepared
 
 
-def _limit_to_recent_months(by_group: dict[str, dict], visible_months: int = VISIBLE_MONTHS):
-    """Slice a _walk_period_changes result down to the N most recent months
-    for display, and only keep the added/removed indicator on the last
-    (most recent) of those columns - by design, the tables compare the two
-    most recent months only, not a running chain across the whole visible
-    window, so older columns show a plain count with no delta."""
-    all_periods: set[str] = set()
-    for data in by_group.values():
-        all_periods.update(data["periods"].keys())
-    visible_periods = sorted(all_periods)[-visible_months:]
-    last_idx = len(visible_periods) - 1
-
-    prepared: dict[str, dict] = {}
-    for key, data in by_group.items():
-        cells = []
-        for i, period in enumerate(visible_periods):
-            cell = data["periods"].get(period)
-            if cell is None:
-                cells.append(None)
-                continue
-            show_delta = i == last_idx
-            cells.append(
-                {
-                    "count": cell["count"],
-                    "added": cell["added"] if show_delta else None,
-                    "removed": cell["removed"] if show_delta else None,
-                }
-            )
-        prepared[key] = {"cells": cells, "current_count": data["current_count"]}
-    return visible_periods, prepared
+def _column_totals_and_deltas(visible_periods: list[str], table: list[dict]) -> tuple[list[int], list[int], list[int]]:
+    """Per-column (count total, added total, removed total) across every row
+    of a prepared year table - shared by get_branch_month_change_table and
+    get_branch_device_year_table, which both build the same shape of table
+    (rows with a "cells" list keyed the same way as `visible_periods`) and
+    both need a footer Total row summing it."""
+    column_totals = [
+        sum((c["count"] if c else 0) for c in (r["cells"][i] for r in table)) for i in range(len(visible_periods))
+    ]
+    column_added = [
+        sum((c["added"] or 0) for c in (r["cells"][i] for r in table) if c) for i in range(len(visible_periods))
+    ]
+    column_removed = [
+        sum((c["removed"] or 0) for c in (r["cells"][i] for r in table) if c) for i in range(len(visible_periods))
+    ]
+    return column_totals, column_added, column_removed
 
 
 BRANCH_MONTH_CHANGES_SQL = """
@@ -242,8 +242,7 @@ def get_branch_month_change_table(conn, year: str):
     against whatever period actually precedes it, which may fall in the
     prior year for January) - see _walk_period_changes for why that's
     computed from actual asset identity rather than a naive count
-    difference, and _prepare_year_columns for why every column (not just
-    the last) gets a delta here, unlike Branch Detail's rolling window."""
+    difference."""
     rows = conn.execute(BRANCH_MONTH_CHANGES_SQL).fetchall()
     by_group = _walk_period_changes((r["grp"] or "", r["period"], r["asset_key"]) for r in rows)
     visible_periods, prepared = _prepare_year_columns(by_group, year)
@@ -264,16 +263,7 @@ def get_branch_month_change_table(conn, year: str):
         )
     table.sort(key=lambda r: r["current_count"], reverse=True)
 
-    column_totals = [
-        sum((c["count"] if c else 0) for c in (r["cells"][i] for r in table)) for i in range(len(visible_periods))
-    ]
-    column_added = [
-        sum((c["added"] or 0) for c in (r["cells"][i] for r in table) if c) for i in range(len(visible_periods))
-    ]
-    column_removed = [
-        sum((c["removed"] or 0) for c in (r["cells"][i] for r in table) if c) for i in range(len(visible_periods))
-    ]
-
+    column_totals, column_added, column_removed = _column_totals_and_deltas(visible_periods, table)
     return visible_periods, table, column_totals, column_added, column_removed
 
 
@@ -327,13 +317,17 @@ def get_year_comparison_table(conn) -> list[dict]:
     return table
 
 
-def get_branch_device_month_changes(conn, branch_no: str, top_items: list[str], visible_months: int = VISIBLE_MONTHS):
+def get_branch_device_year_table(conn, branch_no: str, year: str, top_items: list[str]):
     """Same diff engine as get_branch_month_change_table, but scoped to one
-    branch and broken down by device type instead of by branch - backs the
-    Branch Detail item-trend table. Any device not in `top_items` (the same
+    branch and broken down by device type instead of by branch - backs
+    Branch Detail's item-trend table, so a branch's month-by-month device
+    counts can be compared year to year rather than only against whichever
+    month happened to precede it. Any device not in `top_items` (the same
     top-N list the trend chart already folds down to) is grouped into
-    "OTHER", matching the chart/count table exactly. Returns
-    (visible_periods, {device_name: {"cells": [...], "current_count": n}})."""
+    "OTHER", matching the chart/count table exactly. Rows keep that same
+    top-N order (busiest device first, OTHER last) rather than being
+    re-sorted by the selected year's count, so a device doesn't jump around
+    confusingly between years just because it had a quiet one."""
     sql = """
     WITH rows AS (
         SELECT ai.batch_id, ai.device_name AS device_name, ib.period AS period, ai.asset_key AS asset_key
@@ -356,4 +350,14 @@ def get_branch_device_month_changes(conn, branch_no: str, top_items: list[str], 
         for row in raw
     )
     by_group = _walk_period_changes(folded)
-    return _limit_to_recent_months(by_group, visible_months)
+    visible_periods, prepared = _prepare_year_columns(by_group, year)
+
+    order = {item: i for i, item in enumerate(top_items)}
+    order["OTHER"] = len(top_items)
+    table = [
+        {"item": item, "cells": data["cells"], "current_count": data["current_count"]}
+        for item, data in sorted(prepared.items(), key=lambda kv: order.get(kv[0], len(order)))
+    ]
+
+    column_totals, column_added, column_removed = _column_totals_and_deltas(visible_periods, table)
+    return visible_periods, table, column_totals, column_added, column_removed

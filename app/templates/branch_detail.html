@@ -9,18 +9,33 @@
   <p class="muted">Each line is a device type; counts come from this branch's most recent import for each month.</p>
   {{ chart_html }}
 
-  {% if trend_periods %}
-  <p class="muted" style="margin-top:1rem;">
-    Each cell is that device type's count for the month. The most recent month also shows its change vs. the month
-    before it - <span style="color:var(--ok);">+added</span> / <span style="color:var(--danger);">-removed</span>,
-    matched by actual asset identity (not just a count difference).
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-top:1.25rem;">
+    <h3 style="margin:0;">Month by Month, by Year</h3>
+    {% if available_years %}
+    <form method="get" action="{{ url_for('branch_detail.detail', branch_no=branch['branch_no']) }}" style="display:flex; align-items:center; gap:0.35rem;">
+      <label for="branch-year" class="muted" style="font-size:0.85rem;">Report year</label>
+      <select id="branch-year" name="year" onchange="this.form.submit()">
+        {% for y in available_years %}
+        <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
+        {% endfor %}
+      </select>
+    </form>
+    {% endif %}
+  </div>
+
+  {% if trend_periods and trend_rows %}
+  <p class="muted" style="margin-top:0.5rem;">
+    Each cell is that device type's count for the month, for the selected report year. Every month also shows its
+    change vs. the month before it - <span style="color:var(--ok);">+added</span> /
+    <span style="color:var(--danger);">-removed</span>, matched by actual asset identity (not just a count
+    difference), so the same month can be compared year to year.
   </p>
   <div class="table-scroll">
   <table>
     <thead>
       <tr>
         <th>Device</th>
-        {% for p in trend_periods %}<th>{{ p }}{% if loop.last %} (vs prev.){% endif %}</th>{% endfor %}
+        {% for p in trend_periods %}<th>{{ p }}</th>{% endfor %}
       </tr>
     </thead>
     <tbody>
@@ -51,32 +66,54 @@
         {% for c in trend_column_totals %}
         <td>
           <strong>{{ c }}</strong>
-          {% if loop.last %}
           <br><span style="font-size:0.75rem;">
-            <span style="color:var(--ok);">+{{ trend_latest_added }}</span> /
-            <span style="color:var(--danger);">-{{ trend_latest_removed }}</span>
+            <span style="color:var(--ok);">+{{ trend_column_added[loop.index0] }}</span> /
+            <span style="color:var(--danger);">-{{ trend_column_removed[loop.index0] }}</span>
           </span>
-          {% endif %}
         </td>
         {% endfor %}
       </tr>
     </tfoot>
   </table>
   </div>
+  {% else %}
+  <p class="muted">No asset reports imported for {{ selected_year }}.</p>
   {% endif %}
 </div>
 
 <div class="grid grid-2">
   <div class="panel">
     <h2>Device Type Breakdown</h2>
+    <p class="muted">By status - e.g. how many of a device type are actually in use vs. broken or in the warehouse.</p>
     <div class="table-scroll">
     <table>
-      <thead><tr><th>Device</th><th>Count</th></tr></thead>
+      <thead>
+        <tr>
+          <th>Device</th>
+          {% for status in device_status_breakdown.statuses %}<th>{{ status }}</th>{% endfor %}
+          <th>Total</th>
+        </tr>
+      </thead>
       <tbody>
-        {% for name, count in device_counts %}
-        <tr><td>{{ name }}</td><td>{{ count }}</td></tr>
+        {% for row in device_status_breakdown.rows %}
+        <tr>
+          <td>{{ row.device }}</td>
+          {% for cell in row.cells %}<td>{{ cell if cell else '-' }}</td>{% endfor %}
+          <td><strong>{{ row.total }}</strong></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="{{ device_status_breakdown.statuses | length + 2 }}" class="muted">No assets on record for this branch.</td></tr>
         {% endfor %}
       </tbody>
+      {% if device_status_breakdown.rows %}
+      <tfoot>
+        <tr>
+          <td><strong>Total</strong></td>
+          {% for c in device_status_breakdown.column_totals %}<td><strong>{{ c }}</strong></td>{% endfor %}
+          <td><strong>{{ device_status_breakdown.grand_total }}</strong></td>
+        </tr>
+      </tfoot>
+      {% endif %}
     </table>
     </div>
   </div>

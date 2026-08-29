@@ -1,5 +1,3 @@
-import datetime
-
 from flask import Blueprint, render_template, request
 from markupsafe import Markup
 
@@ -8,21 +6,14 @@ from ..analytics import (
     get_available_report_years,
     get_branch_month_change_table,
     get_year_comparison_table,
+    resolve_report_year,
 )
-from ..charts import render_line_chart
+from ..charts import render_bar_chart
 from ..db import get_connection
 from ..exports import build_workbook, send_workbook
 from ..queries import get_current_asset_count, get_current_branch_breakdown, get_latest_batch
 
 bp = Blueprint("dashboard", __name__)
-
-
-def _resolve_year(requested: str | None, available_years: list[str]) -> str:
-    if requested and requested in available_years:
-        return requested
-    if available_years:
-        return available_years[0]
-    return str(datetime.date.today().year)
 
 
 @bp.route("/")
@@ -44,7 +35,7 @@ def index():
         all_periods, all_items, all_matrix = get_all_branches_item_trend(conn)
 
         available_years = get_available_report_years(conn)
-        selected_year = _resolve_year(request.args.get("year"), available_years)
+        selected_year = resolve_report_year(request.args.get("year"), available_years)
         month_periods, month_table, month_column_totals, month_column_added, month_column_removed = (
             get_branch_month_change_table(conn, selected_year)
         )
@@ -55,7 +46,7 @@ def index():
     finally:
         conn.close()
 
-    all_branches_chart_html = Markup(render_line_chart(all_periods, all_matrix))
+    all_branches_chart_html = Markup(render_bar_chart(all_periods, all_matrix))
 
     return render_template(
         "dashboard.html",
@@ -89,7 +80,7 @@ def export():
     conn = get_connection()
     try:
         available_years = get_available_report_years(conn)
-        selected_year = _resolve_year(request.args.get("year"), available_years)
+        selected_year = resolve_report_year(request.args.get("year"), available_years)
         month_periods, month_table, _totals, _added, _removed = get_branch_month_change_table(conn, selected_year)
     finally:
         conn.close()
