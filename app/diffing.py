@@ -78,6 +78,16 @@ def diff_branch(conn, branch_no: str, new_batch_id: int) -> BranchDiff:
     return diff
 
 
+def diff_branch_labels(diffs: list[BranchDiff]) -> str:
+    """", "-joined, sorted, deduplicated branch_label list for a set of
+    diffs - shared by the auto-saved diff report archive (import_data.py's
+    _save_diff_report, which also stores this same string as
+    diff_reports.branch_labels for its filter dropdown) and the on-demand
+    /update/export download, so both name/tag a multi-branch report the
+    same way."""
+    return ", ".join(sorted({d.branch_label for d in diffs if d.branch_label}))
+
+
 def diff_batch(conn, batch_id: int, fallback_branch_no: str = "") -> list[BranchDiff]:
     """Diff every branch touched by `batch_id` against each branch's previous batch."""
     branch_nos = get_branches_in_batch(conn, batch_id)

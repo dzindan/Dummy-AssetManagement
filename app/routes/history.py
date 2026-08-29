@@ -3,7 +3,7 @@ import os
 from flask import Blueprint, abort, render_template, request, send_file
 
 from ..db import get_connection
-from ..exports import build_workbook, send_workbook
+from ..exports import build_workbook, dated_download_name, send_workbook
 from ..handover import HO_TYPES
 from ..queries import search_handover_records
 
@@ -61,7 +61,7 @@ def export():
     finally:
         conn.close()
     wb = build_workbook("Hand-Over History", HANDOVER_EXPORT_COLUMNS, records)
-    return send_workbook(wb, "handover_history.xlsx")
+    return send_workbook(wb, dated_download_name("handover_history"))
 
 
 @bp.route("/download/<int:record_id>")

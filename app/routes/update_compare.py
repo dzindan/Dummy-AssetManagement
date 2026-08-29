@@ -8,8 +8,9 @@ Excel diff export endpoint that page's result links to."""
 from flask import Blueprint, flash, redirect, request, url_for
 
 from ..db import get_connection
-from ..diffing import diff_batch
-from ..exports import build_diff_workbook, send_workbook
+from ..diffing import diff_batch, diff_branch_labels
+from ..exports import build_diff_workbook, dated_download_name, send_workbook
+from ..paths import safe_filename
 
 bp = Blueprint("update_compare", __name__, url_prefix="/update")
 
@@ -27,7 +28,19 @@ def export():
         all_diffs = []
         for batch_id in batch_ids:
             all_diffs.extend(diff_batch(conn, batch_id))
+        period_row = conn.execute(
+            "SELECT period FROM import_batches WHERE id = ?", (batch_ids[0],)
+        ).fetchone()
     finally:
         conn.close()
 
-    return send_workbook(build_diff_workbook(all_diffs), "asset_diff_report.xlsx")
+    # Same naming shape as the auto-saved archive copy of this same report
+    # (see import_data._save_diff_report) - period plus the branch(es)
+    # covered - so a downloaded file is identifiable on its own once it's
+    # sitting in a Downloads folder next to other exports, not just another
+    # generically-named "asset_diff_report.xlsx".
+    period = (period_row["period"] if period_row else "") or "unknown-period"
+    safe_branches = safe_filename(diff_branch_labels(all_diffs), fallback="branches")
+    filename = dated_download_name(f"asset_diff_report_{period}_{safe_branches}")
+
+    return send_workbook(build_diff_workbook(all_diffs), filename)

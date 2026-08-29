@@ -4,7 +4,7 @@ from flask import Blueprint, flash, redirect, render_template, request, url_for
 
 from ..auth import current_username, require_permission
 from ..db import get_connection, log_activity, prune_stale_unmapped
-from ..exports import ASSET_ROW_COLUMNS, build_asset_rows_workbook, build_duplicates_workbook, send_workbook
+from ..exports import ASSET_ROW_COLUMNS, build_asset_rows_workbook, build_duplicates_workbook, dated_download_name, send_workbook
 from ..queries import (
     UNRESOLVED_BRANCH_FILTER,
     find_current_duplicate_serials,
@@ -179,7 +179,7 @@ def export():
         + [("Period", lambda r: r["period"])]
     )
     wb = build_asset_rows_workbook(rows, sheet_title="Manage Assets", columns=columns)
-    return send_workbook(wb, "manage_assets.xlsx")
+    return send_workbook(wb, dated_download_name("manage_assets"))
 
 
 @bp.route("/duplicates")
@@ -205,7 +205,7 @@ def export_duplicates():
     if not dupes:
         flash("No duplicate serials found among current assets.", "error")
         return redirect(url_for("asset_edit.duplicates"))
-    return send_workbook(build_duplicates_workbook(dupes), "duplicate_assets.xlsx")
+    return send_workbook(build_duplicates_workbook(dupes), dated_download_name("duplicate_assets"))
 
 
 @bp.route("/bulk-delete", methods=["POST"])

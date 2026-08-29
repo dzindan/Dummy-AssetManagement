@@ -1,7 +1,7 @@
 from flask import Blueprint, render_template, request
 
 from ..db import get_connection
-from ..exports import build_workbook, send_workbook
+from ..exports import build_workbook, dated_download_name, send_workbook
 from ..importer import find_user, normalize_user_id
 from ..paths import safe_filename
 from ..queries import get_user_asset_history
@@ -102,4 +102,4 @@ def export():
     _user, groups = _load_groups(q)
     wb = build_workbook("User Asset History", USER_HISTORY_EXPORT_COLUMNS, _flatten_history_rows(groups))
     safe_q = safe_filename(q, fallback="export")
-    return send_workbook(wb, f"user_history_{safe_q}.xlsx")
+    return send_workbook(wb, dated_download_name(f"user_history_{safe_q}"))

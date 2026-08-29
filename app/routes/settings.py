@@ -23,7 +23,7 @@ from ..db import (
     prune_stale_unmapped,
     set_setting_on,
 )
-from ..exports import build_workbook, send_workbook
+from ..exports import build_workbook, dated_download_name, send_workbook
 from ..importer import (
     normalize_branch_text,
     record_unmapped_device,
@@ -1087,4 +1087,4 @@ def export_activity_log():
     category = request.args.get("category", "").strip()
     rows = _activity_log_rows(category)
     wb = build_workbook("Activity Log", ACTIVITY_LOG_EXPORT_COLUMNS, rows)
-    return send_workbook(wb, "activity_log.xlsx")
+    return send_workbook(wb, dated_download_name("activity_log"))

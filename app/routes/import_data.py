@@ -9,8 +9,15 @@ from flask import Blueprint, flash, redirect, render_template, request, send_fil
 
 from ..auth import current_username, require_permission
 from ..db import get_connection, get_setting
-from ..diffing import diff_batch
-from ..exports import build_diff_workbook, build_duplicates_workbook, build_import_template_workbook, build_workbook, send_workbook
+from ..diffing import diff_batch, diff_branch_labels
+from ..exports import (
+    build_diff_workbook,
+    build_duplicates_workbook,
+    build_import_template_workbook,
+    build_workbook,
+    dated_download_name,
+    send_workbook,
+)
 from ..importer import (
     BRANCH_FILE_REQUIRED_COLUMNS,
     HEADER_ALIASES,
@@ -122,7 +129,7 @@ def export_history():
     finally:
         conn.close()
     wb = build_workbook("Import History", IMPORT_HISTORY_EXPORT_COLUMNS, rows)
-    return send_workbook(wb, "import_history.xlsx")
+    return send_workbook(wb, dated_download_name("import_history"))
 
 
 @bp.route("/diff-reports")
@@ -207,7 +214,7 @@ def export_duplicates():
         flash("No duplicate serials found in this import.", "error")
         return redirect(url_for("import_data.index"))
 
-    return send_workbook(build_duplicates_workbook(dupes), "duplicate_assets.xlsx")
+    return send_workbook(build_duplicates_workbook(dupes), dated_download_name("cleaning_report_duplicates"))
 
 
 def _upload_id_files(importer_fn, file_type: str):
@@ -296,7 +303,7 @@ def _save_diff_report(batch_ids: list[int], period: str) -> None:
         filename = f"asset_diff_report_{safe_period}_{timestamp}.xlsx"
         file_path = os.path.join(get_diff_reports_dir(), filename)
         wb.save(file_path)
-        branch_labels = ", ".join(sorted({d.branch_label for d in all_diffs if d.branch_label}))
+        branch_labels = diff_branch_labels(all_diffs)
         conn.execute(
             "INSERT INTO diff_reports (created_at, period, batch_ids, branch_labels, file_path, label) "
             "VALUES (datetime('now'), ?, ?, ?, ?, ?)",
