@@ -23,7 +23,7 @@ from zeep import Client
 from zeep.cache import SqliteCache
 from zeep.transports import Transport
 
-from .db import get_connection, get_setting_on, set_setting_on
+from .db import get_connection, get_setting_on
 
 ssl._create_default_https_context = ssl._create_unverified_context
 disable_warnings(InsecureRequestWarning)
@@ -49,16 +49,6 @@ def get_cucm_config() -> dict:
     conn = get_connection()
     try:
         return {key: get_setting_on(conn, f"cucm_{key}", "") or "" for key in CUCM_SETTING_KEYS}
-    finally:
-        conn.close()
-
-
-def save_cucm_config(values: dict) -> None:
-    conn = get_connection()
-    try:
-        for key in CUCM_SETTING_KEYS:
-            set_setting_on(conn, f"cucm_{key}", values.get(key, ""))
-        conn.commit()
     finally:
         conn.close()
 

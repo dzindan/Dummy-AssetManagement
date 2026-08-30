@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import datetime as dt
 import io
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Iterable, Sequence
 
 import openpyxl
 from flask import Response, send_file
