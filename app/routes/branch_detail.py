@@ -1,5 +1,4 @@
 from flask import Blueprint, abort, render_template, request
-from markupsafe import Markup
 
 from ..analytics import (
     get_available_report_years,
@@ -7,7 +6,7 @@ from ..analytics import (
     get_branch_item_trend,
     resolve_report_year,
 )
-from ..charts import render_bar_chart
+from ..charts import trend_chart_payload
 from ..db import get_connection
 from ..exports import build_asset_rows_workbook, dated_download_name, send_workbook
 from ..paths import safe_filename
@@ -74,7 +73,7 @@ def detail(branch_no):
     finally:
         conn.close()
 
-    chart_html = Markup(render_bar_chart(periods, matrix))
+    chart_data = trend_chart_payload(periods, matrix)
     device_status_breakdown = _device_status_breakdown(assets)
 
     return render_template(
@@ -83,7 +82,7 @@ def detail(branch_no):
         branch=branch,
         assets=assets,
         device_status_breakdown=device_status_breakdown,
-        chart_html=chart_html,
+        chart_data=chart_data,
         available_years=available_years,
         selected_year=selected_year,
         trend_periods=trend_periods,

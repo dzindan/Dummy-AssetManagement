@@ -17,6 +17,7 @@
   --warn-bg: #fef3c7;
   --danger: #b91c1c;
   --danger-bg: #fee2e2;
+  --chart-grid: #e5e7eb;
 }
 
 * { box-sizing: border-box; }
@@ -466,27 +467,79 @@ button.danger, .btn.danger { background: var(--danger); }
 .diff-value-old { text-decoration: line-through; color: var(--danger); }
 .diff-value-new { color: var(--ok); font-weight: 600; }
 
-.chart-legend {
+/* Interactive trend chart (app/static/trend_chart.js): a row of clickable
+   slicer chips (also the legend - each carries its own color swatch) above
+   an SVG line chart with a hover crosshair + tooltip. */
+.pill-slicer {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem 1.25rem;
-  margin-top: 0.75rem;
-  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.75rem 0.85rem;
+  margin-bottom: 0.9rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
 }
 
-.chart-legend-item {
+.pill {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  font-size: 0.82rem;
+  padding: 0.32rem 0.65rem 0.32rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 0.78rem;
+  font-weight: 600;
   color: var(--text);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
 }
+/* Identity lives in the dot + active-state border/tint; the label itself
+   always stays in --text ink (see dataviz's "text wears text tokens,
+   never the series color"). */
+.pill .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.pill.active { border-color: var(--pill-border, var(--border)); background: var(--pill-tint, var(--panel)); }
+.pill:not(.active) { opacity: 0.48; }
+.pill:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 
-.chart-legend-swatch {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
+.chart-wrap { position: relative; }
+.chart-wrap svg { width: 100%; height: auto; display: block; }
+
+.crosshair-tip {
+  position: absolute;
+  top: 8px;
+  pointer-events: none;
+  background: #1f2937;
+  color: #f9fafb;
+  border-radius: 7px;
+  padding: 0.5rem 0.65rem;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  box-shadow: 0 4px 14px rgba(16, 24, 40, 0.22);
+  opacity: 0;
+  transition: opacity 0.08s ease;
+  z-index: 5;
+  min-width: 148px;
+}
+.crosshair-tip.visible { opacity: 1; }
+.crosshair-tip .tip-month {
+  font-weight: 700;
+  margin-bottom: 0.3rem;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+.crosshair-tip .tip-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+}
+.crosshair-tip .tip-row .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.crosshair-tip .tip-row .v {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
 }
 
 a.branch-link { color: var(--brand); text-decoration: none; }

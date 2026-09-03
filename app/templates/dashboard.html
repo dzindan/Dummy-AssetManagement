@@ -170,7 +170,15 @@
 
 <div class="panel">
   <h2>Item Count Trend - All Branches (by month)</h2>
-  <p class="muted">Each line is a device type, summed across every branch; counts come from each branch's most recent import for that month.</p>
-  {{ all_branches_chart_html }}
+  <p class="muted">Each line is a device type, summed across every branch; counts come from each branch's most recent import for
+    that month. Click a chip to isolate or hide a line; hover the chart for exact monthly counts.</p>
+  <div id="allBranchesTrendChart"></div>
 </div>
+
+<script src="{{ url_for('static', filename='trend_chart.js') }}"></script>
+<script>
+  TrendChart.init(document.getElementById("allBranchesTrendChart"), {{ all_branches_chart_data | tojson }}, {
+    ariaLabel: "Line chart of item counts by month, summed across every branch"
+  });
+</script>
 {% endblock %}

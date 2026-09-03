@@ -1,5 +1,4 @@
 from flask import Blueprint, render_template, request
-from markupsafe import Markup
 
 from ..analytics import (
     get_all_branches_item_trend,
@@ -8,7 +7,7 @@ from ..analytics import (
     get_year_comparison_table,
     resolve_report_year,
 )
-from ..charts import render_bar_chart
+from ..charts import trend_chart_payload
 from ..db import get_connection
 from ..exports import build_workbook, send_workbook
 from ..queries import get_current_asset_count, get_current_branch_breakdown, get_latest_batch
@@ -46,7 +45,7 @@ def index():
     finally:
         conn.close()
 
-    all_branches_chart_html = Markup(render_bar_chart(all_periods, all_matrix))
+    all_branches_chart_data = trend_chart_payload(all_periods, all_matrix)
 
     return render_template(
         "dashboard.html",
@@ -58,7 +57,7 @@ def index():
         latest_asset_batch=latest_asset_batch,
         branch_breakdown=branch_breakdown,
         recent_handovers=recent_handovers,
-        all_branches_chart_html=all_branches_chart_html,
+        all_branches_chart_data=all_branches_chart_data,
         unmapped_device_count=unmapped_device_count,
         available_years=available_years,
         selected_year=selected_year,
