@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import datetime as dt
 
+from .queries import current_assets_cte
+
 # Caps distinct item series per chart; the rest fold into "OTHER" - 7 real
 # series + OTHER = 8, matching the categorical palette's full slot count
 # (see app/charts.py) so a chart never needs a 9th generated hue.
@@ -267,32 +269,17 @@ def get_branch_month_change_table(conn, year: str):
     return visible_periods, table, column_totals, column_added, column_removed
 
 
-YEAR_SNAPSHOT_SQL = """
-WITH branch_key AS (
-    SELECT ai.*, COALESCE(NULLIF(ai.branch_no, ''), 'UNRESOLVED:' || ai.branch_dept) AS bkey
-    FROM asset_items ai
-),
-branch_batches AS (
-    SELECT DISTINCT bk.bkey, bk.batch_id, ib.period
-    FROM branch_key bk
-    JOIN import_batches ib ON ib.id = bk.batch_id
-    WHERE ib.period IS NOT NULL AND ib.period != '' AND ib.period <= ?
-),
-latest_period AS (
-    SELECT bkey, MAX(period) AS period
-    FROM branch_batches
-    GROUP BY bkey
-),
-latest_batch AS (
-    SELECT bb.bkey, MAX(bb.batch_id) AS batch_id
-    FROM branch_batches bb
-    JOIN latest_period lp ON lp.bkey = bb.bkey AND lp.period IS bb.period
-    GROUP BY bb.bkey
+# Same per-branch "current state" CTE as queries.CURRENT_ASSETS_CTE, just
+# bounded to batches reporting on or before a cutoff period (and, unlike the
+# unbounded version, excluding batches with no resolved period at all - a
+# past "as of" snapshot can't mean anything for one of those) - see
+# current_assets_cte()'s docstring for why that's not the unbounded
+# version's own default behavior too.
+YEAR_SNAPSHOT_SQL = (
+    "SELECT COUNT(*) AS c FROM ("
+    + current_assets_cte("WHERE ib.period IS NOT NULL AND ib.period != '' AND ib.period <= ?")
+    + ")"
 )
-SELECT COUNT(*) AS c
-FROM branch_key bk
-JOIN latest_batch lb ON bk.bkey = lb.bkey AND bk.batch_id = lb.batch_id
-"""
 
 
 def get_year_comparison_table(conn) -> list[dict]:

@@ -29,7 +29,29 @@ snapshots - see get_previous_batch_for_branch().
 from __future__ import annotations
 
 
-CURRENT_ASSETS_CTE = """
+def current_assets_cte(batch_where: str = "") -> str:
+    """The "current state per branch" CTE (see this module's docstring),
+    shared between every plain caller below (`batch_where` empty, exactly
+    today's CURRENT_ASSETS_CTE) and analytics.get_year_comparison_table's
+    "as of a given cutoff" snapshot (`batch_where` a `WHERE ib.period <= ?`
+    clause) - the two used to be two near-identical copies of this same SQL.
+
+    `batch_where`, when given, is inserted as raw SQL text right after the
+    `branch_batches` JOIN, same as if it had been written directly into this
+    string - always a small literal supplied by this module's own callers,
+    never user input, so there's no injection risk in not parameterizing it
+    the normal way.
+
+    Deliberately NOT the same as adding an unconditional "exclude NULL/empty
+    period" filter here for every caller: an asset-report batch's period
+    should always be resolved (see importer.py) but isn't guaranteed to be
+    for old/legacy data, and a branch whose only batch has no period must
+    still show up as "current" for callers that don't ask for a `batch_where`
+    (get_current_assets and friends) - only a cutoff-bounded caller like the
+    year snapshot needs to also exclude those, since "as of some past date"
+    can't mean anything for a batch with no reporting period to compare
+    against the cutoff."""
+    return f"""
 WITH branch_key AS (
     SELECT ai.*, COALESCE(NULLIF(ai.branch_no, ''), 'UNRESOLVED:' || ai.branch_dept) AS bkey
     FROM asset_items ai
@@ -41,6 +63,7 @@ branch_batches AS (
     SELECT DISTINCT bk.bkey, bk.batch_id, ib.period
     FROM branch_key bk
     JOIN import_batches ib ON ib.id = bk.batch_id
+    {batch_where}
 ),
 latest_period AS (
     SELECT bkey, MAX(period) AS period
@@ -61,6 +84,9 @@ SELECT bk.*
 FROM branch_key bk
 JOIN latest_batch lb ON bk.bkey = lb.bkey AND bk.batch_id = lb.batch_id
 """
+
+
+CURRENT_ASSETS_CTE = current_assets_cte()
 
 
 def get_current_assets(conn, branch_no: str | None = None, user_id_norm: str | None = None):
