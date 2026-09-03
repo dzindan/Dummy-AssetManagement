@@ -12,7 +12,7 @@
 <div class="grid grid-2">
   <div class="panel">
     <h2>1. Branch Codes</h2>
-    <p class="muted">From <code>IDFromAither/</code> - the branch master list (Branch No, Local/Eng branch name...).
+    <p class="muted">Aither Screen 9830.
       <a href="{{ url_for('import_data.template_branch_codes') }}">Download Template</a></p>
     <form method="post" action="{{ url_for('import_data.upload_branch_file') }}" enctype="multipart/form-data">
       <label for="branch-files">Excel file(s)</label>
@@ -23,7 +23,7 @@
 
   <div class="panel">
     <h2>2. User IDs</h2>
-    <p class="muted">From <code>IDFromAither/</code> - the user/banker list (Branch ID, User No, User Name...).
+    <p class="muted">Aither Screen 9051.
       <a href="{{ url_for('import_data.template_user_ids') }}">Download Template</a></p>
     <form method="post" action="{{ url_for('import_data.upload_user_file') }}" enctype="multipart/form-data">
       <label for="user-files">Excel file(s)</label>
