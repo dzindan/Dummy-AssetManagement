@@ -41,14 +41,9 @@ function clearScanState() {
   }
 }
 
-function escapeHtml(str) {
-  const div = document.createElement("div");
-  div.textContent = str ?? "";
-  return div.innerHTML;
-}
-
-// readJson() (every fetch() below reads its response through it) now lives
-// in api_utils.js, loaded by network_check.html before this file.
+// escapeHtml() now lives in dom_utils.js, and readJson() (every fetch()
+// below reads its response through it) in api_utils.js - both loaded by
+// network_check.html before this file.
 
 // Shared by poll() and the scan-start submit handler below - both reset the
 // same set of controls and show the same error banner on failure; poll()

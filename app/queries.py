@@ -40,7 +40,13 @@ def current_assets_cte(batch_where: str = "") -> str:
     `branch_batches` JOIN, same as if it had been written directly into this
     string - always a small literal supplied by this module's own callers,
     never user input, so there's no injection risk in not parameterizing it
-    the normal way.
+    the normal way. It must start with the `WHERE` keyword itself (as
+    get_year_comparison_table's `WHERE ib.period <= ?` does) - it lands
+    right after the JOIN's own `ON` clause with nothing else introducing a
+    filter, so an AND-only fragment (the pattern get_current_assets uses
+    below, appending to *its own* already-open WHERE further down the
+    query) would silently attach to the JOIN condition instead of filtering
+    as intended.
 
     Deliberately NOT the same as adding an unconditional "exclude NULL/empty
     period" filter here for every caller: an asset-report batch's period

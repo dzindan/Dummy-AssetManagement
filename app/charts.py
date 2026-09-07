@@ -15,8 +15,11 @@ visible (or even just changed their relative order), which is exactly what
 breaks a chart meant to be filtered interactively. A name-based hash can't
 give every device/branch a provably unique color once there are more
 entities than palette slots (there are ~25 standard device names against
-8 slots), but it keeps any *given* entity's color the same everywhere it
-appears in the app, which is what a slicer needs.
+8 slots), so _assign_colors() resolves same-chart collisions by moving the
+lower-ranked of two colliding series to the next free slot; a given
+entity's color is therefore stable *unless* a chart's specific mix of
+series forces it to move, which is still a big improvement over the old
+scheme repainting on every filter change.
 """
 
 from __future__ import annotations
@@ -37,18 +40,53 @@ PALETTE = [
 ]
 
 
-def stable_color_for(name: str) -> str:
-    """Deterministic PALETTE slot for `name` - same process or a different
-    one, same page or a different page, so e.g. "PC" is always the same
-    color on both the Dashboard's all-branches chart and every Branch
-    Detail page's chart. A plain polynomial hash rather than Python's
-    built-in hash(): str hashing is salted per-process (PYTHONHASHSEED) by
-    default specifically to make it *not* stable, which is exactly wrong
-    here."""
+def _hash(name: str) -> int:
+    """Plain polynomial hash rather than Python's built-in hash(): str
+    hashing is salted per-process (PYTHONHASHSEED) by default specifically
+    to make it *not* stable, which is exactly wrong here."""
     h = 0
     for ch in name:
         h = (h * 31 + ord(ch)) & 0xFFFFFFFF
-    return PALETTE[h % len(PALETTE)]
+    return h
+
+
+def stable_color_for(name: str) -> str:
+    """Deterministic PALETTE slot for `name` in isolation - same process or
+    a different one, same page or a different page, so e.g. "PC" is always
+    the same color when it's the only thing asking. Real charts should go
+    through _assign_colors() instead, which resolves same-chart collisions;
+    this is kept as the building block that gives a name its *preferred*
+    slot before collision resolution."""
+    return PALETTE[_hash(name) % len(PALETTE)]
+
+
+def _assign_colors(names: list[str]) -> dict[str, str]:
+    """Collision-free color per name for a single chart's shown series.
+    "OTHER" (the fold-of-remainder bucket) is pinned to the reserved last
+    slot (see PALETTE) and never displaces or is displaced by a real
+    series. The remaining names get their stable_color_for() slot as a
+    *preference*; MAX_SERIES (app/analytics.py) caps real series at
+    len(PALETTE) - 1, so there's always a free slot among the rest, but two
+    preferences can still land on the same slot (there are ~25 standard
+    device names against 7 non-reserved slots) - the second name to claim a
+    taken slot moves to the next free one instead of sharing a color.
+    Iteration order is the same top-N order the caller already put `names`
+    in, so on a collision it's always the lower-ranked series that moves,
+    keeping the busier series' color the more stable of the two."""
+    other_slot = len(PALETTE) - 1
+    assigned: dict[str, str] = {}
+    used = {other_slot}
+    if "OTHER" in names:
+        assigned["OTHER"] = PALETTE[other_slot]
+    for name in names:
+        if name == "OTHER":
+            continue
+        slot = _hash(name) % other_slot
+        while slot in used:
+            slot = (slot + 1) % other_slot
+        used.add(slot)
+        assigned[name] = PALETTE[slot]
+    return assigned
 
 
 def trend_chart_payload(periods: list[str], series: dict[str, dict[str, int]]) -> dict:
@@ -56,16 +94,21 @@ def trend_chart_payload(periods: list[str], series: dict[str, dict[str, int]]) -
     `series` maps a series name to a dict of period -> count (missing
     periods treated as 0) - same shape the old render_bar_chart() took.
     Display order (top-N by total first, "OTHER" last) is still whatever
-    order the caller's `series` dict iterates in; only each series' color
-    is decoupled from that order now."""
-    if not periods or not series:
+    order the caller's `series` dict iterates in; colors are assigned from
+    that same order via _assign_colors() so each chart's own shown series
+    never collide, even though a given name's color can still shift chart
+    to chart depending who else is shown alongside it. A single period
+    isn't a trend, so it counts as no data too - trend_chart.js's own
+    emptyMessage says "import at least two months to see a trend"."""
+    if len(periods) < 2 or not series:
         return {"periods": [], "series": []}
+    colors = _assign_colors(list(series))
     return {
         "periods": periods,
         "series": [
             {
                 "name": name,
-                "color": stable_color_for(name),
+                "color": colors[name],
                 "values": [series[name].get(p, 0) for p in periods],
             }
             for name in series

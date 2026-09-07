@@ -158,10 +158,11 @@
 
 <a class="btn secondary" href="{{ url_for('dashboard.index') }}">Back to Dashboard</a>
 
+<script src="{{ url_for('static', filename='dom_utils.js') }}"></script>
 <script src="{{ url_for('static', filename='trend_chart.js') }}"></script>
 <script>
   TrendChart.init(document.getElementById("itemTrendChart"), {{ chart_data | tojson }}, {
-    ariaLabel: "Line chart of item counts by month for " + {{ branch['eng_name'] | tojson }}
+    ariaLabel: "Line chart of item counts by month for " + {{ (branch['eng_name'] or branch['branch_no']) | tojson }}
   });
 </script>
 {% endblock %}

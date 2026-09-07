@@ -175,6 +175,7 @@
   <div id="allBranchesTrendChart"></div>
 </div>
 
+<script src="{{ url_for('static', filename='dom_utils.js') }}"></script>
 <script src="{{ url_for('static', filename='trend_chart.js') }}"></script>
 <script>
   TrendChart.init(document.getElementById("allBranchesTrendChart"), {{ all_branches_chart_data | tojson }}, {

@@ -4,7 +4,7 @@
  * trend_chart_payload(), and this file draws + hovers it client-side so
  * clicking a chip can show/hide a line without a page reload). Each
  * series' color comes from the payload already resolved server-side
- * (charts.stable_color_for) and never changes when chips are toggled - see
+ * (charts._assign_colors) and never changes when chips are toggled - see
  * that module's docstring.
  *
  * No build step, no chart library - matches how the rest of this app's
@@ -14,7 +14,7 @@
 (function (window) {
   "use strict";
 
-  var MONTH_LABEL_RE = /^\d{4}-(\d{2})$/;
+  var MONTH_LABEL_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
   var MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
   function shortPeriodLabel(period) {
@@ -22,11 +22,8 @@
     return m ? MONTH_NAMES[Number(m[1]) - 1] + " " + period.slice(2, 4) : period;
   }
 
-  function escapeHtml(str) {
-    return String(str).replace(/[&<>"']/g, function (ch) {
-      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch];
-    });
-  }
+  // escapeHtml() now lives in dom_utils.js, loaded by branch_detail.html /
+  // dashboard.html before this file.
 
   function niceStep(maxVal) {
     var raw = (maxVal / 4) || 1;
@@ -45,7 +42,7 @@
       "Not enough historical data yet - import at least two months to see a trend.";
     var ariaLabel = options.ariaLabel || "Line chart of item counts by month";
 
-    if (!payload || !payload.periods || !payload.periods.length || !payload.series || !payload.series.length) {
+    if (!payload || !payload.periods || payload.periods.length < 2 || !payload.series || !payload.series.length) {
       container.innerHTML = '<p class="muted">' + escapeHtml(emptyMessage) + "</p>";
       return;
     }
@@ -87,7 +84,7 @@
     var W = 900, H = 380;
     var PAD_L = 42, PAD_R = 18, PAD_T = 18, PAD_B = 30;
     var plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
-    var lastN = Math.max(n - 1, 1); // avoid /0 when there's only one period on record
+    var lastN = n - 1; // safe: the guard above already requires n >= 2
 
     function xFor(i) { return PAD_L + (plotW * i) / lastN; }
 
@@ -121,11 +118,23 @@
       // dozens of months, unlike the old bar chart which just let bars get
       // thin.
       var labelEvery = Math.max(1, Math.ceil(n / 15));
-      for (var m = 0; m < n; m++) {
-        if (m % labelEvery !== 0 && m !== n - 1) { continue; }
+      var shownLabels = [];
+      for (var m = 0; m < n; m += labelEvery) { shownLabels.push(m); }
+      var lastShown = shownLabels[shownLabels.length - 1];
+      if (lastShown !== n - 1) {
+        // Always label the latest period, but don't let it crowd into the
+        // previous tick - swap it in instead of adding a 2nd nearby label.
+        var MIN_LABEL_GAP_PX = 30;
+        if (xFor(n - 1) - xFor(lastShown) < MIN_LABEL_GAP_PX) {
+          shownLabels[shownLabels.length - 1] = n - 1;
+        } else {
+          shownLabels.push(n - 1);
+        }
+      }
+      shownLabels.forEach(function (m) {
         svg.push('<text x="' + xFor(m).toFixed(1) + '" y="' + (H - PAD_B + 18) + '" font-size="11" fill="' + axisColor +
           '" text-anchor="middle">' + escapeHtml(shortPeriodLabel(periods[m])) + "</text>");
-      }
+      });
 
       if (!visible.length) {
         svg.push('<text x="' + (W / 2) + '" y="' + (H / 2) + '" font-size="13" fill="' + axisColor +
@@ -188,6 +197,7 @@
         var wrapRect = chartWrap.getBoundingClientRect();
         var tipX = ((x / W) * wrapRect.width) + 14;
         if (tipX + 170 > wrapRect.width) { tipX = ((x / W) * wrapRect.width) - 170; }
+        tipX = Math.max(0, tipX);
         tip.style.left = tipX + "px";
       });
 
