@@ -18,7 +18,8 @@ scratch by reading routes/queries alone.
 - All tests: `python -m unittest discover -s tests -p "test_*.py"`
 - Single test file: `python tests/test_auth.py`
 - Single test case: `python -m unittest tests.test_auth.<ClassName>.<test_method>`
-- Rebuild the Windows exe: see the `rebuild-exe` skill.
+- Rebuild/release the Windows exe: see the `rebuild-exe` skill (also
+  covers packaging `release/AssetManagementTool_v<version>.zip`).
 - Regenerate the hand-over docx template after the bank issues a new form:
   `python scripts/build_handover_template.py`
 
