@@ -134,13 +134,19 @@ computers on the same office network.
     password?" on the login page asks it back) rather than needing another
     Admin to reset it. See §8 for what this login system does and doesn't
     cover.
-19. **Usage Duration** column (Manage Assets, Branch Detail, and their
+19. **Handover Date normalization**: whatever shape the source value came in
+    - a full date, just a year, just a month+year, or nothing at all - the
+    stored value is always either **dd/mm/yyyy** or the literal string
+    **"NA"**, at every write path (import, manual Asset Edit, the hand-over
+    form's own stamping). See §4 for the exact rules and how existing data
+    migrates.
+20. **Usage Duration** column (Manage Assets, Branch Detail, and their
     Excel exports, right next to Handover Date): a computed "how long has
     this been in use" figure - a plain calendar-year count (current year
-    minus the Handover Date's own year), not a day-accurate elapsed time.
-    Blank or unparseable Handover Date shows as blank rather than a bogus
-    "0 years".
-20. **Activity Log** (Settings → Activity Log): a general-purpose audit
+    minus the Handover Date's own year), not a day-accurate elapsed time. A
+    blank/"NA"/unparseable Handover Date shows as blank rather than a bogus
+    "0 years". See §4 for where the year is actually read from.
+21. **Activity Log** (Settings → Activity Log): a general-purpose audit
     trail (`activity_log` table, `db.log_activity()`) for every hand-edit
     that doesn't already have its own dedicated log page - Manage Assets
     edits (field-level old/new value, only for fields that actually
@@ -154,7 +160,7 @@ computers on the same office network.
     over forms record who generated them in `handover_records.created_by`
     directly rather than through this table, since History already is
     their dedicated log.
-21. **CUCM Phone Scan** (Assets → CUCM Phone Scan): queries a Cisco Call
+22. **CUCM Phone Scan** (Assets → CUCM Phone Scan): queries a Cisco Call
     Manager (CUCM) directly over its AXL/RisPort70 API for currently-
     registered IP phones (by extension mask, IP mask, or model), rather
     than only checking phones already sitting in imported data - finds
@@ -214,11 +220,11 @@ app/
   handover.py                  Hand-over .docx rendering + history logging +
                                  stamping asset_items.handover_date (§6)
   text_utils.py                 Tiny string/date helpers (IP cleaning,
-                                 usage_duration_years, ...) shared across
-                                 importer/db/routes
+                                 normalize_handover_date, usage_duration_years,
+                                 ...) shared across importer/db/routes
   scanner.py                     Network Check's ping/quser/WMI probes
   cucm.py                         CUCM AXL/RisPort70 client for CUCM Phone
-                                   Scan (§1 #21) - connection config lives in
+                                   Scan (§1 #22) - connection config lives in
                                    the settings table, not a file
   routes/                       One module per page (dashboard, import_data,
                                  lookup, history, settings, branch_detail,
@@ -415,6 +421,66 @@ target (so a raw value that still says the old name in some future import
 keeps resolving correctly), and the now-redundant old standard entry is
 removed - only falling back to a plain rename when the target name doesn't
 already exist.
+
+**Handover Date normalization** (`text_utils.normalize_handover_date`,
+called from `importer._ingest_asset_rows` at import time, `asset_edit.edit`
+for manual corrections, and `handover.apply_handover_date` when a hand-over
+form is generated - every write path for this column funnels through this
+one function): `asset_items.handover_date` is always in exactly one of two
+shapes - **dd/mm/yyyy**, or the literal string **"NA"** - regardless of how
+incomplete the source value was:
+- A full date, in any of the same formats the importer has always accepted
+  (`dd/mm/yyyy`, `mm/dd/yyyy`, `yyyy-mm-dd`, `dd-mm-yyyy`, or an actual
+  Excel date/datetime cell) -> reformatted to dd/mm/yyyy.
+- A bare 4-digit year (`"2020"`) -> `01/01/2020`. Common for old/legacy
+  handovers where nobody recorded the exact day, only "sometime that year."
+- A month+year, either order and either separator (`"03/2020"` or
+  `"2020-03"`, `"2020/03"`) -> `01/03/2020`. The month is range-checked
+  (1-12) so a value that only *looks* like month+year doesn't get silently
+  misparsed into a nonsense date.
+- Blank/`None`, or a "no value" placeholder someone typed instead (`NA`,
+  `N/A`, `NONE`, `NULL`, `-`, `--`, `N.A`, `N.A.`, case-insensitive) -> the
+  literal string `"NA"` - not `""`, so every table cell/export shows
+  something explicit rather than looking like a blank still waiting to be
+  filled in.
+- Anything else that doesn't match one of the shapes above (free text, a
+  typo, a format nobody anticipated) is kept as its original raw text
+  rather than dropped or mangled - same "never silently lose a real value"
+  rule as the device/status/model normalization above.
+
+This is a **display-format convention, not a sortable one** - dd/mm/yyyy is
+what Manage Assets, Branch Detail, their Excel exports, and the diff report
+show as-is, and nothing in the app needs to sort or range-filter by it
+(unlike `handover_records.ho_date` below). `usage_duration_years` (§1 #20)
+reads the year back out of this format by taking its **last 4 characters**,
+not the first 4 - a leftover of the previous ISO (`YYYY-MM-DD`) convention
+this replaced, where the year came first instead.
+
+**Existing data migrates once, silently** (`db._renormalize_handover_dates`,
+called from `init_db()` on every startup - same one-time-per-value pattern
+as `_clean_existing_ip_data`/`_renormalize_model_device` above): every
+distinct existing `handover_date` value, including blank and actual SQL
+`NULL` (`NULL` gets its own `UPDATE ... WHERE handover_date IS NULL`
+branch, since SQL's `NULL = NULL` is never true and a plain `WHERE
+handover_date = ?` would never match it), is re-run through
+`normalize_handover_date` and rewritten if the result changed. A database
+that predates this feature has every row - still in the old ISO convention
+`_parse_date` used to write - rewritten to dd/mm/yyyy the first time the
+app starts after upgrading; cheap no-op on every later startup once nothing
+is left to convert.
+
+**Not the same column as `handover_records.ho_date`** (the Hand-Over
+History log table, written by `handover.record_handover` and shown on the
+History page): that column deliberately stays **ISO** (`YYYY-MM-DD`),
+since History's date-range filter (`queries.py`) compares it with
+`>=`/`<=` and a dd/mm/yyyy string wouldn't sort the way a real date needs
+to. `handover.resolve_ho_date` (which always receives a full date from an
+HTML `<input type=date>`, so none of the partial-date cases above ever
+apply to it) is the shared parser behind both call sites: `record_handover`
+keeps its own `.isoformat()` for the history row, while
+`apply_handover_date` - which stamps the *asset's* `handover_date`, a
+different column entirely - uses `.strftime("%d/%m/%Y")` to match this
+convention instead.
 
 **User-name normalization** (`importer._ingest_asset_rows`): the same idea,
 but for people. An asset report's free-text "FULL NAME" column is whatever

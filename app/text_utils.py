@@ -80,16 +80,65 @@ def clean_ip(value) -> str:
     return candidate
 
 
+_HANDOVER_NA_TOKENS = {"NA", "N/A", "NONE", "NULL", "-", "--", "N.A", "N.A."}
+_HANDOVER_FULL_DATE_FORMATS = ("%d/%m/%Y", "%m/%d/%Y", "%Y-%m-%d", "%d-%m-%Y")
+_HANDOVER_YEAR_ONLY_RE = re.compile(r"^\d{4}$")
+_HANDOVER_MONTH_YEAR_RE = re.compile(r"^(\d{1,2})[/-](\d{4})$")  # e.g. "03/2020", "3-2020"
+_HANDOVER_YEAR_MONTH_RE = re.compile(r"^(\d{4})[/-](\d{1,2})$")  # e.g. "2020-03", "2020/3"
+
+
+def normalize_handover_date(value) -> str:
+    """Canonical dd/mm/yyyy form for a raw Handover Date cell/field - the
+    source Excel column (and the odd manual edit) sometimes carries a full
+    date, just a year, just a month+year, or nothing at all, and this app
+    always displays/exports whatever's stored here as-is (Manage Assets,
+    Branch Detail, their exports, the diff report) rather than reformatting
+    at each call site, so the stored value itself needs to already be in one
+    consistent shape:
+    - a full date, in any of the formats real import files use -> dd/mm/yyyy
+    - a bare year ("2020") -> 01/01/2020 (year-only is the common case for
+      old/legacy handovers where nobody recorded the exact day)
+    - a month+year ("03/2020" or "2020-03") -> 01/03/2020
+    - blank, or a "no value" placeholder someone typed instead (NA, N/A,
+      "-", ...) -> "NA"
+    Anything else that doesn't match one of these shapes is kept as its
+    original raw text rather than dropped or mangled - same "never silently
+    lose a real value" rule as importer.py's device/status/model
+    normalization."""
+    if isinstance(value, (dt.datetime, dt.date)):
+        return value.strftime("%d/%m/%Y")
+    text = "" if value is None else str(value).strip()
+    if not text or text.upper() in _HANDOVER_NA_TOKENS:
+        return "NA"
+    for fmt in _HANDOVER_FULL_DATE_FORMATS:
+        try:
+            return dt.datetime.strptime(text, fmt).strftime("%d/%m/%Y")
+        except ValueError:
+            continue
+    if _HANDOVER_YEAR_ONLY_RE.match(text):
+        return f"01/01/{text}"
+    m = _HANDOVER_MONTH_YEAR_RE.match(text)
+    if m and 1 <= int(m.group(1)) <= 12:
+        return f"01/{int(m.group(1)):02d}/{m.group(2)}"
+    m = _HANDOVER_YEAR_MONTH_RE.match(text)
+    if m and 1 <= int(m.group(2)) <= 12:
+        return f"01/{int(m.group(2)):02d}/{m.group(1)}"
+    return text
+
+
 def usage_duration_years(handover_date: str) -> str:
     """How long a device has been in use, as a plain calendar-year count
     (current year minus the handover_date's own year), not a precise
-    day-accurate elapsed time. Blank/unparseable/future-dated input
-    returns "" so callers (Manage Assets table, Branch Detail, their
-    exports) render a plain dash rather than a bogus "0 years"."""
+    day-accurate elapsed time. `handover_date` is expected already in this
+    module's normalize_handover_date() form (dd/mm/yyyy, or "NA"), so the
+    year is its last 4 characters, not its first 4 - blank/"NA"/
+    unparseable/future-dated input returns "" so callers (Manage Assets
+    table, Branch Detail, their exports) render a plain dash rather than a
+    bogus "0 years"."""
     text = (handover_date or "").strip()
-    if len(text) < 4 or not text[:4].isdigit():
+    if len(text) < 4 or text.upper() == "NA" or not text[-4:].isdigit():
         return ""
-    years = dt.date.today().year - int(text[:4])
+    years = dt.date.today().year - int(text[-4:])
     if years < 0:
         return ""
     return f"{years} year" if years == 1 else f"{years} years"

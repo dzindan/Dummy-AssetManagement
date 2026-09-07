@@ -74,14 +74,14 @@ class HandoverDateStampingTests(unittest.TestCase):
         conn = get_connection()
         try:
             row = conn.execute("SELECT handover_date FROM asset_items WHERE id = 1").fetchone()
-            self.assertEqual(row["handover_date"], "2026-03-15")
+            self.assertEqual(row["handover_date"], "15/03/2026")
 
             log_row = conn.execute(
                 "SELECT * FROM activity_log WHERE field = 'handover_date' ORDER BY id DESC LIMIT 1"
             ).fetchone()
             self.assertIsNotNone(log_row)
             self.assertEqual(log_row["old_value"], "2025-01-01")
-            self.assertEqual(log_row["new_value"], "2026-03-15")
+            self.assertEqual(log_row["new_value"], "15/03/2026")
             self.assertEqual(log_row["performed_by"], "hotester")
         finally:
             conn.close()
@@ -107,7 +107,7 @@ class HandoverDateStampingTests(unittest.TestCase):
         finally:
             conn.close()
         self.assertEqual(before, after)
-        self.assertEqual(row["handover_date"], "2026-03-15")
+        self.assertEqual(row["handover_date"], "15/03/2026")
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ from ..queries import (
     has_unresolved_current_assets,
     search_assets,
 )
+from ..text_utils import normalize_handover_date
 
 bp = Blueprint("asset_edit", __name__, url_prefix="/assets")
 
@@ -272,7 +273,11 @@ def edit(asset_id):
             values = {}
             for field_name in EDITABLE_FIELDS:
                 value = request.form.get(field_name, "").strip()
-                values[field_name] = value.upper() if field_name in UPPERCASE_FIELDS else value
+                if field_name == "handover_date":
+                    value = normalize_handover_date(value)
+                elif field_name in UPPERCASE_FIELDS:
+                    value = value.upper()
+                values[field_name] = value
 
             set_clause = ", ".join(f"{f} = ?" for f in EDITABLE_FIELDS)
             conn.execute(

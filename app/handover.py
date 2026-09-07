@@ -153,8 +153,13 @@ def apply_handover_date(asset_ids: list[int], ho_date: str | None, performed_by:
     generated - so Manage Assets reflects when the equipment was really
     handed over, rather than whatever date (often blank) an import last
     happened to carry for that row. Mirrors asset_edit.py's edit route:
-    only rows whose handover_date is actually changing get updated/logged."""
-    new_value = resolve_ho_date(ho_date).isoformat()
+    only rows whose handover_date is actually changing get updated/logged.
+    Stored as dd/mm/yyyy, matching text_utils.normalize_handover_date's
+    convention for this column (see importer.py/asset_edit.py) - not
+    isoformat(), which is only used for handover_records.ho_date (a
+    separate table, range-filtered by queries.py, so it must stay
+    lexically sortable)."""
+    new_value = resolve_ho_date(ho_date).strftime("%d/%m/%Y")
     conn = get_connection()
     try:
         for asset_id in asset_ids:

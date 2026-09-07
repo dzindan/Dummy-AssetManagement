@@ -22,7 +22,7 @@ from unidecode import unidecode
 
 from .db import get_connection, log_import
 from .queries import get_branch
-from .text_utils import clean_ip, normalize_user_id, strip_bank_prefix
+from .text_utils import clean_ip, normalize_handover_date, normalize_user_id, strip_bank_prefix
 
 
 def _now_iso() -> str:
@@ -162,20 +162,6 @@ def detect_equipment_sheet(wb) -> HeaderMatch | None:
                     branch_hint=_find_branch_hint(ws, row_idx),
                 )
     return best
-
-
-def _parse_date(value) -> str:
-    if value is None or value == "":
-        return ""
-    if isinstance(value, (dt.datetime, dt.date)):
-        return value.strftime("%Y-%m-%d")
-    text = _clean_str(value)
-    for fmt in ("%d/%m/%Y", "%m/%d/%Y", "%Y-%m-%d", "%d-%m-%Y"):
-        try:
-            return dt.datetime.strptime(text, fmt).strftime("%Y-%m-%d")
-        except ValueError:
-            continue
-    return text  # keep raw text rather than losing the value
 
 
 def _asset_key(branch_dept: str, device_name: str, model_device: str, serial_tag: str, user_id_norm: str) -> str:
@@ -578,7 +564,7 @@ def _ingest_asset_rows(
                 status_raw,
                 _clean_str(get(row, "remark")),
                 _clean_str(get(row, "position")),
-                _parse_date(get(row, "handover_date")),
+                normalize_handover_date(get(row, "handover_date")),
                 ip,
                 None,
                 source_label,

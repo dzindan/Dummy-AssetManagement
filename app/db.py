@@ -2,7 +2,7 @@ import os
 import sqlite3
 
 from .paths import get_app_data_dir, is_network_path
-from .text_utils import clean_ip, normalize_user_id, strip_bank_prefix
+from .text_utils import clean_ip, normalize_handover_date, normalize_user_id, strip_bank_prefix
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS branches (
@@ -505,6 +505,7 @@ def init_db() -> None:
         _backfill_branch_names(conn)
         _clean_existing_ip_data(conn)
         _renormalize_model_device(conn)
+        _renormalize_handover_dates(conn)
         _backfill_unmapped(conn, "asset_items", "device_name", "device_aliases", "device_standard_names",
                             "device_unmapped", "raw_name")
         _backfill_unmapped(conn, "asset_items", "status", "status_aliases", "status_standard_names",
@@ -690,6 +691,29 @@ def _renormalize_model_device(conn: sqlite3.Connection) -> None:
                 "UPDATE asset_items SET model_device = ? WHERE model_device = ?",
                 (alias_row["canonical_name"], old),
             )
+
+
+def _renormalize_handover_dates(conn: sqlite3.Connection) -> None:
+    """One-time-per-value self-heal for `asset_items.handover_date`: it's
+    normalized at write time (importer.py, asset_edit.py, handover.py) into
+    text_utils.normalize_handover_date's dd/mm/yyyy-or-"NA" convention, but a
+    row written before that convention existed keeps its old raw form
+    forever otherwise (typically ISO YYYY-MM-DD from the previous
+    convention, or a bare blank/NULL) - same idea as _clean_existing_ip_data
+    above. Re-applies the same normalizer to every distinct existing value,
+    including blank/NULL ones (both become the explicit "NA" placeholder);
+    cheap no-op once everything's already canonical. NULL needs its own
+    branch since SQL's "x = NULL" never matches (see queries.py's own note
+    on NULL-safe equality)."""
+    for row in conn.execute("SELECT DISTINCT handover_date FROM asset_items").fetchall():
+        old = row["handover_date"]
+        new = normalize_handover_date(old)
+        if new == old:
+            continue
+        if old is None:
+            conn.execute("UPDATE asset_items SET handover_date = ? WHERE handover_date IS NULL", (new,))
+        else:
+            conn.execute("UPDATE asset_items SET handover_date = ? WHERE handover_date = ?", (new, old))
 
 
 def _seed_permissions_and_roles(conn: sqlite3.Connection) -> None:
