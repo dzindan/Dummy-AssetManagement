@@ -1,15 +1,15 @@
 {% extends "base.html" %}
 {% block title %}CUCM Phone Scan - Asset Management Tool{% endblock %}
 {% block content %}
-<h1>CUCM Phone Scan</h1>
+<h1 data-scan-method="{{ request.method }}">CUCM Phone Scan</h1>
 <p class="muted">
   Live IP-phone inventory pulled directly from CUCM (extension, model, IP), plus each phone's serial number
   scraped from its own web page - finds phones CUCM knows about even before they're imported into Manage Assets.
   Cross-checked against the current Manage Assets state by IP: model, serial, and the assigned user recorded
   there. When Model or Serial is mismatched, click Update on that row to write the live CUCM value into the
-  database. CUCM's API doesn't report a phone's actual assigned owner, so the User column is a best-effort match
-  against the phone's Description text instead - treat a MISMATCH there as "worth double-checking", not certain,
-  which is why User has no Update button.
+  database, or use Update All / Ignore All below once you've reviewed every mismatch. CUCM's API doesn't report a
+  phone's actual assigned owner, so the User column is a best-effort match against the phone's Description text
+  instead - treat a MISMATCH there as "worth double-checking", not certain, which is why User has no Update button.
   <a href="{{ url_for('settings.index') }}#cucm-settings">CUCM connection settings</a>
   &middot; <a href="{{ url_for('network_check.log') }}">View Update Log</a>
 </p>
@@ -30,7 +30,7 @@
     <div class="field-row">
       <div>
         <label for="num">Number mask</label>
-        <input type="text" id="num" name="num" value="{{ filters.num }}" maxlength="5" placeholder="*">
+        <input type="text" id="num" name="num" value="{{ filters.num }}" maxlength="8" placeholder="*">
         <p class="muted" style="margin-top:0.3rem;">Ignored when IP mask is filled in, or when Auto-split is checked.</p>
       </div>
       <div>
@@ -57,6 +57,11 @@
   </form>
 </div>
 
+{# Always-present wrapper (even when empty) so cucm_scan.js can restore a
+   cached results panel here on a plain page load - results are server-
+   rendered on POST only, so without this a tab-switch-and-back would show
+   a blank page even though nothing new was scanned. See cucm_scan.js. #}
+<div id="cucm-results-panel">
 {% if devices is not none %}
 <div class="panel">
   <p class="muted"><strong>{{ devices | length }}</strong> phone(s) found.</p>
@@ -67,6 +72,7 @@
   {% endif %}
   <div id="cucm-bulk-actions" class="actions" style="display:none; margin-bottom:1rem;">
     <button type="button" id="cucm-update-all-btn">Update All Mismatches</button>
+    <button type="button" id="cucm-ignore-all-btn" class="btn secondary">Ignore All</button>
     <span id="cucm-bulk-status" class="muted"></span>
   </div>
   <div class="table-scroll">
@@ -140,6 +146,7 @@
   </div>
 </div>
 {% endif %}
+</div>
 <script src="{{ url_for('static', filename='api_utils.js') }}"></script>
 <script src="{{ url_for('static', filename='cucm_scan.js') }}"></script>
 {% endblock %}
