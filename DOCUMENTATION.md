@@ -68,12 +68,15 @@ computers on the same office network.
     **Hand-Over** (Lookup & Hand-Over, History) — alongside standalone
     Dashboard, Import Data, and Settings links, so related functionality
     lives in one place instead of a long flat list.
-13. **Network Check** (Assets → Network Check): picks a branch, pings every
-    IP address recorded against that branch's current assets, and for every
-    machine that responds, pulls its PC serial number, monitor serial
-    number, MAC address, and currently logged-on user straight off the
+13. **Network Check** (Assets → Network Check): either picks a branch and
+    pings every IP address recorded against that branch's current assets
+    ("By branch"), or pings every address in a free-typed IP range/CIDR
+    ("By IP range", e.g. to sweep a subnet for devices that were never
+    imported at all - see §Network Check comparison below). For every
+    machine that responds, pulls its PC serial number/model, monitor serial
+    number/model, MAC address, and currently logged-on user straight off the
     network (no agent installed on the target - `ping`, `quser`, and
-    PowerShell `Get-WmiObject` over WMI/RPC) and compares the serials/user
+    PowerShell `Get-WmiObject` over WMI/RPC) and compares the serials/models/user
     against what was imported, flagging MATCH / MISMATCH / N/A per field
     (MAC address is shown for reference only - nothing imported records one
     to compare against). Exports to Excel. Each mismatched value gets its own
@@ -123,7 +126,11 @@ computers on the same office network.
     Status standard list; existing rows imported before this feature
     existed were retroactively queued into the Unmapped pools on first
     startup after upgrading (see §4), so nothing already in the database is
-    invisible to it.
+    invisible to it. A **"Check All for Unmapped Values"** button (top of
+    the mapping section) re-runs that same startup self-heal on demand for
+    all three columns (Device/Status/Model) against every current asset -
+    for values that bypassed import entirely (hand-edited in Manage Assets)
+    or a database that's never been restarted since an alias was added.
 18. **Login + role-based permissions** (Settings → Manage Users & Roles):
     every user logs in; a one-time `/setup` page creates the first Admin
     account on an empty database. Three built-in roles (Viewer/Editor/
@@ -396,8 +403,12 @@ column - added when this system was extended past devices, so a database
 created before that has these columns backfilled empty for old rows (see
 `db._add_missing_columns`) and every existing distinct Status/Model value
 gets a one-time pass into the Unmapped pool on first startup after
-upgrading (`db._backfill_unmapped`), since those rows never had a chance to
-be flagged at their own import time.
+upgrading (`db.backfill_unmapped`, covers Device too), since those rows
+never had a chance to be flagged at their own import time - the same
+function Settings' **Check All for Unmapped Values** button
+(`routes/settings.py` `rescan_unmapped`) calls again on demand, for values
+that bypass import entirely (e.g. a Device/Status/Model hand-edited in
+Manage Assets).
 
 The **Cleaning Report's unrecognized-device/status/model badges are
 re-derived live** from `asset_items` (`queries.find_unrecognized_in_batch`)
@@ -503,19 +514,51 @@ same author maintains separately - `ping`/`ping -a`/`quser`/PowerShell
 beyond the stdlib and openpyxl (already used elsewhere); when that tool
 gains a new capability (e.g. MAC address lookup via
 `Win32_NetworkAdapterConfiguration`), the same function is ported over here
-so both tools stay capable of the same live queries. Target-range parsing
-(CIDR/dash ranges) and manual concurrency selection from that tool are
-deliberately *not* ported - Network Check always derives its target list
-from a branch's own imported asset IPs, never free-text input. For a chosen
-branch, every current asset row with a non-empty `ip` is grouped by that IP
-(a PC and its monitor typically share the same person's IP), scanned
+so both tools stay capable of the same live queries. Manual concurrency
+selection from that tool is *not* exposed here - always `DEFAULT_CONCURRENCY`
+(20) - but target-range parsing (`scanner.parse_targets`: single IP, CIDR,
+full or short dash range, comma/newline-separated, capped at `MAX_TARGETS`
+= 1024) *is* ported, for the page's **By IP range** mode (see below).
+
+Network Check's target list comes from one of two places, chosen by a radio
+on the page (`start_scan`'s `mode` field, `"branch"` or `"range"`):
+- **By branch** (the original/default mode): every current asset row for
+  the selected branch with a non-empty `ip` is grouped by that IP (a PC and
+  its monitor typically share the same person's IP) - same as before this
+  mode existed.
+- **By IP range**: `scanner.parse_targets()` parses the free-typed
+  range/CIDR into the target list directly, with no branch involved at all.
+  The comparison snapshot is still built from imported data - but from
+  *every* current asset across *every* branch (`get_current_assets(conn)`
+  with no `branch_no` filter), not scoped to one branch - so a scanned IP
+  that happens to match a known asset (in any branch) still gets the full
+  MATCH/MISMATCH/Update treatment below; an IP with nothing imported for it
+  just comes back with every `*_match` as `None` and every `imported_*`
+  field blank - a plain live scan, which is the point: finding devices that
+  were never imported at all. `branch_no` is stored as `""` for a range
+  scan (same convention as an unresolved/unmatched branch elsewhere in the
+  app) and `branch_label` becomes a generated string like `"Custom IP range
+  (37 addresses)"` instead of a real branch name - used as-is for the
+  on-screen progress text, the `network_check_log` scope for anything
+  applied from that scan, and the Excel export filename.
+
+Once the target list is built (either way), every host is scanned
 concurrently, then `compare_result()` matches: the live BIOS serial
-(`Win32_BIOS.SerialNumber`) against whichever imported row's `device_name`
-is PC/NOTEBOOK/SERVER PC; the live `WmiMonitorID` serial(s) against the
-imported LCD row; and the live logged-on session username(s) (`DOMAIN\user`
-stripped to just `user`) against the imported row's `user_id_norm`. Each
-comparison is `None` ("N/A") when there's nothing on one side to compare -
-either nothing was imported for that field (e.g. no LCD row for that IP),
+(`Win32_BIOS.SerialNumber`) *and* the live `Win32_ComputerSystem.Model`
+against whichever imported row's `device_name` is PC/NOTEBOOK/SERVER PC
+(serial vs `serial_tag`, model vs `model_device`); the live `WmiMonitorID`
+serial(s) *and* model(s) (`UserFriendlyName`) against the imported LCD
+row's `serial_tag`/`model_device`; and the live logged-on session
+username(s) (`DOMAIN\user` stripped to just `user`) against the imported
+row's `user_id_norm`. Model comparisons reuse the same loose-equality
+normalization as the serial ones (`_normalize_serial`: strip everything
+but A-Z0-9, uppercase) since model text varies in spacing/punctuation
+between what WMI reports and what got typed into the imported report (e.g.
+"OptiPlex 7040" vs "OPTIPLEX-7040") - that's a difference worth ignoring,
+not flagging as a mismatch. Each comparison is `None` ("N/A") when there's
+nothing on one side to compare - either nothing was imported for that field
+(e.g. no LCD row for that IP, or an imported row with no `model_device`
+value),
 *or* the live read itself came back empty (machine offline, or reachable by
 `ping` but WMI/RPC blocked by firewall so hardware/session queries fail) -
 rather than a false MISMATCH. This distinction matters for the Update
@@ -530,13 +573,15 @@ restarts.
 **Applying a Network Check mismatch** (`network_check.apply_updates`,
 `UPDATABLE_FIELDS`): `compare_result()` also returns which `asset_items`
 id(s) each field would need to write to - `pc_asset_ids`/`monitor_asset_ids`
-are the single matched PC/LCD row, while `user_asset_ids` is *every* row at
+are the single matched PC/LCD row (shared by both the serial and model field
+for that device type), while `user_asset_ids` is *every* row at
 that IP (a PC and its monitor are treated as one desk/person, so correcting
 the assigned user corrects it everywhere at that IP, not just one device).
 Clicking a mismatch's **Update** button (or **Update All Mismatches**)
 POSTs `{ip, field, asset_ids, value}` pairs to `/network-check/scan/<id>/
-apply`, which writes `serial_tag` (for pc_serial/monitor_serial) or
-`user_id_raw` (for user) directly - mirroring how Manage Assets' own edit
+apply`, which writes `serial_tag` (for pc_serial/monitor_serial),
+`model_device` (for pc_model/monitor_model), or `user_id_raw` (for user)
+directly - mirroring how Manage Assets' own edit
 form treats `user_id_raw` as a plain field, not re-deriving `user_id_norm`
 or the Aither-canonical `full_name` the way import-time normalization does
 (see the user-name normalization note above). Every actual change (skipped

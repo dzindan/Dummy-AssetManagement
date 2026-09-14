@@ -194,6 +194,19 @@
   {% endif %}
 </div>
 
+<div class="panel" id="mapping-check">
+  <h2>Mapping Check</h2>
+  <p class="muted">
+    The Unmapped pools below (Device/Status/Model) normally fill up automatically at import time. If you've edited
+    a Device/Status/Model value by hand in Manage Assets, or this database has data older than when a mapping rule
+    was added, run this to scan every current asset against the standard-name and alias tables below and queue
+    anything that still doesn't match - the same check this app already runs once on startup, just on demand.
+  </p>
+  <form method="post" action="{{ url_for('settings.rescan_unmapped') }}">
+    <button type="submit">Check All for Unmapped Values</button>
+  </form>
+</div>
+
 <div class="panel" id="device-mapping">
   <h2>Device Name Mapping</h2>
   <p class="muted">

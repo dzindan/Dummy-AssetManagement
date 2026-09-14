@@ -15,6 +15,7 @@ from ..auth import (
 )
 from ..cucm import CUCM_SETTING_KEYS, get_cucm_config
 from ..db import (
+    backfill_unmapped,
     get_connection,
     get_setting,
     get_setting_on,
@@ -348,6 +349,46 @@ def _rename_or_merge_standard(
         return f'Renamed "{old_name}" to "{new_name}".'
     finally:
         conn.close()
+
+
+@bp.route("/rescan-unmapped", methods=["POST"])
+@require_permission("manage_mappings")
+def rescan_unmapped():
+    """Manual "Check All for Unmapped Values" trigger - the Unmapped pools
+    below normally only fill up at import time (importer._normalize_via_alias_table),
+    so a value that got into asset_items any other way - a database
+    upgraded from before this mapping system existed, or a raw value typed
+    directly into Manage Assets' edit form rather than imported - has no
+    chance to show up there until that same branch is re-imported again,
+    maybe months later. This re-runs db.backfill_unmapped for all three
+    columns (device/status/model) against every current asset right now,
+    the same self-heal init_db() already does once at app startup, just
+    on demand."""
+    conn = get_connection()
+    try:
+        added_devices = backfill_unmapped(conn, "asset_items", "device_name", "device_aliases",
+                                           "device_standard_names", "device_unmapped", "raw_name")
+        added_statuses = backfill_unmapped(conn, "asset_items", "status", "status_aliases",
+                                            "status_standard_names", "status_unmapped", "raw_status")
+        added_models = backfill_unmapped(conn, "asset_items", "model_device", "model_aliases",
+                                          "model_standard_names", "model_unmapped", "raw_model")
+        total = added_devices + added_statuses + added_models
+        log_activity(conn, "mapping", "Checked all for unmapped values", performed_by=current_username(),
+                     target=f"{total} new: {added_devices} device, {added_statuses} status, {added_models} model")
+        conn.commit()
+    finally:
+        conn.close()
+
+    if total:
+        flash(
+            f"Found {total} new unmapped value(s): {added_devices} device name(s), "
+            f"{added_statuses} status(es), {added_models} model(s). Assign them below.",
+            "success",
+        )
+    else:
+        flash("No new unmapped values found - every current asset's device/status/model already "
+              "matches a standard name or alias.", "success")
+    return redirect(url_for("settings.index") + "#device-mapping")
 
 
 # --- Device standard names (the editable canonical list) -------------------

@@ -506,12 +506,12 @@ def init_db() -> None:
         _clean_existing_ip_data(conn)
         _renormalize_model_device(conn)
         _renormalize_handover_dates(conn)
-        _backfill_unmapped(conn, "asset_items", "device_name", "device_aliases", "device_standard_names",
-                            "device_unmapped", "raw_name")
-        _backfill_unmapped(conn, "asset_items", "status", "status_aliases", "status_standard_names",
-                            "status_unmapped", "raw_status")
-        _backfill_unmapped(conn, "asset_items", "model_device", "model_aliases", "model_standard_names",
-                            "model_unmapped", "raw_model")
+        backfill_unmapped(conn, "asset_items", "device_name", "device_aliases", "device_standard_names",
+                           "device_unmapped", "raw_name")
+        backfill_unmapped(conn, "asset_items", "status", "status_aliases", "status_standard_names",
+                           "status_unmapped", "raw_status")
+        backfill_unmapped(conn, "asset_items", "model_device", "model_aliases", "model_standard_names",
+                           "model_unmapped", "raw_model")
         prune_stale_unmapped(conn)
         _backfill_user_no_norm(conn)
         _seed_permissions_and_roles(conn)
@@ -578,7 +578,7 @@ def _backfill_user_no_norm(conn: sqlite3.Connection) -> None:
         conn.execute("UPDATE users SET user_no_norm = ? WHERE user_no = ?", (norm, row["user_no"]))
 
 
-def _backfill_unmapped(
+def backfill_unmapped(
     conn: sqlite3.Connection,
     source_table: str,
     source_column: str,
@@ -586,25 +586,31 @@ def _backfill_unmapped(
     standard_table: str,
     unmapped_table: str,
     unmapped_column: str,
-) -> None:
-    """One-time-per-value visibility fix for status/model mapping: rows
-    imported before this mapping system existed never got a chance to be
-    flagged as unmapped (that only happens at import time). Without this,
-    an already-imported oddball value would stay invisible until that
-    branch happens to be re-imported again, maybe months later. This scans
-    existing distinct values and queues any non-standard ones into the
-    Unmapped pool - cheap no-op once everything is either mapped or already
-    queued (ON CONFLICT DO NOTHING, since this must never bump the
-    occurrence count itself; only a real import row seen should do that)."""
+) -> int:
+    """Visibility fix for device/status/model mapping: a row's value only
+    ever gets flagged as unmapped at its own import time, so anything that
+    bypasses that - a database upgraded from before this mapping system
+    existed, or a value hand-typed into Manage Assets' edit form rather
+    than imported - would stay invisible until that same branch happens to
+    be re-imported again, maybe months later. This scans every distinct
+    current value and queues any non-standard one into the Unmapped pool -
+    cheap no-op once everything is either mapped or already queued
+    (ON CONFLICT DO NOTHING, since this must never bump the occurrence
+    count itself; only a real import row seen should do that). Called once
+    per column here in init_db() (startup self-heal) and again on demand
+    from Settings' "Check All for Unmapped Values" (routes/settings.py
+    rescan_unmapped) - same function either way. Returns how many new
+    entries were actually queued, so callers can report that count."""
     known_aliases = {row["alias"] for row in conn.execute(f"SELECT alias FROM {alias_table}").fetchall()}
     known_standards = {row["name"] for row in conn.execute(f"SELECT name FROM {standard_table}").fetchall()}
     rows = conn.execute(
         f"SELECT DISTINCT {source_column} AS v FROM {source_table} WHERE {source_column} != ''"
     ).fetchall()
+    added = 0
     for row in rows:
         value = row["v"]
         if value not in known_aliases and value not in known_standards:
-            conn.execute(
+            cursor = conn.execute(
                 f"""
                 INSERT INTO {unmapped_table} ({unmapped_column}, first_seen_at, last_seen_at, occurrences)
                 VALUES (?, datetime('now'), datetime('now'), 1)
@@ -612,6 +618,9 @@ def _backfill_unmapped(
                 """,
                 (value,),
             )
+            if cursor.rowcount > 0:
+                added += 1
+    return added
 
 
 def prune_stale_unmapped(conn: sqlite3.Connection) -> None:
@@ -677,7 +686,7 @@ def _renormalize_model_device(conn: sqlite3.Connection) -> None:
     keeps that stale, un-normalized text forever otherwise, with nothing to
     ever re-check it. Re-applies the (possibly now more complete) alias
     table to every distinct existing value; cheap no-op once everything's
-    already canonical. Must run before the model_device _backfill_unmapped()
+    already canonical. Must run before the model_device backfill_unmapped()
     call below, so a value this just resolved isn't queued into Unmapped."""
     for row in conn.execute(
         "SELECT DISTINCT model_device FROM asset_items WHERE model_device != ''"
