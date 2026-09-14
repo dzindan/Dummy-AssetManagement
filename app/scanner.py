@@ -1,9 +1,10 @@
-"""Core scanning logic: ping, hostname/domain resolution, quser sessions,
-uptime, hardware - lifted from the standalone IP Scanner tool. Target-range
-parsing (CIDR/dash ranges) and the concurrency-limit constants from that
-tool aren't included here: Network Check always derives its target list
-from a branch's own imported asset IPs (see routes/network_check.py), never
-from free-text user input."""
+"""Core scanning logic: target parsing, ping, hostname/domain resolution,
+quser sessions, uptime, hardware - lifted from the standalone IP Scanner
+tool. Network Check normally derives its target list from a branch's own
+imported asset IPs (see routes/network_check.py), but can also scan a
+free-text IP range/CIDR a user types in directly (e.g. to sweep a whole
+subnet for devices that never got imported) - parse_targets below is
+ported as-is from that tool for that case."""
 from __future__ import annotations
 
 import ipaddress
@@ -15,12 +16,75 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Callable, Optional
 
+MAX_TARGETS = 1024
 PING_TIMEOUT_MS = 800
 SUBPROCESS_TIMEOUT_S = 4
 WMI_TIMEOUT_S = 8
 HARDWARE_TIMEOUT_S = 20
 
 DEFAULT_CONCURRENCY = 20
+
+
+class TargetParseError(ValueError):
+    pass
+
+
+def parse_targets(raw: str) -> list[str]:
+    """Parse user input into a flat, de-duplicated list of IP strings (order preserved).
+
+    Accepts, comma/newline separated:
+      - single IP: 192.168.1.10
+      - CIDR: 192.168.1.0/24
+      - dash range, full: 192.168.1.1-192.168.1.50
+      - dash range, short: 192.168.1.1-50 (last octet only)
+    """
+    entries = [e.strip() for e in re.split(r"[,\n]+", raw) if e.strip()]
+    if not entries:
+        raise TargetParseError("No IP or IP range entered.")
+
+    ips: list[str] = []
+    seen: set[str] = set()
+
+    def add(ip_str: str):
+        if ip_str not in seen:
+            seen.add(ip_str)
+            ips.append(ip_str)
+
+    for entry in entries:
+        try:
+            if "/" in entry:
+                network = ipaddress.ip_network(entry, strict=False)
+                if network.num_addresses <= 2:
+                    for addr in network:
+                        add(str(addr))
+                else:
+                    for addr in network.hosts():
+                        add(str(addr))
+            elif "-" in entry:
+                start_str, end_str = (p.strip() for p in entry.split("-", 1))
+                start_ip = ipaddress.ip_address(start_str)
+                if "." in end_str:
+                    end_ip = ipaddress.ip_address(end_str)
+                else:
+                    octets = start_str.split(".")
+                    octets[-1] = end_str
+                    end_ip = ipaddress.ip_address(".".join(octets))
+                if int(end_ip) < int(start_ip):
+                    raise TargetParseError(f"Invalid range: '{entry}' (end IP is before start IP).")
+                for value in range(int(start_ip), int(end_ip) + 1):
+                    add(str(ipaddress.ip_address(value)))
+            else:
+                add(str(ipaddress.ip_address(entry)))
+        except TargetParseError:
+            raise
+        except ValueError as exc:
+            raise TargetParseError(f"Could not parse '{entry}': {exc}") from exc
+
+    if len(ips) > MAX_TARGETS:
+        raise TargetParseError(
+            f"IP range too large ({len(ips)} addresses). Please narrow it down to at most {MAX_TARGETS} addresses."
+        )
+    return ips
 
 
 def _decode_console_bytes(data: bytes) -> str:

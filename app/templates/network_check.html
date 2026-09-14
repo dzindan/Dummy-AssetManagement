@@ -3,9 +3,10 @@
 {% block content %}
 <h1>Network Check</h1>
 <p class="muted">
-  Pings every IP address recorded against a branch's current assets, pulls each live machine's PC serial, monitor
-  serial, and currently logged-on user over the network, and compares that against what was imported - so a wrong
-  serial or a mismatched user surfaces without walking the branch in person. When a value is mismatched, click
+  Pings every IP address recorded against a branch's current assets - or, in "By IP range" mode, every IP in a
+  free-typed range/CIDR - pulls each live machine's PC serial/model, monitor serial/model, and currently logged-on
+  user over the network, and compares that against what was imported - so a wrong serial, wrong model, or a
+  mismatched user surfaces without walking the branch in person. When a value is mismatched, click
   Update on that row to write the live-scanned value into the database, or use Update All / Ignore All below once
   you've reviewed every mismatch. <a href="{{ url_for('network_check.log') }}">View Update Log</a>
 </p>
@@ -19,17 +20,40 @@
   <form id="scan-form">
     <div class="field-row">
       <div>
+        <label>Scan target</label>
+        <div>
+          <label><input type="radio" name="scan_mode" id="mode_branch" value="branch" checked> By branch</label>
+          <label style="margin-left:1rem;"><input type="radio" name="scan_mode" id="mode_range" value="range"> By IP range</label>
+        </div>
+      </div>
+      <div>
+        <label><input type="checkbox" id="include_hardware" name="include_hardware" checked> Scan hardware</label>
+        <p class="muted" style="margin-top:0.3rem;">PC/monitor serial, MAC, CPU, RAM. Uncheck for a faster scan (hostname/session/uptime only).</p>
+      </div>
+    </div>
+    <div class="field-row" id="branch-field">
+      <div>
         <label for="branch_no">Branch</label>
-        <select id="branch_no" name="branch_no" required>
+        <select id="branch_no" name="branch_no">
           <option value="">-- Select a branch --</option>
           {% for b in branches %}
           <option value="{{ b['branch_no'] }}">{{ b['eng_name'] }}</option>
           {% endfor %}
         </select>
+        <p class="muted" style="margin-top:0.3rem;">Every IP recorded against that branch's current assets.</p>
       </div>
-      <div>
-        <label><input type="checkbox" id="include_hardware" name="include_hardware" checked> Scan hardware</label>
-        <p class="muted" style="margin-top:0.3rem;">PC/monitor serial, MAC, CPU, RAM. Uncheck for a faster scan (hostname/session/uptime only).</p>
+    </div>
+    <div class="field-row" id="range-field" style="display:none">
+      <div style="flex:1;">
+        <label for="targets">IP range</label>
+        <textarea id="targets" name="targets" rows="2" placeholder="192.168.1.0/24" style="width:100%;"></textarea>
+        <p class="muted" style="margin-top:0.3rem;">
+          Single IP, CIDR block, or dash range - comma/newline separated. Examples:
+          <code>192.168.1.10</code>, <code>192.168.1.0/24</code>, <code>192.168.1.1-192.168.1.50</code>,
+          <code>192.168.1.1-50</code> (max 1024 addresses per scan). Not scoped to any one branch - a scanned IP
+          that matches a known asset (in any branch) still gets compared/Update-able same as a branch scan; anything
+          else just shows live values with no MATCH/MISMATCH, useful for finding devices that were never imported.
+        </p>
       </div>
     </div>
     <div class="actions" style="margin-top: 1rem;">
@@ -59,9 +83,15 @@
         <th>PC Serial (Live)</th>
         <th>PC Serial (Imported)</th>
         <th>PC Match</th>
+        <th>PC Model (Live)</th>
+        <th>PC Model (Imported)</th>
+        <th>PC Model Match</th>
         <th>Monitor Serial (Live)</th>
         <th>Monitor Serial (Imported)</th>
         <th>Monitor Match</th>
+        <th>Monitor Model (Live)</th>
+        <th>Monitor Model (Imported)</th>
+        <th>Monitor Model Match</th>
         <th>Logged-on User (Live)</th>
         <th>User (Imported)</th>
         <th>User Match</th>
@@ -69,7 +99,7 @@
     </thead>
     <tbody id="results-body"></tbody>
   </table>
-  <p id="empty-hint" class="muted">Select a branch and click Start Scan.</p>
+  <p id="empty-hint" class="muted">Select a branch (or enter an IP range) and click Start Scan.</p>
   </div>
 </div>
 

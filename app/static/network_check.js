@@ -1,5 +1,10 @@
 const form = document.getElementById("scan-form");
 const branchSelect = document.getElementById("branch_no");
+const branchField = document.getElementById("branch-field");
+const rangeField = document.getElementById("range-field");
+const modeBranchRadio = document.getElementById("mode_branch");
+const modeRangeRadio = document.getElementById("mode_range");
+const targetsTextarea = document.getElementById("targets");
 const includeHardwareCheckbox = document.getElementById("include_hardware");
 const scanBtn = document.getElementById("scan-btn");
 const stopBtn = document.getElementById("stop-btn");
@@ -25,9 +30,9 @@ let scanIncludesHardware = true;
 // scan actually starts, per "keep results until the next scan" requirement.
 const SCAN_STORAGE_KEY = "networkCheckScan";
 
-function saveScanState(scanId, branchNo, includeHardware) {
+function saveScanState(scanId, mode, branchNo, targets, includeHardware) {
   try {
-    sessionStorage.setItem(SCAN_STORAGE_KEY, JSON.stringify({ scanId, branchNo, includeHardware }));
+    sessionStorage.setItem(SCAN_STORAGE_KEY, JSON.stringify({ scanId, mode, branchNo, targets, includeHardware }));
   } catch {
     // Storage unavailable (private mode, quota) - restoring on reload just won't work.
   }
@@ -40,6 +45,16 @@ function clearScanState() {
     // See saveScanState.
   }
 }
+
+// Branch/IP-range are mutually exclusive target pickers - only one field
+// group is shown/required at a time, matching whichever radio is checked.
+function updateModeVisibility() {
+  const isRange = modeRangeRadio.checked;
+  rangeField.style.display = isRange ? "" : "none";
+  branchField.style.display = isRange ? "none" : "";
+}
+modeBranchRadio.addEventListener("change", updateModeVisibility);
+modeRangeRadio.addEventListener("change", updateModeVisibility);
 
 // escapeHtml() now lives in dom_utils.js, and readJson() (every fetch()
 // below reads its response through it) in api_utils.js - both loaded by
@@ -83,10 +98,17 @@ function hardwareCell(list, value) {
 // field key the /apply endpoint expects.
 const UPDATABLE_FIELDS = [
   { key: "pc_serial", match: (c) => c.pc_match, liveValue: (c) => c.live_pc_serial, assetIds: (c) => c.pc_asset_ids },
+  { key: "pc_model", match: (c) => c.pc_model_match, liveValue: (c) => c.live_pc_model, assetIds: (c) => c.pc_asset_ids },
   {
     key: "monitor_serial",
     match: (c) => c.monitor_match,
     liveValue: (c) => (c.live_monitor_serials || [])[0],
+    assetIds: (c) => c.monitor_asset_ids,
+  },
+  {
+    key: "monitor_model",
+    match: (c) => c.monitor_model_match,
+    liveValue: (c) => (c.live_monitor_models || [])[0],
     assetIds: (c) => c.monitor_asset_ids,
   },
   {
@@ -126,11 +148,17 @@ function renderResults(results) {
         <td>${hardwareCell(null, c.live_pc_serial)}</td>
         <td>${importedCell(r.ip, UPDATABLE_FIELDS[0], c, c.imported_pc_serial)}</td>
         <td>${matchBadge(c.pc_match)}</td>
+        <td>${hardwareCell(null, c.live_pc_model)}</td>
+        <td>${importedCell(r.ip, UPDATABLE_FIELDS[1], c, c.imported_pc_model)}</td>
+        <td>${matchBadge(c.pc_model_match)}</td>
         <td>${hardwareCell(c.live_monitor_serials)}</td>
-        <td>${importedCell(r.ip, UPDATABLE_FIELDS[1], c, c.imported_monitor_serial)}</td>
+        <td>${importedCell(r.ip, UPDATABLE_FIELDS[2], c, c.imported_monitor_serial)}</td>
         <td>${matchBadge(c.monitor_match)}</td>
+        <td>${hardwareCell(c.live_monitor_models)}</td>
+        <td>${importedCell(r.ip, UPDATABLE_FIELDS[3], c, c.imported_monitor_model)}</td>
+        <td>${matchBadge(c.monitor_model_match)}</td>
         <td>${listOrValue(c.live_users)}</td>
-        <td>${importedCell(r.ip, UPDATABLE_FIELDS[2], c, c.imported_user)}</td>
+        <td>${importedCell(r.ip, UPDATABLE_FIELDS[4], c, c.imported_user)}</td>
         <td>${matchBadge(c.user_match)}</td>
       </tr>`;
     })
@@ -259,10 +287,17 @@ form.addEventListener("submit", async (e) => {
   lastResults = [];
   clearScanState();
 
+  const mode = modeRangeRadio.checked ? "range" : "branch";
   const branchNo = branchSelect.value;
-  if (!branchNo) {
+  const targets = targetsTextarea.value;
+  if (mode === "branch" && !branchNo) {
     errorEl.style.display = "block";
     errorEl.textContent = "Select a branch first.";
+    return;
+  }
+  if (mode === "range" && !targets.trim()) {
+    errorEl.style.display = "block";
+    errorEl.textContent = "Enter an IP range first.";
     return;
   }
 
@@ -274,7 +309,7 @@ form.addEventListener("submit", async (e) => {
   const resp = await fetch("/network-check/scan", {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Requested-With": "fetch" },
-    body: JSON.stringify({ branch_no: branchNo, include_hardware: includeHardwareCheckbox.checked }),
+    body: JSON.stringify({ mode, branch_no: branchNo, targets, include_hardware: includeHardwareCheckbox.checked }),
   });
   let data;
   try {
@@ -292,7 +327,7 @@ form.addEventListener("submit", async (e) => {
   currentScanId = data.scan_id;
   scanIncludesHardware = data.include_hardware !== false;
   progressEl.textContent = `Scanning ${data.branch_label}: 0/${data.total}`;
-  saveScanState(data.scan_id, branchNo, includeHardwareCheckbox.checked);
+  saveScanState(data.scan_id, mode, branchNo, targets, includeHardwareCheckbox.checked);
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(() => poll(data.scan_id), 1000);
   poll(data.scan_id);
@@ -332,6 +367,13 @@ async function restoreScan() {
   }
 
   if (saved.branchNo) branchSelect.value = saved.branchNo;
+  if (saved.targets) targetsTextarea.value = saved.targets;
+  if (saved.mode === "range") {
+    modeRangeRadio.checked = true;
+  } else {
+    modeBranchRadio.checked = true;
+  }
+  updateModeVisibility();
   includeHardwareCheckbox.checked = saved.includeHardware !== false;
   currentScanId = saved.scanId;
   scanIncludesHardware = data.include_hardware !== false;
@@ -356,4 +398,5 @@ async function restoreScan() {
   }
 }
 
+updateModeVisibility();
 restoreScan();

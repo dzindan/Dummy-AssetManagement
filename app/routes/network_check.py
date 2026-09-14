@@ -1,10 +1,16 @@
 """Live network verification: pings every IP recorded against a branch's
-current assets, pulls each live machine's PC serial / monitor serial /
-logged-on user over the network (reusing app/scanner.py, lifted as-is from
-the standalone IP Scanner tool - ping + `quser` + PowerShell Get-WmiObject,
-no extra dependencies), and compares that against what was imported - so a
-mismatch (wrong serial recorded, different person logged in than the asset
-is assigned to) surfaces without a manual walkthrough.
+current assets (or, in "range" mode, every IP in a free-typed range/CIDR -
+see parse_targets in app/scanner.py), pulls each live machine's PC serial /
+PC model / monitor serial / monitor model / logged-on user over the network
+(reusing app/scanner.py, lifted as-is from the standalone IP Scanner tool -
+ping + `quser` + PowerShell Get-WmiObject, no extra dependencies), and
+compares that against what was imported - so a mismatch (wrong serial or
+model recorded, different person logged in than the asset is assigned to)
+surfaces without a manual walkthrough. Range mode still cross-checks
+against imported data (across every branch, not just one) for any scanned
+IP that happens to match a known asset; an IP with nothing imported for it
+just shows live values with no MATCH/MISMATCH to offer - a plain sweep,
+useful for finding devices that were never imported at all.
 
 This only works for machines reachable from wherever this app is running
 (same LAN/VPN, WMI/RPC not blocked by firewall, an account with admin rights
@@ -26,7 +32,7 @@ from ..db import get_connection
 from ..exports import build_workbook, dated_download_name, match_text, send_workbook
 from ..paths import safe_filename
 from ..queries import get_branch, get_branches_with_current_assets, get_current_assets
-from ..scanner import DEFAULT_CONCURRENCY, run_scan
+from ..scanner import DEFAULT_CONCURRENCY, TargetParseError, parse_targets, run_scan
 
 bp = Blueprint("network_check", __name__, url_prefix="/network-check")
 
@@ -51,6 +57,16 @@ def _live_pc_serial(hardware: dict | None) -> str:
     return (items[0].get("Serial") or "").strip() if items else ""
 
 
+def _live_pc_model(hardware: dict | None) -> str:
+    if not hardware:
+        return ""
+    system = hardware.get("system") or {}
+    if not system.get("ok"):
+        return ""
+    items = system.get("items") or []
+    return (items[0].get("Model") or "").strip() if items else ""
+
+
 def _live_monitor_serials(hardware: dict | None) -> list[str]:
     if not hardware:
         return []
@@ -58,6 +74,15 @@ def _live_monitor_serials(hardware: dict | None) -> list[str]:
     if not monitors.get("ok"):
         return []
     return [(m.get("SerialNumber") or "").strip() for m in (monitors.get("items") or [])]
+
+
+def _live_monitor_models(hardware: dict | None) -> list[str]:
+    if not hardware:
+        return []
+    monitors = hardware.get("monitors") or {}
+    if not monitors.get("ok"):
+        return []
+    return [(m.get("Model") or "").strip() for m in (monitors.get("items") or [])]
 
 
 def _live_logon_users(sessions: dict | None) -> list[str]:
@@ -84,7 +109,9 @@ def _live_mac(hardware: dict | None) -> str:
 UPDATABLE_FIELDS = {
     # field key -> (asset_items column to write)
     "pc_serial": "serial_tag",
+    "pc_model": "model_device",
     "monitor_serial": "serial_tag",
+    "monitor_model": "model_device",
     "user": "user_id_raw",
 }
 
@@ -102,7 +129,9 @@ def compare_result(live: dict, imported_rows: list) -> dict:
     imported_user_row = next((r for r in imported_rows if r["user_id_norm"] or r["full_name"]), None)
 
     live_pc_serial = _live_pc_serial(live.get("hardware"))
+    live_pc_model = _live_pc_model(live.get("hardware"))
     live_monitor_serials = _live_monitor_serials(live.get("hardware"))
+    live_monitor_models = _live_monitor_models(live.get("hardware"))
     live_users = _live_logon_users(live.get("sessions"))
 
     # Each *_match stays None ("N/A") whenever there's nothing live to
@@ -118,10 +147,24 @@ def compare_result(live: dict, imported_rows: list) -> dict:
     if imported_pc and live_pc_serial:
         pc_match = _normalize_serial(live_pc_serial) == _normalize_serial(imported_pc["serial_tag"])
 
+    # Same loose-equality helper as the serial checks (strip everything but
+    # A-Z0-9, uppercase) - model text varies in spacing/punctuation between
+    # what WMI reports and what got typed into the imported report (e.g.
+    # "OptiPlex 7040" vs "OPTIPLEX-7040"), and that's a difference worth
+    # ignoring here, not flagging as a mismatch.
+    pc_model_match = None
+    if imported_pc and imported_pc["model_device"] and live_pc_model:
+        pc_model_match = _normalize_serial(live_pc_model) == _normalize_serial(imported_pc["model_device"])
+
     monitor_match = None
     if imported_monitor and live_monitor_serials:
         target = _normalize_serial(imported_monitor["serial_tag"])
         monitor_match = any(_normalize_serial(s) == target for s in live_monitor_serials)
+
+    monitor_model_match = None
+    if imported_monitor and imported_monitor["model_device"] and live_monitor_models:
+        target_model = _normalize_serial(imported_monitor["model_device"])
+        monitor_model_match = any(_normalize_serial(m) == target_model for m in live_monitor_models)
 
     user_match = None
     if imported_user_row and (imported_user_row["user_id_norm"] or imported_user_row["user_id_raw"]) and live_users:
@@ -132,10 +175,16 @@ def compare_result(live: dict, imported_rows: list) -> dict:
         "imported_pc_serial": imported_pc["serial_tag"] if imported_pc else "",
         "live_pc_serial": live_pc_serial,
         "pc_match": pc_match,
+        "imported_pc_model": imported_pc["model_device"] if imported_pc else "",
+        "live_pc_model": live_pc_model,
+        "pc_model_match": pc_model_match,
         "pc_asset_ids": [imported_pc["id"]] if imported_pc else [],
         "imported_monitor_serial": imported_monitor["serial_tag"] if imported_monitor else "",
         "live_monitor_serials": live_monitor_serials,
         "monitor_match": monitor_match,
+        "imported_monitor_model": imported_monitor["model_device"] if imported_monitor else "",
+        "live_monitor_models": live_monitor_models,
+        "monitor_model_match": monitor_model_match,
         "monitor_asset_ids": [imported_monitor["id"]] if imported_monitor else [],
         "imported_user": imported_user_row["full_name"] if imported_user_row else "",
         "imported_user_id": (imported_user_row["user_id_norm"] or imported_user_row["user_id_raw"]) if imported_user_row else "",
@@ -165,9 +214,7 @@ def index():
 @require_permission("network_check")
 def start_scan():
     body = request.get_json(silent=True) or {}
-    branch_no = (body.get("branch_no") or "").strip()
-    if not branch_no:
-        return jsonify({"error": "Select a branch first."}), 400
+    mode = (body.get("mode") or "branch").strip()
 
     # Hardware (WMI system/disk/monitor/CPU/memory) is by far the slowest
     # part of a per-host scan - see HARDWARE_TIMEOUT_S in scanner.py - so
@@ -175,10 +222,33 @@ def start_scan():
     # quick alive/hostname/session/uptime pass is all that's needed.
     include_hardware = bool(body.get("include_hardware", True))
 
+    # "range" mode sweeps a free-typed IP range/CIDR independent of any one
+    # branch - e.g. to catch devices that were never imported at all. `rows`
+    # below is then pulled with no branch filter (every current asset,
+    # across every branch) so a scanned IP that DOES belong to a known
+    # asset still gets cross-checked/compared/Update-able same as branch
+    # mode; an IP with no imported asset just shows live values with N/A
+    # badges - effectively a plain scan, same as the standalone IP Scanner.
+    if mode == "range":
+        try:
+            targets = parse_targets(body.get("targets", ""))
+        except TargetParseError as exc:
+            return jsonify({"error": str(exc)}), 400
+        branch_no = ""
+        branch_label = f"Custom IP range ({len(targets)} address{'es' if len(targets) != 1 else ''})"
+    else:
+        branch_no = (body.get("branch_no") or "").strip()
+        if not branch_no:
+            return jsonify({"error": "Select a branch first."}), 400
+        targets = None
+        branch_label = None
+
     conn = get_connection()
     try:
-        rows = get_current_assets(conn, branch_no=branch_no)
-        branch_row = get_branch(conn, branch_no)
+        rows = get_current_assets(conn, branch_no=branch_no or None)
+        if branch_no:
+            branch_row = get_branch(conn, branch_no)
+            branch_label = branch_row["eng_name"] if branch_row else branch_no
     finally:
         conn.close()
 
@@ -191,9 +261,10 @@ def start_scan():
         if ip:
             snapshot.setdefault(ip, []).append(dict(row))
 
-    targets = sorted(snapshot.keys())
-    if not targets:
-        return jsonify({"error": "This branch has no current assets with an IP address recorded."}), 400
+    if targets is None:
+        targets = sorted(snapshot.keys())
+        if not targets:
+            return jsonify({"error": "This branch has no current assets with an IP address recorded."}), 400
 
     scan_id = uuid.uuid4().hex
     with _LOCK:
@@ -204,7 +275,7 @@ def start_scan():
             "order": targets,
             "snapshot": snapshot,
             "branch_no": branch_no,
-            "branch_label": branch_row["eng_name"] if branch_row else branch_no,
+            "branch_label": branch_label,
             "include_hardware": include_hardware,
             "stop_requested": False,
             "worker_done": False,
@@ -346,14 +417,20 @@ NETWORK_CHECK_COLUMNS = [
     ("PC Serial (Live)", lambda r: r["compare"]["live_pc_serial"]),
     ("PC Serial (Imported)", lambda r: r["compare"]["imported_pc_serial"]),
     ("PC Match", lambda r: match_text(r["compare"]["pc_match"])),
+    ("PC Model (Live)", lambda r: r["compare"]["live_pc_model"]),
+    ("PC Model (Imported)", lambda r: r["compare"]["imported_pc_model"]),
+    ("PC Model Match", lambda r: match_text(r["compare"]["pc_model_match"])),
     ("Monitor Serial (Live)", lambda r: ", ".join(r["compare"]["live_monitor_serials"])),
     ("Monitor Serial (Imported)", lambda r: r["compare"]["imported_monitor_serial"]),
     ("Monitor Match", lambda r: match_text(r["compare"]["monitor_match"])),
+    ("Monitor Model (Live)", lambda r: ", ".join(r["compare"]["live_monitor_models"])),
+    ("Monitor Model (Imported)", lambda r: r["compare"]["imported_monitor_model"]),
+    ("Monitor Model Match", lambda r: match_text(r["compare"]["monitor_model_match"])),
     ("Logged-on User (Live)", lambda r: ", ".join(r["compare"]["live_users"])),
     ("User (Imported)", lambda r: r["compare"]["imported_user"]),
     ("User Match", lambda r: match_text(r["compare"]["user_match"])),
 ]
-NETWORK_CHECK_COLUMN_WIDTHS = [16, 8, 20, 18, 22, 22, 12, 22, 22, 14, 22, 22, 12]
+NETWORK_CHECK_COLUMN_WIDTHS = [16, 8, 20, 18, 22, 22, 12, 22, 22, 14, 22, 22, 12, 22, 22, 14, 22, 22, 12]
 
 
 @bp.route("/scan/<scan_id>/export.xlsx")
