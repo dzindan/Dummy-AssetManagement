@@ -78,6 +78,7 @@ def _filters_from_args() -> dict:
     return {
         "branch_no": [v for v in request.args.getlist("branch_no") if v],
         "device_name": [v for v in request.args.getlist("device_name") if v],
+        "model_device": [v for v in request.args.getlist("model_device") if v],
         "status": [v for v in request.args.getlist("status") if v],
         "period": [v for v in request.args.getlist("period") if v],
         "q": request.args.get("q", "").strip(),
@@ -106,6 +107,12 @@ def index():
             r["device_name"]
             for r in conn.execute(
                 "SELECT DISTINCT device_name FROM asset_items WHERE device_name != '' ORDER BY device_name"
+            ).fetchall()
+        ]
+        model_options = [
+            r["model_device"]
+            for r in conn.execute(
+                "SELECT DISTINCT model_device FROM asset_items WHERE model_device != '' ORDER BY model_device"
             ).fetchall()
         ]
         # Union of the standard status list and whatever status values are
@@ -150,6 +157,7 @@ def index():
         show_unresolved_option=show_unresolved_option,
         unresolved_value=UNRESOLVED_BRANCH_FILTER,
         device_names=device_names,
+        model_options=model_options,
         status_options=status_options,
         period_options=period_options,
         selected_branch=selected_branch,

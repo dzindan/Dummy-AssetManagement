@@ -59,6 +59,21 @@
         </div>
       </div>
       <div>
+        <label>Model</label>
+        <div class="multiselect">
+          <button type="button" class="multiselect-toggle">
+            <span>{% if filters.model_device %}{{ filters.model_device | length }} selected{% else %}All models{% endif %}</span>
+            <span class="nav-caret">&#9662;</span>
+          </button>
+          <div class="multiselect-panel">
+            <input type="text" class="multiselect-search" placeholder="Type to filter...">
+            {% for m in model_options %}
+            <label><input type="checkbox" name="model_device" value="{{ m }}" {{ 'checked' if m in filters.model_device else '' }}> {{ m }}</label>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      <div>
         <label>Status</label>
         <div class="multiselect">
           <button type="button" class="multiselect-toggle">
@@ -102,7 +117,7 @@
       </div>
       <div class="filter-actions">
         <button type="submit">Filter</button>
-        {% if filters.branch_no or filters.device_name or filters.status or filters.period or filters.q %}
+        {% if filters.branch_no or filters.device_name or filters.model_device or filters.status or filters.period or filters.q %}
         <a class="btn secondary" href="{{ url_for('asset_edit.index') }}">Clear</a>
         {% endif %}
       </div>

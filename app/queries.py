@@ -180,7 +180,7 @@ def search_assets(conn, filters: dict, page: int = 1, per_page: int | None = Non
     to current state, like the rest of the app, so nobody accidentally
     edits a snapshot row that's already been superseded.
 
-    `branch_no`, `device_name`, and `status` are each a *list* (possibly
+    `branch_no`, `device_name`, `model_device`, and `status` are each a *list* (possibly
     empty, meaning "no filter on this field") so the page can multi-select
     several values per field at once - e.g. Device = PC or LCD in one go,
     rather than one value at a time.
@@ -208,6 +208,11 @@ def search_assets(conn, filters: dict, page: int = 1, per_page: int | None = Non
     if device_filters:
         where.append(f"bk.device_name IN ({','.join('?' * len(device_filters))})")
         params.extend(device_filters)
+
+    model_filters = filters.get("model_device") or []
+    if model_filters:
+        where.append(f"bk.model_device IN ({','.join('?' * len(model_filters))})")
+        params.extend(model_filters)
 
     status_filters = filters.get("status") or []
     if status_filters:
