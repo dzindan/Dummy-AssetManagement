@@ -16,7 +16,20 @@
   const saved = sessionStorage.getItem(key);
   if (saved !== null) {
     sessionStorage.removeItem(key);
-    window.scrollTo(0, parseInt(saved, 10) || 0);
+    const y = parseInt(saved, 10) || 0;
+    // A redirect that also carries a #fragment (e.g. Settings' Save
+    // buttons, which jump back to the panel that was just saved) fights
+    // this: the browser's own scroll-to-fragment can land after this
+    // script runs and override the restore. Drop the fragment so nothing
+    // re-triggers it, then reassert on 'load' too, since that native jump
+    // can happen after this synchronous scrollTo.
+    if (location.hash) {
+      history.replaceState(null, "", location.pathname + location.search);
+    }
+    window.scrollTo(0, y);
+    window.addEventListener("load", function () {
+      window.scrollTo(0, y);
+    });
   }
 })();
 
