@@ -29,12 +29,15 @@ snapshots - see get_previous_batch_for_branch().
 from __future__ import annotations
 
 
-def current_assets_cte(batch_where: str = "") -> str:
+def current_assets_cte(batch_where: str = "", table: str = "asset_items") -> str:
     """The "current state per branch" CTE (see this module's docstring),
     shared between every plain caller below (`batch_where` empty, exactly
     today's CURRENT_ASSETS_CTE) and analytics.get_year_comparison_table's
     "as of a given cutoff" snapshot (`batch_where` a `WHERE ib.period <= ?`
     clause) - the two used to be two near-identical copies of this same SQL.
+    `table` swaps in CURRENT_CCTV_CTE's `cctv_items` in place of
+    `asset_items` - CCTV gear follows the exact same per-branch/latest-period
+    "current state" rule, just from its own table.
 
     `batch_where`, when given, is inserted as raw SQL text right after the
     `branch_batches` JOIN, same as if it had been written directly into this
@@ -60,7 +63,7 @@ def current_assets_cte(batch_where: str = "") -> str:
     return f"""
 WITH branch_key AS (
     SELECT ai.*, COALESCE(NULLIF(ai.branch_no, ''), 'UNRESOLVED:' || ai.branch_dept) AS bkey
-    FROM asset_items ai
+    FROM {table} ai
 ),
 -- One row per (branch, batch) actually imported, paired with that batch's
 -- own reporting period - kept to distinct (bkey, batch_id) pairs so this
@@ -93,6 +96,7 @@ JOIN latest_batch lb ON bk.bkey = lb.bkey AND bk.batch_id = lb.batch_id
 
 
 CURRENT_ASSETS_CTE = current_assets_cte()
+CURRENT_CCTV_CTE = current_assets_cte(table="cctv_items")
 
 
 def get_current_assets(conn, branch_no: str | None = None, user_id_norm: str | None = None):
@@ -259,16 +263,97 @@ def search_assets(conn, filters: dict, page: int = 1, per_page: int | None = Non
     return rows, total
 
 
-def find_duplicate_serials_in_batch(conn, batch_id: int):
+def get_branches_with_current_cctv(conn):
+    """CCTV counterpart of get_branches_with_current_assets - only branches
+    that actually have at least one current CCTV item, for the Manage CCTV
+    branch filter."""
+    sql = f"""
+    SELECT DISTINCT b.branch_no, b.eng_name
+    FROM ({CURRENT_CCTV_CTE}) bk
+    JOIN branches b ON b.branch_no = bk.branch_no
+    ORDER BY b.eng_name
+    """
+    return conn.execute(sql).fetchall()
+
+
+def search_cctv(conn, filters: dict, page: int = 1, per_page: int | None = None):
+    """CCTV counterpart of search_assets - filterable view over *current*
+    cctv_items rows for the standalone Manage CCTV page. `branch_no`,
+    `device_name`, and `status` are each a list (possibly empty). `q`
+    searches device_name/model/serial/location/manufacturer instead of the
+    person-assigned fields search_assets covers (no user_id/full_name here -
+    CCTV gear isn't assigned to anyone). `per_page=None` returns every
+    matching row unpaginated, used by the Excel export."""
+    where = []
+    params: list = []
+
+    branch_filters = filters.get("branch_no") or []
+    real_branches = [b for b in branch_filters if b != UNRESOLVED_BRANCH_FILTER]
+    branch_conditions = []
+    if UNRESOLVED_BRANCH_FILTER in branch_filters:
+        branch_conditions.append("bk.branch_no = ''")
+    if real_branches:
+        branch_conditions.append(f"bk.branch_no IN ({','.join('?' * len(real_branches))})")
+    if branch_conditions:
+        where.append("(" + " OR ".join(branch_conditions) + ")")
+        params.extend(real_branches)
+
+    device_filters = filters.get("device_name") or []
+    if device_filters:
+        where.append(f"bk.device_name IN ({','.join('?' * len(device_filters))})")
+        params.extend(device_filters)
+
+    status_filters = filters.get("status") or []
+    if status_filters:
+        where.append(f"UPPER(bk.status) IN ({','.join('?' * len(status_filters))})")
+        params.extend([s.strip().upper() for s in status_filters])
+
+    if filters.get("q"):
+        like = f"%{filters['q'].strip().upper()}%"
+        where.append(
+            "(UPPER(bk.serial_tag) LIKE ? OR UPPER(bk.model_device) LIKE ? OR "
+            "UPPER(bk.location) LIKE ? OR UPPER(bk.manufacturer) LIKE ? OR "
+            "UPPER(bk.branch_dept) LIKE ? OR UPPER(bk.remark) LIKE ?)"
+        )
+        params.extend([like, like, like, like, like, like])
+
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    from_sql = f"""
+    FROM ({CURRENT_CCTV_CTE}) bk
+    LEFT JOIN branches b ON b.branch_no = bk.branch_no
+    LEFT JOIN import_batches ib ON ib.id = bk.batch_id
+    {where_sql}
+    """
+
+    total = conn.execute(f"SELECT COUNT(*) AS c {from_sql}", params).fetchone()["c"]
+    limit_sql = ""
+    query_params = list(params)
+    if per_page is not None:
+        limit_sql = "LIMIT ? OFFSET ?"
+        query_params += [per_page, max(page - 1, 0) * per_page]
+    rows = conn.execute(
+        f"""
+        SELECT bk.*, b.eng_name AS branch_eng_name, ib.period AS period
+        {from_sql}
+        ORDER BY COALESCE(b.eng_name, bk.branch_dept), bk.device_name
+        {limit_sql}
+        """,
+        query_params,
+    ).fetchall()
+    return rows, total
+
+
+def find_duplicate_serials_in_batch(conn, batch_id: int, table: str = "asset_items"):
     """Serial numbers that appear more than once within one specific import
     batch - the same check the Cleaning Report shows right after upload,
     but re-derivable any time from `batch_id` alone (see
     routes/import_data.py's `result` view), so revisiting the report after
     editing/deleting a row still reflects reality instead of relying on the
-    one-shot in-memory report from the original POST."""
-    sql = """
+    one-shot in-memory report from the original POST. `table` is
+    "cctv_items" for a cctv_report batch, same idea as asset_items."""
+    sql = f"""
     SELECT UPPER(serial_tag) AS norm_serial, COUNT(*) AS cnt
-    FROM asset_items
+    FROM {table}
     WHERE batch_id = ? AND serial_tag != ''
     GROUP BY UPPER(serial_tag)
     HAVING COUNT(*) > 1
@@ -279,7 +364,7 @@ def find_duplicate_serials_in_batch(conn, batch_id: int):
     results = []
     for d in dupes:
         rows = conn.execute(
-            "SELECT * FROM asset_items WHERE batch_id = ? AND UPPER(serial_tag) = ?",
+            f"SELECT * FROM {table} WHERE batch_id = ? AND UPPER(serial_tag) = ?",
             (batch_id, d["norm_serial"]),
         ).fetchall()
         results.append(
@@ -292,17 +377,20 @@ def find_duplicate_serials_in_batch(conn, batch_id: int):
     return results
 
 
-def find_unrecognized_in_batch(conn, batch_id: int, raw_column: str, alias_table: str, standard_table: str):
+def find_unrecognized_in_batch(
+    conn, batch_id: int, raw_column: str, alias_table: str, standard_table: str, table: str = "asset_items"
+):
     """Distinct raw values in one batch (device_name_raw/status_raw/
     model_device_raw) that don't match any alias or standard name -
     re-derivable any time from `batch_id` alone, same reasoning as
     find_duplicate_serials_in_batch: the Cleaning Report is revisitable (see
     import_data.result), so this can't rely on the one-shot in-memory
-    CleaningReport from the original import POST."""
+    CleaningReport from the original import POST. `table` is "cctv_items"
+    for a cctv_report batch - the alias/standard tables are shared either way."""
     known_aliases = {row["alias"] for row in conn.execute(f"SELECT alias FROM {alias_table}").fetchall()}
     known_standards = {row["name"] for row in conn.execute(f"SELECT name FROM {standard_table}").fetchall()}
     rows = conn.execute(
-        f"SELECT DISTINCT {raw_column} AS v FROM asset_items WHERE batch_id = ? AND {raw_column} != ''",
+        f"SELECT DISTINCT {raw_column} AS v FROM {table} WHERE batch_id = ? AND {raw_column} != ''",
         (batch_id,),
     ).fetchall()
     return sorted(r["v"] for r in rows if r["v"] not in known_aliases and r["v"] not in known_standards)

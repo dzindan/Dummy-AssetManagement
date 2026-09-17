@@ -73,6 +73,41 @@ CREATE INDEX IF NOT EXISTS idx_asset_items_branch ON asset_items (branch_no);
 -- Assets, Lookup, Branch Detail, Duplicate Check all go through it).
 CREATE INDEX IF NOT EXISTS idx_asset_items_branch_batch ON asset_items (branch_no, batch_id);
 
+-- CCTV equipment (DVR/recorder + attached cameras/monitors) lives in its own
+-- table rather than asset_items: it isn't assigned to a person (no user_id/
+-- full_name/position/handover_date) and carries fields no PC/phone row ever
+-- has (camera_count/hdd_count/hdd_capacity/location). Device/status/model
+-- normalization still goes through the same alias tables as asset_items -
+-- Settings' existing mapping pools cover CCTV values too.
+CREATE TABLE IF NOT EXISTS cctv_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL,
+    asset_key TEXT NOT NULL,
+    branch_dept TEXT,
+    branch_no TEXT,
+    device_name TEXT,
+    device_name_raw TEXT,
+    model_device TEXT,
+    model_device_raw TEXT,
+    manufacturer TEXT,
+    serial_tag TEXT,
+    status TEXT,
+    status_raw TEXT,
+    ip TEXT,
+    camera_count TEXT,
+    hdd_count TEXT,
+    hdd_capacity TEXT,
+    location TEXT,
+    remark TEXT,
+    source_file TEXT,
+    FOREIGN KEY (batch_id) REFERENCES import_batches (id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cctv_items_batch ON cctv_items (batch_id);
+CREATE INDEX IF NOT EXISTS idx_cctv_items_key ON cctv_items (asset_key);
+CREATE INDEX IF NOT EXISTS idx_cctv_items_branch ON cctv_items (branch_no);
+CREATE INDEX IF NOT EXISTS idx_cctv_items_branch_batch ON cctv_items (branch_no, batch_id);
+
 CREATE TABLE IF NOT EXISTS handover_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at TEXT NOT NULL,
@@ -269,7 +304,7 @@ CREATE INDEX IF NOT EXISTS idx_accounts_role ON accounts (role_id);
 # one, or existing role_permissions rows would silently point at nothing.
 PERMISSIONS = {
     "import_data": "Import Data (upload branch codes, user IDs, asset reports)",
-    "edit_assets": "Edit/delete assets (Manage Assets)",
+    "edit_assets": "Edit/delete assets (Manage Assets, Manage CCTV)",
     "handover": "Generate hand-over forms (Lookup & Hand-Over)",
     "network_check": "Network Check (run scans and apply results)",
     "manage_mappings": "Manage Device/Status/Model/Branch Mapping (Settings)",
@@ -506,12 +541,13 @@ def init_db() -> None:
         _clean_existing_ip_data(conn)
         _renormalize_model_device(conn)
         _renormalize_handover_dates(conn)
-        backfill_unmapped(conn, "asset_items", "device_name", "device_aliases", "device_standard_names",
-                           "device_unmapped", "raw_name")
-        backfill_unmapped(conn, "asset_items", "status", "status_aliases", "status_standard_names",
-                           "status_unmapped", "raw_status")
-        backfill_unmapped(conn, "asset_items", "model_device", "model_aliases", "model_standard_names",
-                           "model_unmapped", "raw_model")
+        for source_table in ("asset_items", "cctv_items"):
+            backfill_unmapped(conn, source_table, "device_name", "device_aliases", "device_standard_names",
+                               "device_unmapped", "raw_name")
+            backfill_unmapped(conn, source_table, "status", "status_aliases", "status_standard_names",
+                               "status_unmapped", "raw_status")
+            backfill_unmapped(conn, source_table, "model_device", "model_aliases", "model_standard_names",
+                               "model_unmapped", "raw_model")
         prune_stale_unmapped(conn)
         _backfill_user_no_norm(conn)
         _seed_permissions_and_roles(conn)
@@ -632,7 +668,10 @@ def prune_stale_unmapped(conn: sqlite3.Connection) -> None:
     re-queue), so without this a value can sit in Settings > Unmapped
     forever pointing at zero actual assets, even though Manage Assets has
     nothing to show for it. Call after any operation that deletes or edits
-    asset_items rows (see asset_edit.py), plus once here in init_db() to
+    asset_items OR cctv_items rows (see asset_edit.py/cctv_edit.py) - both
+    tables feed the same device/status/model unmapped queues, so a value
+    only cctv_items still uses must survive a prune triggered by an
+    asset_items-only edit, and vice versa. Plus once here in init_db() to
     self-heal a database that already went stale before this existed."""
     for source_column, unmapped_table, unmapped_column in (
         ("device_name", "device_unmapped", "raw_name"),
@@ -644,6 +683,8 @@ def prune_stale_unmapped(conn: sqlite3.Connection) -> None:
             DELETE FROM {unmapped_table}
             WHERE {unmapped_column} NOT IN (
                 SELECT DISTINCT {source_column} FROM asset_items WHERE {source_column} != ''
+                UNION
+                SELECT DISTINCT {source_column} FROM cctv_items WHERE {source_column} != ''
             )
             """
         )

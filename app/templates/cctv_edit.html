@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Edit CCTV #{{ asset['id'] }} - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>Edit CCTV #{{ asset['id'] }}</h1>
+<p class="muted">
+  From import batch: <strong>{{ batch['label'] if batch else asset['batch_id'] }}</strong>
+  {% if batch and batch['period'] %} &middot; Period: <strong>{{ batch['period'] }}</strong>{% endif %}
+  &middot; Source file: {{ asset['source_file'] }}
+</p>
+
+<form method="post" action="{{ url_for('cctv_edit.edit', asset_id=asset['id']) }}">
+  <input type="hidden" name="next" value="{{ next_url }}">
+
+  <div class="panel">
+    <h2>Equipment</h2>
+    <div class="field-row">
+      <div>
+        <label for="device_name">Device name</label>
+        <input type="text" id="device_name" name="device_name" value="{{ asset['device_name'] }}" class="uc" list="standard-names" required>
+        <datalist id="standard-names">
+          {% for name in standard_names %}<option value="{{ name }}">{% endfor %}
+        </datalist>
+      </div>
+      <div>
+        <label for="model_device">Model</label>
+        <input type="text" id="model_device" name="model_device" value="{{ asset['model_device'] }}" class="uc">
+      </div>
+      <div>
+        <label for="manufacturer">Manufacturer</label>
+        <input type="text" id="manufacturer" name="manufacturer" value="{{ asset['manufacturer'] }}" class="uc">
+      </div>
+      <div>
+        <label for="serial_tag">Serial / Service Tag</label>
+        <input type="text" id="serial_tag" name="serial_tag" value="{{ asset['serial_tag'] }}" class="uc">
+      </div>
+    </div>
+    <div class="field-row">
+      <div>
+        <label for="status">Status</label>
+        <input type="text" id="status" name="status" value="{{ asset['status'] }}" class="uc" list="standard-statuses">
+        <datalist id="standard-statuses">
+          {% for name in standard_statuses %}<option value="{{ name }}">{% endfor %}
+        </datalist>
+      </div>
+      <div>
+        <label for="ip">IP</label>
+        <input type="text" id="ip" name="ip" value="{{ asset['ip'] }}" class="uc">
+      </div>
+      <div>
+        <label for="remark">Remark</label>
+        <input type="text" id="remark" name="remark" value="{{ asset['remark'] }}" class="uc">
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>CCTV Details</h2>
+    <div class="field-row">
+      <div>
+        <label for="camera_count">Cameras connected</label>
+        <input type="text" id="camera_count" name="camera_count" value="{{ asset['camera_count'] }}">
+      </div>
+      <div>
+        <label for="hdd_count">Number of hard disks</label>
+        <input type="text" id="hdd_count" name="hdd_count" value="{{ asset['hdd_count'] }}">
+      </div>
+      <div>
+        <label for="hdd_capacity">HDD capacity (total)</label>
+        <input type="text" id="hdd_capacity" name="hdd_capacity" value="{{ asset['hdd_capacity'] }}" class="uc">
+      </div>
+      <div>
+        <label for="location">Location</label>
+        <input type="text" id="location" name="location" value="{{ asset['location'] }}" class="uc">
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Branch</h2>
+    <div class="field-row">
+      <div>
+        <label for="branch_dept">Branch / Dept (as in the report)</label>
+        <input type="text" id="branch_dept" name="branch_dept" value="{{ asset['branch_dept'] }}" class="uc">
+      </div>
+    </div>
+    <p class="muted">Branch resolution (used for "current state") is derived from Branch/Dept text at import time and is not directly editable here - fix the alias in Settings if the wrong branch was matched.</p>
+  </div>
+
+  <button type="submit">Save Changes</button>
+  <a class="btn secondary" href="{{ next_url or url_for('cctv_edit.index') }}">Cancel</a>
+</form>
+{% endblock %}

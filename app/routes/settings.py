@@ -366,12 +366,14 @@ def rescan_unmapped():
     on demand."""
     conn = get_connection()
     try:
-        added_devices = backfill_unmapped(conn, "asset_items", "device_name", "device_aliases",
-                                           "device_standard_names", "device_unmapped", "raw_name")
-        added_statuses = backfill_unmapped(conn, "asset_items", "status", "status_aliases",
-                                            "status_standard_names", "status_unmapped", "raw_status")
-        added_models = backfill_unmapped(conn, "asset_items", "model_device", "model_aliases",
-                                          "model_standard_names", "model_unmapped", "raw_model")
+        added_devices = added_statuses = added_models = 0
+        for source_table in ("asset_items", "cctv_items"):
+            added_devices += backfill_unmapped(conn, source_table, "device_name", "device_aliases",
+                                                "device_standard_names", "device_unmapped", "raw_name")
+            added_statuses += backfill_unmapped(conn, source_table, "status", "status_aliases",
+                                                 "status_standard_names", "status_unmapped", "raw_status")
+            added_models += backfill_unmapped(conn, source_table, "model_device", "model_aliases",
+                                               "model_standard_names", "model_unmapped", "raw_model")
         total = added_devices + added_statuses + added_models
         log_activity(conn, "mapping", "Checked all for unmapped values", performed_by=current_username(),
                      target=f"{total} new: {added_devices} device, {added_statuses} status, {added_models} model")
@@ -456,11 +458,15 @@ def delete_standard_name():
         # old canonical name on every affected row even though Settings
         # correctly moved its alias back to Unmapped.
         conn.execute("UPDATE asset_items SET device_name = UPPER(device_name_raw) WHERE device_name = ?", (name,))
+        conn.execute("UPDATE cctv_items SET device_name = UPPER(device_name_raw) WHERE device_name = ?", (name,))
         # After that resync, any row still showing `name` has it because its
         # own raw text literally IS `name` (no alias was ever involved, so
         # the alias loop above never queued it) - queue that into Unmapped
         # too, or it vanishes from every mapping list despite still being here.
-        if conn.execute("SELECT 1 FROM asset_items WHERE device_name = ? LIMIT 1", (name,)).fetchone():
+        if conn.execute(
+            "SELECT 1 FROM asset_items WHERE device_name = ? UNION SELECT 1 FROM cctv_items WHERE device_name = ?",
+            (name, name),
+        ).fetchone():
             record_unmapped_device(conn, name)
         # An alias re-queued above might itself be a phantom - e.g. a seed
         # default like COMPUTER->PC that no actual import ever used - which
@@ -534,7 +540,11 @@ def delete_standard_status():
         # See delete_standard_name()'s comment - same resync for assets whose
         # displayed status pointed at this now-deleted canonical name.
         conn.execute("UPDATE asset_items SET status = UPPER(status_raw) WHERE status = ?", (name,))
-        if conn.execute("SELECT 1 FROM asset_items WHERE status = ? LIMIT 1", (name,)).fetchone():
+        conn.execute("UPDATE cctv_items SET status = UPPER(status_raw) WHERE status = ?", (name,))
+        if conn.execute(
+            "SELECT 1 FROM asset_items WHERE status = ? UNION SELECT 1 FROM cctv_items WHERE status = ?",
+            (name, name),
+        ).fetchone():
             record_unmapped_status(conn, name)
         # See delete_standard_name()'s comment on prune_stale_unmapped().
         prune_stale_unmapped(conn)
@@ -577,6 +587,11 @@ def map_status_alias():
             "WHERE status = UPPER(status_raw) AND UPPER(status_raw) = ?",
             (canonical_name, alias),
         )
+        conn.execute(
+            "UPDATE cctv_items SET status = ? "
+            "WHERE status = UPPER(status_raw) AND UPPER(status_raw) = ?",
+            (canonical_name, alias),
+        )
         log_activity(conn, "mapping", "Mapped status alias", performed_by=current_username(),
                      target=alias, new_value=canonical_name)
         conn.commit()
@@ -606,6 +621,11 @@ def unmap_status_alias():
             # stale canonical status nothing points to anymore.
             conn.execute(
                 "UPDATE asset_items SET status = UPPER(status_raw) "
+                "WHERE status = ? AND UPPER(status_raw) = ?",
+                (row["canonical_name"], alias),
+            )
+            conn.execute(
+                "UPDATE cctv_items SET status = UPPER(status_raw) "
                 "WHERE status = ? AND UPPER(status_raw) = ?",
                 (row["canonical_name"], alias),
             )
@@ -681,7 +701,11 @@ def delete_standard_model():
         # See delete_standard_name()'s comment - same resync for assets whose
         # displayed model pointed at this now-deleted canonical name.
         conn.execute("UPDATE asset_items SET model_device = UPPER(model_device_raw) WHERE model_device = ?", (name,))
-        if conn.execute("SELECT 1 FROM asset_items WHERE model_device = ? LIMIT 1", (name,)).fetchone():
+        conn.execute("UPDATE cctv_items SET model_device = UPPER(model_device_raw) WHERE model_device = ?", (name,))
+        if conn.execute(
+            "SELECT 1 FROM asset_items WHERE model_device = ? UNION SELECT 1 FROM cctv_items WHERE model_device = ?",
+            (name, name),
+        ).fetchone():
             record_unmapped_model(conn, name)
         # See delete_standard_name()'s comment on prune_stale_unmapped().
         prune_stale_unmapped(conn)
@@ -724,6 +748,11 @@ def map_model_alias():
             "WHERE model_device = UPPER(model_device_raw) AND UPPER(model_device_raw) = ?",
             (canonical_name, alias),
         )
+        conn.execute(
+            "UPDATE cctv_items SET model_device = ? "
+            "WHERE model_device = UPPER(model_device_raw) AND UPPER(model_device_raw) = ?",
+            (canonical_name, alias),
+        )
         log_activity(conn, "mapping", "Mapped model alias", performed_by=current_username(),
                      target=alias, new_value=canonical_name)
         conn.commit()
@@ -748,6 +777,11 @@ def unmap_model_alias():
             # See unmap_status_alias()'s comment on resyncing affected rows.
             conn.execute(
                 "UPDATE asset_items SET model_device = UPPER(model_device_raw) "
+                "WHERE model_device = ? AND UPPER(model_device_raw) = ?",
+                (row["canonical_name"], alias),
+            )
+            conn.execute(
+                "UPDATE cctv_items SET model_device = UPPER(model_device_raw) "
                 "WHERE model_device = ? AND UPPER(model_device_raw) = ?",
                 (row["canonical_name"], alias),
             )
@@ -801,6 +835,11 @@ def map_device_alias():
             "WHERE device_name = UPPER(device_name_raw) AND UPPER(device_name_raw) = ?",
             (canonical_name, alias),
         )
+        conn.execute(
+            "UPDATE cctv_items SET device_name = ? "
+            "WHERE device_name = UPPER(device_name_raw) AND UPPER(device_name_raw) = ?",
+            (canonical_name, alias),
+        )
         log_activity(conn, "mapping", "Mapped device alias", performed_by=current_username(),
                      target=alias, new_value=canonical_name)
         conn.commit()
@@ -827,6 +866,11 @@ def unmap_device_alias():
             # See unmap_status_alias()'s comment on resyncing affected rows.
             conn.execute(
                 "UPDATE asset_items SET device_name = UPPER(device_name_raw) "
+                "WHERE device_name = ? AND UPPER(device_name_raw) = ?",
+                (row["canonical_name"], alias),
+            )
+            conn.execute(
+                "UPDATE cctv_items SET device_name = UPPER(device_name_raw) "
                 "WHERE device_name = ? AND UPPER(device_name_raw) = ?",
                 (row["canonical_name"], alias),
             )
@@ -1004,7 +1048,7 @@ def reset_data_location():
 # accounts/roles, hand-over records) untouched. Each checkbox key here maps
 # 1:1 to one block below in reset_imported_data().
 RESET_IMPORTED_DATA_OPTIONS = {
-    "asset_reports": "Asset Reports (asset items, import batches, diff reports, network check log)",
+    "asset_reports": "Asset Reports (asset items, CCTV items, import batches, diff reports, network check log)",
     "id_data": "Branch Codes & User IDs (branches, users)",
     "import_log": "Import History log",
     "unmapped": "Unmapped queues (device / status / model / branch)",
@@ -1022,10 +1066,11 @@ def reset_imported_data():
     conn = get_connection()
     try:
         if "asset_reports" in selected:
-            # asset_items.batch_id references import_batches(id) - delete
-            # children before the parent or the FK check (PRAGMA
-            # foreign_keys=ON, see get_connection) rejects it.
+            # asset_items.batch_id and cctv_items.batch_id both reference
+            # import_batches(id) - delete children before the parent or the
+            # FK check (PRAGMA foreign_keys=ON, see get_connection) rejects it.
             conn.execute("DELETE FROM asset_items")
+            conn.execute("DELETE FROM cctv_items")
             conn.execute("DELETE FROM import_batches")
             conn.execute("DELETE FROM network_check_log")
             for row in conn.execute("SELECT file_path FROM diff_reports").fetchall():
@@ -1078,6 +1123,7 @@ def reset_imported_data():
 
 ACTIVITY_LOG_CATEGORIES = [
     ("asset", "Manage Assets"),
+    ("cctv", "Manage CCTV"),
     ("mapping", "Settings / Mapping"),
     ("settings", "Settings / General"),
     ("user_admin", "Users & Roles"),

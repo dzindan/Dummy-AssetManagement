@@ -275,7 +275,9 @@ class TemplateDownloadTests(unittest.TestCase):
 
     def test_asset_report_example_row_actually_imports(self):
         path = self._save_template("/import/templates/asset-report", "asset.xlsx")
-        report = import_asset_report(path, source_label="asset.xlsx")
+        reports = import_asset_report(path, source_label="asset.xlsx")
+        self.assertEqual(len(reports), 1)
+        report = reports[0]
         self.assertEqual(report.error, "")
         self.assertEqual(report.rows_imported, 1)
 

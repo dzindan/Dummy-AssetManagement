@@ -5,7 +5,7 @@
 
 {% for r in reports %}
 <div class="panel">
-  <h2>{{ r.source_file }}</h2>
+  <h2>{{ r.source_file }} {% if r.kind == 'cctv_report' %}<span class="badge badge-changed">CCTV</span>{% endif %}</h2>
   {% if r.error %}
     <p><span class="badge badge-removed">Error</span> {{ r.error }}</p>
   {% else %}
@@ -39,11 +39,14 @@
     <p class="muted">These didn't look like a real IP address (typo, placeholder text, or a missing octet) and won't be scanned by Network Check. Fix the IP column in the source file and re-import to recover them.</p>
     {% endif %}
     {% if r.duplicate_serials %}
+    {% set edit_bp = 'cctv_edit' if r.kind == 'cctv_report' else 'asset_edit' %}
     <p style="margin-top:0.9rem;"><span class="badge badge-changed">{{ r.duplicate_serials | length }} duplicate serial(s) - same serial appears more than once in this import</span></p>
     <div class="actions" style="margin-top:0;">
+      {% if r.kind != 'cctv_report' %}
       <a class="btn" href="{{ url_for('import_data.export_duplicates', batch_ids=r.batch_id) }}">Export to Excel</a>
+      {% endif %}
       <button type="button" class="danger" data-bulk-delete-trigger
-        data-bulk-delete-url="{{ url_for('asset_edit.bulk_delete') }}"
+        data-bulk-delete-url="{{ url_for(edit_bp + '.bulk_delete') }}"
         data-bulk-delete-checkbox-class="dupe-row-checkbox-{{ r.batch_id }}"
         data-bulk-delete-next="{{ request.url }}">Delete Selected</button>
       <label style="font-weight:normal;"><input type="checkbox" data-select-all="dupe-row-checkbox-{{ r.batch_id }}"> Select all</label>
@@ -53,7 +56,11 @@
     <div class="table-scroll">
     <table>
       <thead>
+        {% if r.kind == 'cctv_report' %}
+        <tr><th></th><th>Branch / Dept</th><th>Device</th><th>Model</th><th>Location</th><th>Status</th><th></th></tr>
+        {% else %}
         <tr><th></th><th>Branch / Dept</th><th>Device</th><th>User ID</th><th>Full Name</th><th>Model</th><th>Status</th><th></th></tr>
+        {% endif %}
       </thead>
       <tbody>
         {% for row in d.rows %}
@@ -61,13 +68,18 @@
           <td><input type="checkbox" class="dupe-row-checkbox-{{ r.batch_id }}" value="{{ row['id'] }}"></td>
           <td>{{ row['branch_dept'] }}</td>
           <td>{{ row['device_name'] }}</td>
+          {% if r.kind == 'cctv_report' %}
+          <td>{{ row['model_device'] }}</td>
+          <td>{{ row['location'] }}</td>
+          {% else %}
           <td>{{ row['user_id_raw'] }}</td>
           <td>{{ row['full_name'] }}</td>
           <td>{{ row['model_device'] }}</td>
+          {% endif %}
           <td>{{ row['status'] }}</td>
           <td>
-            <a class="btn secondary" href="{{ url_for('asset_edit.edit', asset_id=row['id'], next=request.url) }}">Edit #{{ row['id'] }}</a>
-            <form method="post" action="{{ url_for('asset_edit.delete', asset_id=row['id']) }}" style="display:inline;" onsubmit="return confirm('Delete asset #{{ row['id'] }} ({{ row['device_name'] }}, {{ d.serial }})? This cannot be undone.');">
+            <a class="btn secondary" href="{{ url_for(edit_bp + '.edit', asset_id=row['id'], next=request.url) }}">Edit #{{ row['id'] }}</a>
+            <form method="post" action="{{ url_for(edit_bp + '.delete', asset_id=row['id']) }}" style="display:inline;" onsubmit="return confirm('Delete #{{ row['id'] }} ({{ row['device_name'] }}, {{ d.serial }})? This cannot be undone.');">
               <input type="hidden" name="next" value="{{ request.url }}">
               <button type="submit" class="danger">Delete</button>
             </form>

@@ -126,6 +126,30 @@ def build_asset_rows_workbook(
     return build_workbook(sheet_title, columns, rows)
 
 
+# CCTV counterpart of ASSET_ROW_COLUMNS - no User ID/Full Name/Position/
+# Handover Date (CCTV gear isn't assigned to a person), with camera/HDD/
+# location/manufacturer fields in their place.
+CCTV_ROW_COLUMNS: list[ColumnSpec] = [
+    ("Device", "device_name"),
+    ("Model", "model_device"),
+    ("Manufacturer", "manufacturer"),
+    ("Serial/Service Tag", "serial_tag"),
+    ("Status", "status"),
+    ("IP", "ip"),
+    ("Camera Count", "camera_count"),
+    ("HDD Count", "hdd_count"),
+    ("HDD Capacity", "hdd_capacity"),
+    ("Location", "location"),
+    ("Remark", "remark"),
+]
+
+
+def build_cctv_rows_workbook(
+    rows: Iterable, sheet_title: str = "CCTV", columns: Sequence[ColumnSpec] = CCTV_ROW_COLUMNS
+) -> openpyxl.Workbook:
+    return build_workbook(sheet_title, columns, rows)
+
+
 def build_import_template_workbook(headers: Sequence[str], example_row: Sequence[Any] | None = None) -> openpyxl.Workbook:
     """Blank downloadable template for one of the import formats. `headers`
     must come from importer.py's own constants (HEADER_ALIASES's canonical
