@@ -61,8 +61,16 @@ def normalize_branch_text(value) -> str:
     return _TO_ABBREVIATION_RE.sub("TRANSACTION OFFICE", text)
 
 
+# Some branch reports append a footnote marker to header text, e.g.
+# "DEVICE NAME\n(1)" / "SERIAL/SERVICE TAG\n(4)" pointing at a legend
+# elsewhere in the sheet - strip a trailing "(<digits>)" so these still
+# match the plain alias list instead of failing header detection entirely.
+_HEADER_FOOTNOTE_RE = re.compile(r"\s*\(\d+\)$")
+
+
 def _normalize_header_cell(value) -> str:
-    return re.sub(r"\s+", " ", _clean_str(value)).upper()
+    text = re.sub(r"\s+", " ", _clean_str(value)).upper().strip()
+    return _HEADER_FOOTNOTE_RE.sub("", text).strip()
 
 
 # --- Asset-report column detection -----------------------------------------
@@ -73,12 +81,13 @@ HEADER_ALIASES = {
     "user_id": ["USER ID", "USERID"],
     "full_name": ["FULL NAME", "FULLNAME"],
     "model_device": ["MODEL DEVICE", "MODEL"],
-    "ip": ["IP"],
+    "ip": ["IP", "IP ADDRESS"],
     "serial_tag": [
         "SERIAL/ SERVICE TAG",
         "SERIAL / SERVICE TAG",
         "SERIAL/SERVICE TAG",
         "SERIAL NUMBER",
+        "SERIAL NO",
         "SERIAL",
         "SERVICE TAG",
     ],
@@ -87,6 +96,21 @@ HEADER_ALIASES = {
     "position": ["POSITION", "CURRENT POSITION", "TITLE"],
     "handover_date": ["HANDOVER DATE", "HANDOVERDAY", "HANDOVER DAY", "HANDOVER\nDAY"],
 }
+
+# CCTV-report sheets share the same file (e.g. "CCTV REPORT ...") but describe
+# a DVR/recorder + its attached cameras/monitors rather than a person-assigned
+# device, so they carry a few fields no OA-equipment sheet has. A header row
+# matching any of these (on top of the required fields below) is what marks a
+# sheet as CCTV rather than regular equipment - see HeaderMatch.kind.
+CCTV_FIELD_ALIASES = {
+    "camera_count": ["NUMBER OF CAMERA CONNECTED", "NO OF CAMERA", "NUMBER OF CAMERAS", "CAMERA CONNECTED"],
+    "hdd_count": ["NUMBER OF HARD DISK", "NO OF HARD DISK", "HDD COUNT", "NUMBER OF HARD DISKS"],
+    "hdd_capacity": ["CAPACITY OF ALL HARD DISK", "HDD CAPACITY", "TOTAL HDD CAPACITY", "CAPACITY OF HARD DISK"],
+    "location": ["LOCATION"],
+    "manufacturer": ["PRODUCTION"],
+}
+
+CCTV_KIND_FIELDS = {"camera_count", "hdd_count", "hdd_capacity", "location"}
 
 # Sheets we should never treat as the equipment list even if a stray header matches.
 SHEET_NAME_SKIP_PATTERNS = ["PIVOT", "PIOT", "GUIDELINE", "HDD BROKEN"]
@@ -103,7 +127,7 @@ USER_FILE_OPTIONAL_COLUMNS = ["ENG. BANKER NAME", "BANKER KEY NUMBER", "STATUS"]
 
 def _build_alias_lookup() -> dict[str, str]:
     lookup = {}
-    for field_name, aliases in HEADER_ALIASES.items():
+    for field_name, aliases in {**HEADER_ALIASES, **CCTV_FIELD_ALIASES}.items():
         for alias in aliases:
             lookup[_normalize_header_cell(alias)] = field_name
     return lookup
@@ -118,6 +142,28 @@ class HeaderMatch:
     header_row_idx: int  # 0-based
     col_map: dict[str, int]  # field_name -> column index
     branch_hint: str = ""
+    kind: str = "asset"  # "asset" (person-assigned equipment) or "cctv"
+
+
+def _count_populated_rows(ws, header_row_idx: int, col_map: dict[str, int]) -> int:
+    """How many rows below the header actually carry data in both required
+    fields - used to break a header-score tie in favor of the sheet with
+    real content, since a stray scratch/filter tab can carry the exact
+    same header row (and therefore the exact same score) as the genuine
+    equipment list but list devices with no serial/user data filled in."""
+    device_col = col_map.get("device_name")
+    serial_col = col_map.get("serial_tag")
+    if device_col is None or serial_col is None:
+        return 0
+    count = 0
+    for row in ws.iter_rows(min_row=header_row_idx + 2, values_only=True):
+        if row is None:
+            continue
+        device = row[device_col] if device_col < len(row) else None
+        serial = row[serial_col] if serial_col < len(row) else None
+        if _clean_str(device) and _clean_str(serial):
+            count += 1
+    return count
 
 
 def _find_branch_hint(ws, header_row_idx: int) -> str:
@@ -133,9 +179,29 @@ def _find_branch_hint(ws, header_row_idx: int) -> str:
     return ""
 
 
-def detect_equipment_sheet(wb) -> HeaderMatch | None:
-    best: HeaderMatch | None = None
-    best_score = 0
+def detect_equipment_sheets(wb) -> list[HeaderMatch]:
+    """Find the best equipment sheet PER KIND (at most one "asset" match and
+    one "cctv" match), not just a single global best - a monthly branch
+    report routinely packs an OA/PC equipment sheet AND a separate CCTV
+    equipment sheet into one workbook, and both need to be imported.
+
+    Deliberately NOT "every sheet that qualifies": real files carry stray
+    scratch/print-view sheets (seen in practice: generic names like
+    "Sheet5", "To print") that are partial or full duplicates of the same
+    OA data, under the exact same column shape - if every qualifying sheet
+    were imported, those would double-import the same equipment as bogus
+    extra batches. Scoring per kind and keeping only each kind's single
+    best match reproduces the old global-best behavior for regular
+    equipment sheets (a duplicate/partial sheet never outscores the real
+    one) while still rescuing a CCTV sheet that the old code silently
+    dropped because a single global best could only ever be one sheet.
+
+    A duplicate/partial sheet can still tie the real list's score exactly
+    (same header row copy-pasted, fewer/no data rows below it) - ties are
+    broken by populated-row count (see _count_populated_rows) so the sheet
+    that actually holds the data wins, not whichever one happens to sit
+    earlier in the workbook's tab order."""
+    best_by_kind: dict[str, tuple[int, int, HeaderMatch]] = {}
     for sheet_name in wb.sheetnames:
         upper_name = sheet_name.upper()
         if any(p in upper_name for p in SHEET_NAME_SKIP_PATTERNS):
@@ -153,15 +219,41 @@ def detect_equipment_sheet(wb) -> HeaderMatch | None:
                     col_map[field_name] = col_idx
             score = len(col_map)
             has_required = REQUIRED_FIELDS_FOR_HEADER_ROW.issubset(col_map.keys())
-            if has_required and score > best_score:
-                best_score = score
-                best = HeaderMatch(
+            if not has_required:
+                continue
+            kind = "cctv" if CCTV_KIND_FIELDS & col_map.keys() else "asset"
+            current_best = best_by_kind.get(kind)
+            populated_rows = _count_populated_rows(ws, row_idx, col_map)
+            is_better = (
+                current_best is None
+                or score > current_best[0]
+                or (score == current_best[0] and populated_rows > current_best[1])
+            )
+            if is_better:
+                match = HeaderMatch(
                     sheet_name=sheet_name,
                     header_row_idx=row_idx,
                     col_map=col_map,
                     branch_hint=_find_branch_hint(ws, row_idx),
+                    kind=kind,
                 )
-    return best
+                best_by_kind[kind] = (score, populated_rows, match)
+    return [match for _score, _rows, match in best_by_kind.values()]
+
+
+def detect_equipment_sheet(wb) -> HeaderMatch | None:
+    """Single-match compatibility wrapper for callers that only ever expect
+    one equipment sheet per workbook (the Total Asset baseline file's flat,
+    multi-branch shape, and the lightweight pre-import branch-hint peek) -
+    prefers a regular equipment match over a CCTV one, since neither of
+    those callers deal with CCTV-shaped files today."""
+    matches = detect_equipment_sheets(wb)
+    if not matches:
+        return None
+    for match in matches:
+        if match.kind == "asset":
+            return match
+    return matches[0]
 
 
 def _asset_key(branch_dept: str, device_name: str, model_device: str, serial_tag: str, user_id_norm: str) -> str:
@@ -174,6 +266,22 @@ def _asset_key(branch_dept: str, device_name: str, model_device: str, serial_tag
             _clean_str(device_name).upper(),
             _clean_str(model_device).upper(),
             user_id_norm,
+        ]
+    )
+
+
+def _cctv_asset_key(branch_dept: str, device_name: str, model_device: str, serial_tag: str) -> str:
+    """Same idea as _asset_key, minus the user_id component - CCTV gear isn't
+    assigned to a person, so there's nothing to key the no-serial fallback on
+    besides branch/device/model."""
+    serial = _clean_str(serial_tag).upper()
+    if serial:
+        return f"SN:{serial}"
+    return "FB:" + "|".join(
+        [
+            normalize_branch_text(branch_dept),
+            _clean_str(device_name).upper(),
+            _clean_str(model_device).upper(),
         ]
     )
 
@@ -416,6 +524,10 @@ class CleaningReport:
     branch_no: str = ""
     batch_id: int = 0
     error: str = ""
+    # "asset_report" (person-assigned equipment) or "cctv_report" - lets
+    # templates/routes tell which table (asset_items vs cctv_items) and
+    # which column set a given report/batch is about.
+    kind: str = "asset_report"
 
 
 def _ingest_asset_rows(
@@ -600,6 +712,159 @@ def _ingest_asset_rows(
         )
 
 
+def _ingest_cctv_rows(
+    conn,
+    batch_id: int,
+    rows,
+    col_map: dict[str, int],
+    branch_hint_default: str,
+    source_label: str,
+    report: CleaningReport,
+    fixed_branch_no: str | None = None,
+) -> None:
+    """Same idea as _ingest_asset_rows, for a CCTV-report sheet's rows -
+    device/status/model normalization and branch resolution are identical
+    (same alias tables, so Settings' existing mapping pools cover CCTV
+    values too), but there's no user_id/full_name/position/handover_date
+    (CCTV gear isn't assigned to a person), and camera_count/hdd_count/
+    hdd_capacity/location/manufacturer take their place instead."""
+    seen_keys: dict[str, int] = {}
+    duplicate_ids: dict[str, list[int]] = {}
+    serial_display: dict[str, str] = {}
+    branch_cache: dict = {}
+    device_cache: dict = {}
+    status_cache: dict = {}
+    model_cache: dict = {}
+    unrecognized_devices: set[str] = set()
+    unrecognized_statuses: set[str] = set()
+    unrecognized_models: set[str] = set()
+    invalid_ips: set[str] = set()
+
+    known_device_aliases = {
+        row["alias"] for row in conn.execute("SELECT alias FROM device_aliases").fetchall()
+    }
+    known_standard_names = {
+        row["name"] for row in conn.execute("SELECT name FROM device_standard_names").fetchall()
+    }
+    known_status_aliases = {
+        row["alias"] for row in conn.execute("SELECT alias FROM status_aliases").fetchall()
+    }
+    known_standard_statuses = {
+        row["name"] for row in conn.execute("SELECT name FROM status_standard_names").fetchall()
+    }
+    known_model_aliases = {
+        row["alias"] for row in conn.execute("SELECT alias FROM model_aliases").fetchall()
+    }
+    known_standard_models = {
+        row["name"] for row in conn.execute("SELECT name FROM model_standard_names").fetchall()
+    }
+
+    def get(row, field_name):
+        idx = col_map.get(field_name)
+        return row[idx] if idx is not None and idx < len(row) else None
+
+    for row in rows:
+        if row is None or all(c is None or _clean_str(c) == "" for c in row):
+            continue
+        report.rows_read += 1
+
+        device_name_raw = _clean_str(get(row, "device_name"))
+        serial_tag = _clean_serial(get(row, "serial_tag"))
+        branch_dept_cell = _clean_str(get(row, "branch_dept")) or branch_hint_default
+
+        if not device_name_raw and not serial_tag:
+            report.rows_skipped_no_data += 1
+            continue
+
+        device_clean = device_name_raw.upper()
+        if device_clean and device_clean not in known_device_aliases and device_clean not in known_standard_names:
+            unrecognized_devices.add(device_clean)
+            record_unmapped_device(conn, device_clean)
+        device_name = normalize_device_name(conn, device_name_raw, cache=device_cache)
+
+        status_raw = _clean_str(get(row, "status"))
+        status_clean = status_raw.upper()
+        if status_clean and status_clean not in known_status_aliases and status_clean not in known_standard_statuses:
+            unrecognized_statuses.add(status_clean)
+            record_unmapped_status(conn, status_clean)
+        status = normalize_status(conn, status_raw, cache=status_cache)
+
+        model_device_raw = _clean_str(get(row, "model_device"))
+        model_clean = model_device_raw.upper()
+        if model_clean and model_clean not in known_model_aliases and model_clean not in known_standard_models:
+            unrecognized_models.add(model_clean)
+            record_unmapped_model(conn, model_clean)
+        model_device = normalize_model_device(conn, model_device_raw, cache=model_cache)
+
+        asset_key = _cctv_asset_key(branch_dept_cell, device_name, model_device, serial_tag)
+        if fixed_branch_no is not None:
+            branch_no = fixed_branch_no
+        else:
+            branch_no, _ = resolve_branch(conn, branch_dept_cell, cache=branch_cache)
+            if not branch_no:
+                record_unresolved_branch(conn, branch_dept_cell)
+
+        ip_raw = _clean_str(get(row, "ip"))
+        ip = clean_ip(ip_raw)
+        if ip_raw and not ip:
+            invalid_ips.add(ip_raw)
+
+        cursor = conn.execute(
+            """
+            INSERT INTO cctv_items (
+                batch_id, asset_key, branch_dept, branch_no, device_name, device_name_raw,
+                model_device, model_device_raw, manufacturer, serial_tag, status, status_raw,
+                ip, camera_count, hdd_count, hdd_capacity, location, remark, source_file
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                batch_id,
+                asset_key,
+                branch_dept_cell,
+                branch_no,
+                device_name,
+                device_name_raw,
+                model_device,
+                model_device_raw,
+                _clean_str(get(row, "manufacturer")),
+                serial_tag,
+                status,
+                status_raw,
+                ip,
+                _clean_str(get(row, "camera_count")),
+                _clean_str(get(row, "hdd_count")),
+                _clean_str(get(row, "hdd_capacity")),
+                _clean_str(get(row, "location")),
+                _clean_str(get(row, "remark")),
+                source_label,
+            ),
+        )
+        new_id = cursor.lastrowid
+        report.rows_imported += 1
+
+        if serial_tag:
+            if asset_key in seen_keys:
+                ids = duplicate_ids.setdefault(asset_key, [seen_keys[asset_key]])
+                ids.append(new_id)
+            else:
+                seen_keys[asset_key] = new_id
+                serial_display[asset_key] = serial_tag
+
+    report.unrecognized_devices = sorted(unrecognized_devices)
+    report.unrecognized_statuses = sorted(unrecognized_statuses)
+    report.unrecognized_models = sorted(unrecognized_models)
+    report.invalid_ips = sorted(invalid_ips)
+    report.duplicate_serials = []
+    for key, ids in sorted(duplicate_ids.items()):
+        placeholders = ",".join("?" * len(ids))
+        detail_rows = conn.execute(
+            f"SELECT * FROM cctv_items WHERE id IN ({placeholders})", ids
+        ).fetchall()
+        report.duplicate_serials.append(
+            {"serial": serial_display.get(key, key), "asset_ids": ids, "rows": detail_rows}
+        )
+
+
 def peek_asset_report_branch(conn, path: str) -> dict:
     """Lightweight pre-import check: which branch a report file would
     resolve to, without creating a batch or inserting any rows. Used by
@@ -637,100 +902,122 @@ def peek_asset_report_branch(conn, path: str) -> dict:
 
 def import_asset_report(
     path: str, source_label: str | None = None, period: str | None = None, performed_by: str = ""
-) -> CleaningReport:
-    report = CleaningReport(source_file=source_label or path)
+) -> list[CleaningReport]:
+    """Import every equipment sheet in the file, not just one - a monthly
+    branch report routinely packs a regular OA/PC equipment sheet AND a
+    separate CCTV equipment sheet into one workbook (see
+    detect_equipment_sheets), so each qualifying sheet gets its own
+    import_batches row + CleaningReport rather than only the single
+    best-scoring sheet winning and the rest being silently dropped."""
+    source_file = source_label or path
     conn = get_connection()
     try:
         wb = openpyxl.load_workbook(path, data_only=True)
     except Exception as exc:  # noqa: BLE001 - surfaced to the user as-is
+        report = CleaningReport(source_file=source_file)
         report.error = f"Could not open file: {exc}"
-        log_import(conn, "asset_report", report.source_file, period=period or "", result=report.error,
+        log_import(conn, "asset_report", source_file, period=period or "", result=report.error,
                    imported_by=performed_by)
         conn.commit()
         conn.close()
-        return report
+        return [report]
 
-    match = detect_equipment_sheet(wb)
-    if not match:
+    matches = detect_equipment_sheets(wb)
+    if not matches:
         wb.close()
+        report = CleaningReport(source_file=source_file)
         report.error = "No equipment list sheet found (no header row matched DEVICE NAME + SERIAL columns)."
-        log_import(conn, "asset_report", report.source_file, period=period or "", result=report.error,
+        log_import(conn, "asset_report", source_file, period=period or "", result=report.error,
                    imported_by=performed_by)
         conn.commit()
         conn.close()
-        return report
-
-    report.sheet_name = match.sheet_name
-    report.branch_hint = match.branch_hint
-
-    ws = wb[match.sheet_name]
-
-    if not report.branch_hint and "branch_dept" in match.col_map:
-        # No separate "Branch/TO/Center Name:" label row was found - some
-        # files (e.g. ones with a plain "BRANCH" column instead) only carry
-        # the branch name once per row. Fall back to the first non-empty
-        # value in that column so the file still resolves to a branch
-        # instead of every row silently landing in "unresolved".
-        idx = match.col_map["branch_dept"]
-        for row in ws.iter_rows(min_row=match.header_row_idx + 2, values_only=True):
-            if row is None or idx >= len(row):
-                continue
-            value = _clean_str(row[idx])
-            if value:
-                report.branch_hint = value
-                break
-
-    branch_no, branch_matched = resolve_branch(conn, report.branch_hint)
-    report.branch_matched = branch_matched
-    report.branch_no = branch_no
-    if not branch_no:
-        record_unresolved_branch(conn, report.branch_hint)
-
-    header_row_values = next(
-        ws.iter_rows(min_row=match.header_row_idx + 1, max_row=match.header_row_idx + 1, values_only=True)
-    )
-    known_col_idxs = set(match.col_map.values())
-    for idx, cell in enumerate(header_row_values):
-        text = _clean_str(cell)
-        if text and idx not in known_col_idxs:
-            report.unmapped_columns.append(text)
+        return [report]
 
     now = _now_iso()
     resolved_period = period.strip() if period and period.strip() else now[:7]
-    batch_id = conn.execute(
-        """INSERT INTO import_batches
-           (imported_at, kind, source_files_json, label, period, sheet_name, branch_hint, unmapped_columns_json)
-           VALUES (?, 'asset_report', ?, ?, ?, ?, ?, ?)""",
-        (
-            now, json.dumps([report.source_file]), report.branch_hint or match.sheet_name, resolved_period,
-            report.sheet_name, report.branch_hint, json.dumps(report.unmapped_columns),
-        ),
-    ).lastrowid
-    report.batch_id = batch_id
+    reports: list[CleaningReport] = []
 
-    data_rows = ws.iter_rows(min_row=match.header_row_idx + 2, values_only=True)
-    try:
-        _ingest_asset_rows(
-            conn, batch_id, data_rows, match.col_map, match.branch_hint, report.source_file, report,
-            fixed_branch_no=branch_no,
+    for match in matches:
+        is_cctv = match.kind == "cctv"
+        batch_kind = "cctv_report" if is_cctv else "asset_report"
+        report = CleaningReport(source_file=source_file, kind=batch_kind)
+        report.sheet_name = match.sheet_name
+        report.branch_hint = match.branch_hint
+
+        ws = wb[match.sheet_name]
+
+        if not report.branch_hint and "branch_dept" in match.col_map:
+            # No separate "Branch/TO/Center Name:" label row was found - some
+            # files (e.g. ones with a plain "BRANCH" column instead) only carry
+            # the branch name once per row. Fall back to the first non-empty
+            # value in that column so the file still resolves to a branch
+            # instead of every row silently landing in "unresolved".
+            idx = match.col_map["branch_dept"]
+            for row in ws.iter_rows(min_row=match.header_row_idx + 2, values_only=True):
+                if row is None or idx >= len(row):
+                    continue
+                value = _clean_str(row[idx])
+                if value:
+                    report.branch_hint = value
+                    break
+
+        branch_no, branch_matched = resolve_branch(conn, report.branch_hint)
+        report.branch_matched = branch_matched
+        report.branch_no = branch_no
+        if not branch_no:
+            record_unresolved_branch(conn, report.branch_hint)
+
+        header_row_values = next(
+            ws.iter_rows(min_row=match.header_row_idx + 1, max_row=match.header_row_idx + 1, values_only=True)
         )
-    except Exception as exc:  # noqa: BLE001 - surfaced to the user, mirrors the load_workbook guard above
-        conn.rollback()
-        report.error = f"Import failed while processing rows: {exc}"
-        log_import(conn, "asset_report", report.source_file, period=period or "", result=report.error,
-                   imported_by=performed_by)
-        conn.commit()
-        conn.close()
-        wb.close()
-        return report
+        known_col_idxs = set(match.col_map.values())
+        for idx, cell in enumerate(header_row_values):
+            text = _clean_str(cell)
+            if text and idx not in known_col_idxs:
+                report.unmapped_columns.append(text)
 
-    log_import(conn, "asset_report", report.source_file, rows_processed=report.rows_imported, period=resolved_period,
-               imported_by=performed_by)
+        batch_id = conn.execute(
+            """INSERT INTO import_batches
+               (imported_at, kind, source_files_json, label, period, sheet_name, branch_hint, unmapped_columns_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                now, batch_kind, json.dumps([source_file]), report.branch_hint or match.sheet_name, resolved_period,
+                report.sheet_name, report.branch_hint, json.dumps(report.unmapped_columns),
+            ),
+        ).lastrowid
+        report.batch_id = batch_id
+
+        data_rows = ws.iter_rows(min_row=match.header_row_idx + 2, values_only=True)
+        try:
+            if is_cctv:
+                _ingest_cctv_rows(
+                    conn, batch_id, data_rows, match.col_map, match.branch_hint, source_file, report,
+                    fixed_branch_no=branch_no,
+                )
+            else:
+                _ingest_asset_rows(
+                    conn, batch_id, data_rows, match.col_map, match.branch_hint, source_file, report,
+                    fixed_branch_no=branch_no,
+                )
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user, mirrors the load_workbook guard above
+            conn.rollback()
+            report.error = f"Import failed while processing rows: {exc}"
+            log_import(conn, batch_kind, source_file, period=period or "", result=report.error,
+                       imported_by=performed_by)
+            conn.commit()
+            conn.close()
+            wb.close()
+            return reports + [report]
+
+        log_import(conn, batch_kind, source_file, rows_processed=report.rows_imported, period=resolved_period,
+                   imported_by=performed_by)
+        reports.append(report)
+
     conn.commit()
     conn.close()
     wb.close()
 
-    return report
+    return reports
 
 
 def _month_sort_key(month_text: str, year) -> tuple:
@@ -932,6 +1219,44 @@ def import_user_file(path: str, performed_by: str = "") -> dict:
     conn.close()
     wb.close()
     return {"rows": count}
+
+
+def resync_full_names(conn) -> int:
+    """Re-apply the same user_id -> Aither name resolution import uses (see
+    the full_name comment in _ingest_asset_rows) to every already-imported
+    asset_items row, against the CURRENT users table.
+
+    full_name is a snapshot taken at import time (see DOCUMENTATION.md's
+    "User-name normalization" section) - re-importing User IDs alone never
+    touches rows imported earlier, so a banker renamed/corrected in Aither
+    after their branch's asset report was last imported keeps showing the
+    old name until this is run (or that branch's report is re-imported).
+
+    Unlike the device/model/branch alias resyncs, this overwrites full_name
+    unconditionally for every row with a resolvable user_id_norm - including
+    one a user hand-edited on Manage Assets - because full_name has no
+    separate "still on its raw value" signal to guard on the way
+    device_name/model_device do (full_name_raw is always kept as typed, so
+    a resolved full_name can legitimately differ from it even before any
+    hand edit). Rows whose user_id_norm doesn't resolve to a known user are
+    left untouched (same fallback as import: their own report text)."""
+    user_names_by_norm: dict[str, str] = {}
+    for u in conn.execute("SELECT user_no, user_name FROM users").fetchall():
+        _, u_norm = normalize_user_id(u["user_no"])
+        if u_norm and u["user_name"]:
+            user_names_by_norm[u_norm] = u["user_name"].strip().upper()
+
+    changed = 0
+    rows = conn.execute(
+        "SELECT id, user_id_norm, full_name, full_name_raw FROM asset_items WHERE user_id_norm != ''"
+    ).fetchall()
+    for row in rows:
+        new_name = user_names_by_norm.get(row["user_id_norm"])
+        if new_name is None or new_name == row["full_name"]:
+            continue
+        conn.execute("UPDATE asset_items SET full_name = ? WHERE id = ?", (new_name, row["id"]))
+        changed += 1
+    return changed
 
 
 def import_id_file(path: str, performed_by: str = "") -> dict:

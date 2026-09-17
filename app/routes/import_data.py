@@ -8,7 +8,7 @@ import uuid
 from flask import Blueprint, flash, redirect, render_template, request, send_file, url_for
 
 from ..auth import current_username, require_permission
-from ..db import get_connection, get_setting
+from ..db import get_connection, get_setting, log_activity
 from ..diffing import diff_batch, diff_branch_labels
 from ..exports import (
     build_diff_workbook,
@@ -30,6 +30,7 @@ from ..importer import (
     import_total_asset_history,
     import_user_file,
     peek_asset_report_branch,
+    resync_full_names,
 )
 from ..paths import get_diff_reports_dir, get_uploads_dir
 from ..queries import (
@@ -256,6 +257,24 @@ def upload_user_file():
     return _upload_id_files(import_user_file, "users")
 
 
+@bp.route("/users/resync-names", methods=["POST"])
+@require_permission("import_data")
+def resync_user_names():
+    """Re-applies user_id -> Aither name resolution to already-imported
+    assets against the current users table - see resync_full_names's
+    docstring for why this doesn't happen automatically on its own."""
+    conn = get_connection()
+    try:
+        changed = resync_full_names(conn)
+        log_activity(conn, "mapping", "Resynced asset full_name from users table",
+                     performed_by=current_username(), new_value=f"{changed} rows updated")
+        conn.commit()
+    finally:
+        conn.close()
+    flash(f"Resynced banker names on {changed} asset row(s) from the current User IDs list.", "success")
+    return redirect(url_for("import_data.index"))
+
+
 def _run_diffs(reports):
     """Compare every successfully-imported report's batch against that
     branch's previous import - shown right on the Cleaning Report so nobody
@@ -383,11 +402,14 @@ def _run_asset_report_imports(files: list[dict], period: str, source: str) -> li
         if not os.path.exists(path):
             flash(f"{filename}: file no longer available, skipped.", "error")
             continue
-        report = import_asset_report(path, source_label=filename, period=period, performed_by=performed_by)
-        if report.error:
-            flash(f"{report.source_file}: {report.error}", "error")
-        elif report.batch_id:
-            batch_ids.append(report.batch_id)
+        # One file can yield multiple reports now (e.g. an OA equipment sheet
+        # plus a separate CCTV sheet) - each gets its own batch.
+        reports = import_asset_report(path, source_label=filename, period=period, performed_by=performed_by)
+        for report in reports:
+            if report.error:
+                flash(f"{report.source_file}: {report.error}", "error")
+            elif report.batch_id:
+                batch_ids.append(report.batch_id)
 
     if source == "upload":
         for item in files:
@@ -605,7 +627,9 @@ def result():
             batch = conn.execute("SELECT * FROM import_batches WHERE id = ?", (batch_id,)).fetchone()
             if not batch:
                 continue
-            rows = conn.execute("SELECT * FROM asset_items WHERE batch_id = ?", (batch_id,)).fetchall()
+            is_cctv = batch["kind"] == "cctv_report"
+            table = "cctv_items" if is_cctv else "asset_items"
+            rows = conn.execute(f"SELECT * FROM {table} WHERE batch_id = ?", (batch_id,)).fetchall()
             branch_no = next((r["branch_no"] for r in rows if r["branch_no"]), "")
             branch_row = get_branch(conn, branch_no)
             report = CleaningReport(
@@ -618,16 +642,17 @@ def result():
                 branch_no=branch_no,
                 batch_id=batch_id,
                 unmapped_columns=json.loads(batch["unmapped_columns_json"]) if batch["unmapped_columns_json"] else [],
+                kind=batch["kind"] or "asset_report",
             )
-            report.duplicate_serials = find_duplicate_serials_in_batch(conn, batch_id)
+            report.duplicate_serials = find_duplicate_serials_in_batch(conn, batch_id, table=table)
             report.unrecognized_devices = find_unrecognized_in_batch(
-                conn, batch_id, "device_name_raw", "device_aliases", "device_standard_names"
+                conn, batch_id, "device_name_raw", "device_aliases", "device_standard_names", table=table
             )
             report.unrecognized_statuses = find_unrecognized_in_batch(
-                conn, batch_id, "status_raw", "status_aliases", "status_standard_names"
+                conn, batch_id, "status_raw", "status_aliases", "status_standard_names", table=table
             )
             report.unrecognized_models = find_unrecognized_in_batch(
-                conn, batch_id, "model_device_raw", "model_aliases", "model_standard_names"
+                conn, batch_id, "model_device_raw", "model_aliases", "model_standard_names", table=table
             )
             reports.append(report)
     finally:

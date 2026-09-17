@@ -30,6 +30,10 @@
       <input type="file" id="user-files" name="files" accept=".xlsx" multiple required>
       <button type="submit">Import User IDs</button>
     </form>
+    <form method="post" action="{{ url_for('import_data.resync_user_names') }}">
+      <button type="submit" class="secondary">Resync names on already-imported assets</button>
+      <p class="muted">Full names on assets imported before this User IDs update won't change on their own - run this after importing new User IDs to push the updated spelling onto them.</p>
+    </form>
   </div>
 </div>
 
