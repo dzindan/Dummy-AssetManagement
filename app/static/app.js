@@ -111,22 +111,36 @@ document.addEventListener("DOMContentLoaded", function () {
   });
 });
 
-// Synced "shadow" horizontal scrollbar above every .table-scroll table -
-// its own native scrollbar sits at the table's bottom edge, which for a
-// long table means scrolling the whole page down just to even reach it.
-// This mirror bar sits right above the table instead (always in view
-// without scrolling down first) and stays in sync with the real one in
-// both directions. Hidden entirely for a table that doesn't overflow.
+// Synced "shadow" horizontal scrollbar pinned to the bottom of the
+// viewport for every .table-scroll table - its own native scrollbar sits
+// at the table's bottom edge, which for a long table means scrolling the
+// whole page all the way down just to even reach it. This mirror bar
+// (position: sticky, see .table-scroll-shadow) stays glued to the bottom
+// of the screen the entire time any part of the table is in view -
+// putting it merely *above* the table instead (an earlier version of this)
+// still scrolled it out of view along with everything else the moment you
+// scrolled past it. Stays in sync with the real scrollbar in both
+// directions; hidden entirely for a table that doesn't overflow.
 document.addEventListener("DOMContentLoaded", function () {
   document.querySelectorAll(".table-scroll").forEach(function (scrollBox) {
     const inner = scrollBox.firstElementChild;
     if (!inner) return;
 
+    // Wrapper spans exactly the table's own height (plus the shadow bar),
+    // which is what bounds the sticky bar's "stuck" range - without this
+    // wrapper, `position: sticky` would have nothing of the right height to
+    // stick within and the bar would just glue to the bottom of the screen
+    // forever, long after the table itself has scrolled out of view.
+    const wrap = document.createElement("div");
+    wrap.className = "table-scroll-wrap";
+    scrollBox.parentNode.insertBefore(wrap, scrollBox);
+    wrap.appendChild(scrollBox);
+
     const shadow = document.createElement("div");
     shadow.className = "table-scroll-shadow";
     const shadowInner = document.createElement("div");
     shadow.appendChild(shadowInner);
-    scrollBox.parentNode.insertBefore(shadow, scrollBox);
+    wrap.appendChild(shadow);
 
     function syncWidth() {
       shadowInner.style.width = inner.scrollWidth + "px";

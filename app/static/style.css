@@ -209,16 +209,29 @@ h3 { font-size: 1.02rem; }
 
 .table-scroll { overflow-x: auto; }
 
-/* Synced "shadow" horizontal scrollbar (see app.js) inserted right above a
-   .table-scroll table - its own native scrollbar sits at the table's
-   bottom edge, which for a long table means scrolling the whole page down
-   just to reach it. This one stays reachable without scrolling down, and
-   is hidden by app.js when the table doesn't actually overflow. */
+/* Wrapper app.js creates around a .table-scroll table + its shadow
+   scrollbar - exactly as tall as the two combined, which is what bounds
+   how long the shadow bar stays stuck to the bottom of the viewport (see
+   .table-scroll-shadow below) before releasing and scrolling away with
+   the rest of the page once the table itself has scrolled past. */
+.table-scroll-wrap {
+  position: relative;
+}
+
+/* Synced "shadow" horizontal scrollbar (see app.js), sticky to the bottom
+   of the viewport for as long as any part of its table is still in view -
+   the table's own native scrollbar sits at the table's bottom edge, which
+   for a long table means scrolling the whole page all the way down just
+   to reach it. Hidden by app.js when the table doesn't actually overflow. */
 .table-scroll-shadow {
+  position: sticky;
+  bottom: 0;
+  z-index: 40;
   overflow-x: auto;
   overflow-y: hidden;
   height: 14px;
-  margin-bottom: 0.35rem;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
 }
 .table-scroll-shadow > div {
   height: 1px;
