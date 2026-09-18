@@ -7,6 +7,7 @@ calling the route function directly - a Jinja error (e.g. a dict key that
 collides with a builtin method name, like `items`) only ever surfaces at
 render time, not from the view function's own Python.
 """
+import io
 import os
 import sys
 import tempfile
@@ -122,6 +123,35 @@ class CctvDashboardRenderTests(unittest.TestCase):
         self.assertIn('<span style="color:var(--danger);">-8</span>', body)
         self.assertIn('<span style="color:var(--danger);">-2</span>', body)
         self.assertIn('<span style="color:var(--danger);">-16.00</span>', body)
+
+    def test_export_compare_has_current_and_by_month_sheets(self):
+        path = os.path.join(self.tmpdir, "report.xlsx")
+        _build_cctv_workbook(path, "Test Branch")
+        reports = import_asset_report(path, source_label="report.xlsx", period="2026-03")
+        self.assertEqual(reports[0].error, "")
+
+        resp = self.client.get("/cctv/dashboard/export-compare?year=2026")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            resp.content_type,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+        wb = openpyxl.load_workbook(io.BytesIO(resp.data))
+        self.assertIn("Current by Branch", wb.sheetnames)
+        self.assertIn("By Month 2026", wb.sheetnames)
+
+        current = wb["Current by Branch"]
+        self.assertEqual(
+            [c.value for c in current[1]],
+            ["Branch", "DVR/Recorder", "Cameras", "HDD Count", "HDD Capacity (TB)"],
+        )
+        data_row = [c.value for c in current[2]]
+        self.assertEqual(data_row, ["Test Branch", 2, 24, 5, 40.0])
+
+        month_ws = wb["By Month 2026"]
+        month_row = [c.value for c in month_ws[2]]
+        self.assertEqual(month_row[:4], ["Test Branch", "2026-03", 2, None])  # no prior period -> delta None
 
     def test_dashboard_renders_with_no_cctv_data(self):
         resp = self.client.get("/cctv/dashboard/")

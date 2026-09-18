@@ -24,16 +24,19 @@
 <div class="panel" style="margin-top: 1.25rem;">
   <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
     <h2 style="margin:0;">Compare by Branch</h2>
-    {% if available_years %}
-    <form method="get" action="{{ url_for('cctv_dashboard.index') }}" style="display:flex; align-items:center; gap:0.35rem;">
-      <label for="cctv-compare-year" class="muted" style="font-size:0.85rem;">Monthly breakdown year</label>
-      <select id="cctv-compare-year" name="year" onchange="this.form.submit()">
-        {% for y in available_years %}
-        <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
-        {% endfor %}
-      </select>
-    </form>
-    {% endif %}
+    <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+      {% if available_years %}
+      <form method="get" action="{{ url_for('cctv_dashboard.index') }}" style="display:flex; align-items:center; gap:0.35rem;">
+        <label for="cctv-compare-year" class="muted" style="font-size:0.85rem;">Monthly breakdown year</label>
+        <select id="cctv-compare-year" name="year" onchange="this.form.submit()">
+          {% for y in available_years %}
+          <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
+          {% endfor %}
+        </select>
+      </form>
+      {% endif %}
+      <a class="btn secondary" href="{{ url_for('cctv_dashboard.export_compare', year=selected_year) }}">Export to Excel</a>
+    </div>
   </div>
   <p class="muted">
     One row per branch, ranked by number of recorders - click a branch to expand its month-by-month breakdown

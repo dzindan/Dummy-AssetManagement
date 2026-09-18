@@ -11,7 +11,7 @@ from ..analytics import (
 )
 from ..charts import trend_chart_payload
 from ..db import get_connection
-from ..exports import build_workbook, send_workbook
+from ..exports import build_workbook, send_workbook, style_header_row
 from ..queries import (
     get_cctv_items_by_branch_period,
     get_current_branch_breakdown,
@@ -153,6 +153,18 @@ def _build_branch_month_metrics(rows, month_periods):
     return result
 
 
+def _build_branch_tree_with_months(conn, month_periods):
+    """Shared by index() and export_compare() - the "Compare by Branch"
+    tree plus its per-branch month_cells, for whatever `month_periods` the
+    caller already resolved (so both stay on the exact same selected year
+    without a second, possibly-inconsistent, query for it)."""
+    branch_tree = _build_branch_cctv_tree(get_current_cctv_items_for_tree(conn))
+    branch_month_metrics = _build_branch_month_metrics(get_cctv_items_by_branch_period(conn), month_periods)
+    for b in branch_tree:
+        b["month_cells"] = branch_month_metrics.get(b["bkey"], [None] * len(month_periods))
+    return branch_tree
+
+
 @bp.route("/")
 def index():
     conn = get_connection()
@@ -170,13 +182,7 @@ def index():
         )
 
         year_comparison = get_year_comparison_table(conn, table=TABLE, years_kinds=YEARS_KINDS)
-        branch_tree = _build_branch_cctv_tree(get_current_cctv_items_for_tree(conn))
-
-        branch_month_metrics = _build_branch_month_metrics(
-            get_cctv_items_by_branch_period(conn), month_periods
-        )
-        for b in branch_tree:
-            b["month_cells"] = branch_month_metrics.get(b["bkey"], [None] * len(month_periods))
+        branch_tree = _build_branch_tree_with_months(conn, month_periods)
     finally:
         conn.close()
 
@@ -221,3 +227,62 @@ def export():
 
     wb = build_workbook(f"CCTV by Branch by Month {selected_year}", columns, month_table)
     return send_workbook(wb, f"cctv_by_branch_by_month_{selected_year}.xlsx")
+
+
+@bp.route("/export-compare")
+def export_compare():
+    """The "Compare by Branch" panel's own export - current DVR/Recorder,
+    Cameras, HDD Count, HDD Capacity totals per branch on one sheet, the
+    same 4 metrics broken out by month (for the selected year, with each
+    metric's own delta column) on a second - covers what that panel shows
+    on screen that neither the flat by-month export above (item count
+    only, no DVR/Camera/HDD split) nor Manage CCTV's own export (row-level
+    detail, no per-branch totals) does."""
+    conn = get_connection()
+    try:
+        available_years = get_available_report_years(conn, kinds=YEARS_KINDS)
+        selected_year = resolve_report_year(request.args.get("year"), available_years)
+        month_periods, _month_table, _totals, _added, _removed = get_branch_month_change_table(
+            conn, selected_year, table=TABLE
+        )
+        branch_tree = _build_branch_tree_with_months(conn, month_periods)
+    finally:
+        conn.close()
+
+    wb = build_workbook(
+        "Current by Branch",
+        [
+            ("Branch", "display_name"),
+            ("DVR/Recorder", "recorder_count"),
+            ("Cameras", lambda b: b["camera_total"] if b["camera_total"] is not None else ""),
+            ("HDD Count", lambda b: b["hdd_count_total"] if b["hdd_count_total"] is not None else ""),
+            (
+                "HDD Capacity (TB)",
+                lambda b: round(b["hdd_capacity_total_tb"], 2) if b["hdd_capacity_total_tb"] is not None else "",
+            ),
+        ],
+        branch_tree,
+    )
+
+    month_ws = wb.create_sheet(f"By Month {selected_year}")
+    month_ws.append(
+        ["Branch", "Period", "DVR/Recorder", "DVR/Recorder Δ", "Cameras", "Cameras Δ",
+         "HDD Count", "HDD Count Δ", "HDD Capacity (TB)", "HDD Capacity Δ (TB)"]
+    )
+    for b in branch_tree:
+        for period, cell in zip(month_periods, b["month_cells"]):
+            if cell is None:
+                continue
+            month_ws.append(
+                [
+                    b["display_name"], period,
+                    cell["recorder_count"], cell["recorder_delta"],
+                    cell["camera_total"], cell["camera_delta"],
+                    cell["hdd_count_total"], cell["hdd_count_delta"],
+                    round(cell["hdd_capacity_total_tb"], 2) if cell["hdd_capacity_total_tb"] is not None else None,
+                    round(cell["hdd_capacity_delta"], 2) if cell["hdd_capacity_delta"] is not None else None,
+                ]
+            )
+    style_header_row(month_ws)
+
+    return send_workbook(wb, f"cctv_compare_by_branch_{selected_year}.xlsx")
