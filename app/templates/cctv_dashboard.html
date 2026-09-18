@@ -71,19 +71,71 @@
         <tbody>
           <tr>
             <td>DVR/Recorder</td>
-            {% for cell in b.month_cells %}<td>{{ cell.recorder_count if cell else '-' }}</td>{% endfor %}
+            {% for cell in b.month_cells %}
+            <td>
+              {% if cell %}
+                {{ cell.recorder_count }}
+                {% if cell.recorder_delta is not none %}
+                <br><span style="font-size:0.72rem;">
+                  {% if cell.recorder_delta > 0 %}<span style="color:var(--ok);">+{{ cell.recorder_delta }}</span>
+                  {% elif cell.recorder_delta < 0 %}<span style="color:var(--danger);">{{ cell.recorder_delta }}</span>
+                  {% else %}<span class="muted">no change</span>{% endif %}
+                </span>
+                {% endif %}
+              {% else %}-{% endif %}
+            </td>
+            {% endfor %}
           </tr>
           <tr>
             <td>Cameras</td>
-            {% for cell in b.month_cells %}<td>{{ (cell.camera_total if cell.camera_total is not none else '-') if cell else '-' }}</td>{% endfor %}
+            {% for cell in b.month_cells %}
+            <td>
+              {% if cell and cell.camera_total is not none %}
+                {{ cell.camera_total }}
+                {% if cell.camera_delta is not none %}
+                <br><span style="font-size:0.72rem;">
+                  {% if cell.camera_delta > 0 %}<span style="color:var(--ok);">+{{ cell.camera_delta }}</span>
+                  {% elif cell.camera_delta < 0 %}<span style="color:var(--danger);">{{ cell.camera_delta }}</span>
+                  {% else %}<span class="muted">no change</span>{% endif %}
+                </span>
+                {% endif %}
+              {% else %}-{% endif %}
+            </td>
+            {% endfor %}
           </tr>
           <tr>
             <td>HDD Count</td>
-            {% for cell in b.month_cells %}<td>{{ (cell.hdd_count_total if cell.hdd_count_total is not none else '-') if cell else '-' }}</td>{% endfor %}
+            {% for cell in b.month_cells %}
+            <td>
+              {% if cell and cell.hdd_count_total is not none %}
+                {{ cell.hdd_count_total }}
+                {% if cell.hdd_count_delta is not none %}
+                <br><span style="font-size:0.72rem;">
+                  {% if cell.hdd_count_delta > 0 %}<span style="color:var(--ok);">+{{ cell.hdd_count_delta }}</span>
+                  {% elif cell.hdd_count_delta < 0 %}<span style="color:var(--danger);">{{ cell.hdd_count_delta }}</span>
+                  {% else %}<span class="muted">no change</span>{% endif %}
+                </span>
+                {% endif %}
+              {% else %}-{% endif %}
+            </td>
+            {% endfor %}
           </tr>
           <tr>
             <td>HDD Capacity (TB)</td>
-            {% for cell in b.month_cells %}<td>{{ ('%.2f'|format(cell.hdd_capacity_total_tb) if cell.hdd_capacity_total_tb is not none else '-') if cell else '-' }}</td>{% endfor %}
+            {% for cell in b.month_cells %}
+            <td>
+              {% if cell and cell.hdd_capacity_total_tb is not none %}
+                {{ '%.2f'|format(cell.hdd_capacity_total_tb) }}
+                {% if cell.hdd_capacity_delta is not none %}
+                <br><span style="font-size:0.72rem;">
+                  {% if cell.hdd_capacity_delta > 0 %}<span style="color:var(--ok);">+{{ '%.2f'|format(cell.hdd_capacity_delta) }}</span>
+                  {% elif cell.hdd_capacity_delta < 0 %}<span style="color:var(--danger);">{{ '%.2f'|format(cell.hdd_capacity_delta) }}</span>
+                  {% else %}<span class="muted">no change</span>{% endif %}
+                </span>
+                {% endif %}
+              {% else %}-{% endif %}
+            </td>
+            {% endfor %}
           </tr>
         </tbody>
       </table>

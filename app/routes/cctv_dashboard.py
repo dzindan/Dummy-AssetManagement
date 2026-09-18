@@ -98,10 +98,24 @@ def _build_branch_cctv_tree(rows):
     return tree
 
 
+def _delta(cur, prev):
+    return cur - prev if cur is not None and prev is not None else None
+
+
 def _build_branch_month_metrics(rows, month_periods):
     """Same per-item parsing as _build_branch_cctv_tree, but grouped by
     (branch, period) instead of just branch - the month-by-month table
     each branch's tree row expands to, alongside its item-level detail.
+    Each cell also gets a *_delta vs whatever period actually precedes it
+    on record (which may fall outside `month_periods`, e.g. the prior
+    year's December for January) - same "diff against the real previous
+    report, not just the previous visible column" rule
+    get_branch_month_change_table already uses for the flat by-month
+    table below, so both tables' +/- agree with each other. Unlike that
+    table's identity-based asset added/removed, these are plain numeric
+    deltas (this month's parsed sum minus last month's) since there's no
+    per-camera/per-HDD identity to track, only a running total.
+
     `month_periods` is the selected year's 12 "YYYY-MM" strings (same list
     get_branch_month_change_table already produced for this request, so
     the year selector controls both) - a branch/period with nothing on
@@ -111,7 +125,7 @@ def _build_branch_month_metrics(rows, month_periods):
     for row in rows:
         by_branch_period.setdefault((row["bkey"], row["period"]), []).append(row)
 
-    by_branch: dict[str, list] = {}
+    by_branch: dict[str, dict[str, dict]] = {}
     for (bkey, period), items in by_branch_period.items():
         cameras = [v for v in (_parse_leading_int(i["camera_count"]) for i in items) if v is not None]
         hdd_counts = [v for v in (_parse_leading_int(i["hdd_count"]) for i in items) if v is not None]
@@ -125,6 +139,16 @@ def _build_branch_month_metrics(rows, month_periods):
 
     result: dict[str, list] = {}
     for bkey, by_period in by_branch.items():
+        prev = None
+        for period in sorted(by_period):
+            cur = by_period[period]
+            cur["recorder_delta"] = _delta(cur["recorder_count"], prev["recorder_count"] if prev else None)
+            cur["camera_delta"] = _delta(cur["camera_total"], prev["camera_total"] if prev else None)
+            cur["hdd_count_delta"] = _delta(cur["hdd_count_total"], prev["hdd_count_total"] if prev else None)
+            cur["hdd_capacity_delta"] = _delta(
+                cur["hdd_capacity_total_tb"], prev["hdd_capacity_total_tb"] if prev else None
+            )
+            prev = cur
         result[bkey] = [by_period.get(period) for period in month_periods]
     return result
 

@@ -84,6 +84,45 @@ class CctvDashboardRenderTests(unittest.TestCase):
         self.assertIn("2026-03", body)
         self.assertIn("Current Items", body)
 
+    def test_by_month_table_shows_delta_vs_previous_period(self):
+        """The main Asset Dashboard's by-month table shows +added/-removed
+        against the previous period on record for every column - the
+        per-branch tree's own By Month table needs the same, not just raw
+        counts with nothing to compare them to."""
+        march_path = os.path.join(self.tmpdir, "march.xlsx")
+        _build_cctv_workbook(march_path, "Test Branch")
+        reports = import_asset_report(march_path, source_label="march.xlsx", period="2026-03")
+        self.assertEqual(reports[0].error, "")
+
+        april = os.path.join(self.tmpdir, "april.xlsx")
+        wb = openpyxl.Workbook()
+        cctv = wb.active
+        cctv.title = "CCTV REPORT"
+        cctv.append([None] * 10 + ["Branch/TO/Center Name:", "Test Branch"])
+        cctv.append(
+            ["NO", "BRANCH / DEPT", "DEVICE NAME", "IP ADDRESS", "PRODUCTION", "MODEL DEVICE", "SERIAL NO",
+             "STATUS", "NUMBER  OF CAMERA CONNECTED", "NUMBER OF HARD DISK", "CAPACITY OF ALL HARD DISK",
+             "LOCATION", "REMARK"]
+        )
+        cctv.append(
+            [1, "Test Branch", "CCTV RECORDING 1", "10.0.1.1", "HIK VISION", "DS-7316", "SN-CCTV-1",
+             "USING LOCAL", 16, "3", "24TB", "IT ROOM", ""]
+        )
+        wb.save(april)
+        reports = import_asset_report(april, source_label="april.xlsx", period="2026-04")
+        self.assertEqual(reports[0].error, "")
+
+        resp = self.client.get("/cctv/dashboard/")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.data.decode("utf-8")
+
+        # April (1 DVR/16 cameras/3 HDD/24TB) vs March (2/24/5/40.00) -
+        # every metric should show its own negative delta.
+        self.assertIn('<span style="color:var(--danger);">-1</span>', body)
+        self.assertIn('<span style="color:var(--danger);">-8</span>', body)
+        self.assertIn('<span style="color:var(--danger);">-2</span>', body)
+        self.assertIn('<span style="color:var(--danger);">-16.00</span>', body)
+
     def test_dashboard_renders_with_no_cctv_data(self):
         resp = self.client.get("/cctv/dashboard/")
         self.assertEqual(resp.status_code, 200)
