@@ -1,10 +1,17 @@
 {% extends "base.html" %}
+{% import "_cctv_month_table.html" as cctv_month_table %}
 {% block title %}{{ branch['eng_name'] }} - Asset Management Tool{% endblock %}
 {% block content %}
 <h1>{{ branch['eng_name'] }}</h1>
-<p class="muted">Branch No: {{ branch['branch_no'] }} &middot; {{ assets | length }} assets currently on record</p>
+<p class="muted">Branch No: {{ branch['branch_no'] }} &middot; {{ assets | length }} assets currently on record
+  &middot; {{ cctv_items | length }} CCTV item(s) currently on record</p>
 
-<div class="panel">
+<div class="actions" style="margin-top:0;">
+  <a class="btn" href="{{ url_for('branch_detail.export', branch_no=branch['branch_no']) }}">Export Assets to Excel</a>
+  <a class="btn secondary" href="{{ url_for('branch_detail.export_cctv', branch_no=branch['branch_no']) }}">Export CCTV to Excel</a>
+</div>
+
+<div class="panel" style="margin-top: 1.25rem;">
   <h2>Item Count Trend (by month)</h2>
   <p class="muted">Each line is a device type; counts come from this branch's most recent import for each month.
     Click a chip to isolate or hide a line; hover the chart for exact monthly counts.</p>
@@ -82,6 +89,49 @@
   {% endif %}
 </div>
 
+<h2 style="margin-top:2rem;">CCTV</h2>
+<p class="muted">Same idea as the asset section above, over this branch's CCTV equipment (DVRs/recorders +
+  attached cameras/monitors) instead - see <a href="{{ url_for('cctv_dashboard.index') }}">CCTV Dashboard</a> for
+  every branch compared side by side.</p>
+
+<div class="grid grid-3">
+  <div class="stat-tile">
+    <div class="value">{{ cctv_summary.recorder_count }}</div>
+    <div class="label">DVR/Recorder</div>
+  </div>
+  <div class="stat-tile">
+    <div class="value">{{ cctv_summary.camera_total if cctv_summary.camera_total is not none else '-' }}</div>
+    <div class="label">Cameras</div>
+  </div>
+  <div class="stat-tile">
+    <div class="value">
+      {{ cctv_summary.hdd_count_total if cctv_summary.hdd_count_total is not none else '-' }}
+      / {{ '%.2f'|format(cctv_summary.hdd_capacity_total_tb) if cctv_summary.hdd_capacity_total_tb is not none else '-' }} TB
+    </div>
+    <div class="label">HDD Count / Capacity</div>
+  </div>
+</div>
+
+<div class="panel" style="margin-top: 1.25rem;">
+  <h3 style="margin-top:0;">CCTV Item Count Trend (by month)</h3>
+  <p class="muted">Each line is a CCTV device type (DVR/recorder, monitor, ...); counts come from this branch's
+    most recent CCTV-sheet import for each month.</p>
+  <div id="cctvItemTrendChart"></div>
+
+  <h3>By Month, by Year</h3>
+  {% if trend_periods %}
+  <p class="muted">Camera/HDD totals are a best-effort sum of each item's own free-text field (as typed in the
+    branch's CCTV sheet - see <a href="{{ url_for('cctv_edit.index') }}">Manage CCTV</a> to correct one at the
+    source); a "-" means nothing had a value in a summable format that month, not that the count is actually zero.
+    Uses the same report year selected above.</p>
+  <div class="table-scroll">
+  {{ cctv_month_table.month_table(trend_periods, cctv_month_cells) }}
+  </div>
+  {% else %}
+  <p class="muted">No CCTV reports imported for {{ selected_year }}.</p>
+  {% endif %}
+</div>
+
 <div class="grid grid-2">
   <div class="panel">
     <h2>Device Type Breakdown</h2>
@@ -120,9 +170,39 @@
   </div>
 
   <div class="panel">
-    <h2>Export</h2>
-    <p class="muted">Download this branch's current asset list as an Excel file.</p>
-    <a class="btn" href="{{ url_for('branch_detail.export', branch_no=branch['branch_no']) }}">Export to Excel</a>
+    <h2>CCTV Breakdown</h2>
+    <p class="muted">By status - e.g. how many DVRs/recorders are actually in use vs. broken.</p>
+    <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Device</th>
+          {% for status in cctv_status_breakdown.statuses %}<th>{{ status }}</th>{% endfor %}
+          <th>Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in cctv_status_breakdown.rows %}
+        <tr>
+          <td>{{ row.device }}</td>
+          {% for cell in row.cells %}<td>{{ cell if cell else '-' }}</td>{% endfor %}
+          <td><strong>{{ row.total }}</strong></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="{{ cctv_status_breakdown.statuses | length + 2 }}" class="muted">No CCTV items on record for this branch.</td></tr>
+        {% endfor %}
+      </tbody>
+      {% if cctv_status_breakdown.rows %}
+      <tfoot>
+        <tr>
+          <td><strong>Total</strong></td>
+          {% for c in cctv_status_breakdown.column_totals %}<td><strong>{{ c }}</strong></td>{% endfor %}
+          <td><strong>{{ cctv_status_breakdown.grand_total }}</strong></td>
+        </tr>
+      </tfoot>
+      {% endif %}
+    </table>
+    </div>
   </div>
 </div>
 
@@ -156,128 +236,8 @@
   </div>
 </div>
 
-<h2 style="margin-top:2rem;">CCTV</h2>
-<p class="muted">Same idea as the asset sections above, over this branch's CCTV equipment (DVRs/recorders +
-  attached cameras/monitors) instead - see <a href="{{ url_for('cctv_dashboard.index') }}">CCTV Dashboard</a> for
-  every branch compared side by side.</p>
-
-<div class="grid grid-3">
-  <div class="stat-tile">
-    <div class="value">{{ cctv_summary.recorder_count }}</div>
-    <div class="label">DVR/Recorder</div>
-  </div>
-  <div class="stat-tile">
-    <div class="value">{{ cctv_summary.camera_total if cctv_summary.camera_total is not none else '-' }}</div>
-    <div class="label">Cameras</div>
-  </div>
-  <div class="stat-tile">
-    <div class="value">
-      {{ cctv_summary.hdd_count_total if cctv_summary.hdd_count_total is not none else '-' }}
-      / {{ '%.2f'|format(cctv_summary.hdd_capacity_total_tb) if cctv_summary.hdd_capacity_total_tb is not none else '-' }} TB
-    </div>
-    <div class="label">HDD Count / Capacity</div>
-  </div>
-</div>
-
-<div class="panel" style="margin-top: 1.25rem;">
-  <h3 style="margin-top:0;">CCTV Item Count Trend (by month)</h3>
-  <p class="muted">Each line is a CCTV device type (DVR/recorder, monitor, ...); counts come from this branch's
-    most recent CCTV-sheet import for each month.</p>
-  <div id="cctvItemTrendChart"></div>
-
-  <h3>By Month, by Year</h3>
-  {% if trend_periods %}
-  <p class="muted">Camera/HDD totals are a best-effort sum of each item's own free-text field (as typed in the
-    branch's CCTV sheet - see <a href="{{ url_for('cctv_edit.index') }}">Manage CCTV</a> to correct one at the
-    source); a "-" means nothing had a value in a summable format that month, not that the count is actually zero.
-    Uses the same report year selected above.</p>
-  <div class="table-scroll">
-  <table>
-    <thead>
-      <tr><th>Metric</th>{% for p in trend_periods %}<th>{{ p }}</th>{% endfor %}</tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td>DVR/Recorder</td>
-        {% for cell in cctv_month_cells %}
-        <td>
-          {% if cell %}
-            {{ cell.recorder_count }}
-            {% if cell.recorder_delta is not none %}
-            <br><span style="font-size:0.72rem;">
-              {% if cell.recorder_delta > 0 %}<span style="color:var(--ok);">+{{ cell.recorder_delta }}</span>
-              {% elif cell.recorder_delta < 0 %}<span style="color:var(--danger);">{{ cell.recorder_delta }}</span>
-              {% else %}<span class="muted">no change</span>{% endif %}
-            </span>
-            {% endif %}
-          {% else %}-{% endif %}
-        </td>
-        {% endfor %}
-      </tr>
-      <tr>
-        <td>Cameras</td>
-        {% for cell in cctv_month_cells %}
-        <td>
-          {% if cell and cell.camera_total is not none %}
-            {{ cell.camera_total }}
-            {% if cell.camera_delta is not none %}
-            <br><span style="font-size:0.72rem;">
-              {% if cell.camera_delta > 0 %}<span style="color:var(--ok);">+{{ cell.camera_delta }}</span>
-              {% elif cell.camera_delta < 0 %}<span style="color:var(--danger);">{{ cell.camera_delta }}</span>
-              {% else %}<span class="muted">no change</span>{% endif %}
-            </span>
-            {% endif %}
-          {% else %}-{% endif %}
-        </td>
-        {% endfor %}
-      </tr>
-      <tr>
-        <td>HDD Count</td>
-        {% for cell in cctv_month_cells %}
-        <td>
-          {% if cell and cell.hdd_count_total is not none %}
-            {{ cell.hdd_count_total }}
-            {% if cell.hdd_count_delta is not none %}
-            <br><span style="font-size:0.72rem;">
-              {% if cell.hdd_count_delta > 0 %}<span style="color:var(--ok);">+{{ cell.hdd_count_delta }}</span>
-              {% elif cell.hdd_count_delta < 0 %}<span style="color:var(--danger);">{{ cell.hdd_count_delta }}</span>
-              {% else %}<span class="muted">no change</span>{% endif %}
-            </span>
-            {% endif %}
-          {% else %}-{% endif %}
-        </td>
-        {% endfor %}
-      </tr>
-      <tr>
-        <td>HDD Capacity (TB)</td>
-        {% for cell in cctv_month_cells %}
-        <td>
-          {% if cell and cell.hdd_capacity_total_tb is not none %}
-            {{ '%.2f'|format(cell.hdd_capacity_total_tb) }}
-            {% if cell.hdd_capacity_delta is not none %}
-            <br><span style="font-size:0.72rem;">
-              {% if cell.hdd_capacity_delta > 0 %}<span style="color:var(--ok);">+{{ '%.2f'|format(cell.hdd_capacity_delta) }}</span>
-              {% elif cell.hdd_capacity_delta < 0 %}<span style="color:var(--danger);">{{ '%.2f'|format(cell.hdd_capacity_delta) }}</span>
-              {% else %}<span class="muted">no change</span>{% endif %}
-            </span>
-            {% endif %}
-          {% else %}-{% endif %}
-        </td>
-        {% endfor %}
-      </tr>
-    </tbody>
-  </table>
-  </div>
-  {% else %}
-  <p class="muted">No CCTV reports imported for {{ selected_year }}.</p>
-  {% endif %}
-</div>
-
 <div class="panel">
-  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
-    <h3 style="margin:0;">Current CCTV Items</h3>
-    <a class="btn secondary" href="{{ url_for('branch_detail.export_cctv', branch_no=branch['branch_no']) }}">Export to Excel</a>
-  </div>
+  <h2>Current CCTV Items</h2>
   <p class="muted"><a href="{{ url_for('cctv_edit.index', branch_no=branch['branch_no']) }}">Open in Manage CCTV</a> for more filters.</p>
   <div class="table-scroll">
   <table>

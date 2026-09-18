@@ -1,0 +1,46 @@
+{#
+Shared "By Month" table for CCTV branch/period summaries (recorder count +
+best-effort camera/HDD totals, each with its own month-over-month delta) -
+used by both the CCTV Dashboard's per-branch tree and Branch Detail's own
+CCTV section, which otherwise had to keep this exact 4-metric table (and
+its delta coloring rules) in sync by hand in two places.
+
+`month_cells` is a list, one entry per `periods`, each either None (no
+report that month) or a summarize_cctv_rows()-shaped dict with the extra
+*_delta keys build_month_metrics_by_branch adds (see app/cctv_metrics.py).
+#}
+{% macro month_table(periods, month_cells) %}
+<table>
+  <thead>
+    <tr><th>Metric</th>{% for p in periods %}<th>{{ p }}</th>{% endfor %}</tr>
+  </thead>
+  <tbody>
+    {% for label, value_key, delta_key, is_tb in [
+      ("DVR/Recorder", "recorder_count", "recorder_delta", false),
+      ("Cameras", "camera_total", "camera_delta", false),
+      ("HDD Count", "hdd_count_total", "hdd_count_delta", false),
+      ("HDD Capacity (TB)", "hdd_capacity_total_tb", "hdd_capacity_delta", true),
+    ] %}
+    <tr>
+      <td>{{ label }}</td>
+      {% for cell in month_cells %}
+      <td>
+        {% set value = cell[value_key] if cell else none %}
+        {% if value is not none %}
+          {{ '%.2f'|format(value) if is_tb else value }}
+          {% set delta = cell[delta_key] %}
+          {% if delta is not none %}
+          <br><span style="font-size:0.72rem;">
+            {% if delta > 0 %}<span style="color:var(--ok);">+{{ '%.2f'|format(delta) if is_tb else delta }}</span>
+            {% elif delta < 0 %}<span style="color:var(--danger);">{{ '%.2f'|format(delta) if is_tb else delta }}</span>
+            {% else %}<span class="muted">no change</span>{% endif %}
+          </span>
+          {% endif %}
+        {% else %}-{% endif %}
+      </td>
+      {% endfor %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endmacro %}

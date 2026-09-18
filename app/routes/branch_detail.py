@@ -16,18 +16,19 @@ from ..queries import get_branch, get_cctv_items_by_branch_period, get_current_a
 bp = Blueprint("branch_detail", __name__, url_prefix="/branch")
 
 
-def _device_status_breakdown(assets) -> dict:
+def _device_status_breakdown(rows) -> dict:
     """Device Type Breakdown, split by Status - one row per device type,
-    one column per status seen among this branch's current assets, so e.g.
-    "how many PCs are actually BROKEN vs. still USING LOCAL" is visible at a
-    glance instead of only the device's overall count.
+    one column per status seen among `rows` (this branch's current assets,
+    or its current CCTV items - both have device_name/status columns), so
+    e.g. "how many PCs are actually BROKEN vs. still USING LOCAL" is
+    visible at a glance instead of only the device's overall count.
 
     Rows are sorted by each device's own total (busiest device type first,
     matching the old status-less breakdown's order); status columns are
     sorted alphabetically since there's no inherent ranking between them."""
     counts: dict[str, dict[str, int]] = {}
     statuses_seen: set[str] = set()
-    for a in assets:
+    for a in rows:
         device = a["device_name"] or "(UNKNOWN)"
         status = a["status"] or "(UNKNOWN)"
         statuses_seen.add(status)
@@ -91,6 +92,8 @@ def detail(branch_no):
     chart_data = trend_chart_payload(periods, matrix)
     cctv_chart_data = trend_chart_payload(cctv_periods, cctv_matrix)
     device_status_breakdown = _device_status_breakdown(assets)
+    # Same shape, same helper - a cctv_items row also has device_name/status.
+    cctv_status_breakdown = _device_status_breakdown(cctv_items)
 
     return render_template(
         "branch_detail.html",
@@ -98,6 +101,7 @@ def detail(branch_no):
         branch=branch,
         assets=assets,
         device_status_breakdown=device_status_breakdown,
+        cctv_status_breakdown=cctv_status_breakdown,
         chart_data=chart_data,
         available_years=available_years,
         selected_year=selected_year,

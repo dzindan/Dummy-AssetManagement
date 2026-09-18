@@ -89,8 +89,18 @@ class BranchDetailCctvSectionTests(unittest.TestCase):
         self.assertIn("CCTV Item Count Trend", body)
         self.assertIn("Current CCTV Items", body)
         self.assertIn("CCTV RECORDING 1", body)
+        self.assertIn("CCTV Breakdown", body)
+        self.assertIn("Export CCTV to Excel", body)
         # 1 recorder, 16 cameras, 3 HDDs, 24.00 TB - the stat tiles.
         self.assertIn("1</div>\n    <div class=\"label\">DVR/Recorder", body)
+
+        # CCTV section sits right after the asset Item Count Trend panel -
+        # ahead of both breakdown panels and the item lists below them.
+        self.assertLess(body.index("CCTV Item Count Trend"), body.index("Device Type Breakdown"))
+        self.assertLess(body.index("Device Type Breakdown"), body.index("CCTV Breakdown"))
+        self.assertLess(body.index("CCTV Breakdown"), body.index("Current Assets"))
+        # Export buttons are up top, ahead of every section.
+        self.assertLess(body.index("Export CCTV to Excel"), body.index("Item Count Trend"))
 
     def test_export_cctv_route(self):
         resp = self.client.get("/branch/001/export-cctv")
