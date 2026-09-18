@@ -1,0 +1,86 @@
+# -*- coding: utf-8 -*-
+"""CCTV Dashboard rendering, including the per-branch compare/expand tree.
+
+Follows the project's isolated-DB pattern (see tests/test_auth.py) and
+actually renders the page through app.test_client() rather than just
+calling the route function directly - a Jinja error (e.g. a dict key that
+collides with a builtin method name, like `items`) only ever surfaces at
+render time, not from the view function's own Python.
+"""
+import os
+import sys
+import tempfile
+import unittest
+
+import openpyxl
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from app import create_app  # noqa: E402
+from app.importer import import_asset_report  # noqa: E402
+
+
+def _fresh_app():
+    os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_cctvdashtest_")
+    return create_app()
+
+
+def _build_cctv_workbook(path: str, branch_name: str) -> None:
+    wb = openpyxl.Workbook()
+    cctv = wb.active
+    cctv.title = "CCTV REPORT"
+    cctv.append([None] * 10 + ["Branch/TO/Center Name:", branch_name])
+    cctv.append(
+        ["NO", "BRANCH / DEPT", "DEVICE NAME", "IP ADDRESS", "PRODUCTION", "MODEL DEVICE", "SERIAL NO",
+         "STATUS", "NUMBER  OF CAMERA CONNECTED", "NUMBER OF HARD DISK", "CAPACITY OF ALL HARD DISK",
+         "LOCATION", "REMARK"]
+    )
+    cctv.append(
+        [1, branch_name, "CCTV RECORDING 1", "10.0.1.1", "HIK VISION", "DS-7316", "SN-CCTV-1",
+         "USING LOCAL", 16, "3", "24TB", "IT ROOM", ""]
+    )
+    cctv.append(
+        [2, branch_name, "CCTV RECORDING 2", "10.0.1.2", "HIK VISION", "DS-7324", "SN-CCTV-2",
+         "USING LOCAL", "8 (Live 7)", "2 HDD", "16TB (2X8TB) Total", "IT ROOM", ""]
+    )
+    wb.save(path)
+
+
+class CctvDashboardRenderTests(unittest.TestCase):
+    def setUp(self):
+        self.app = _fresh_app()
+        self.client = self.app.test_client()
+        resp = self.client.post(
+            "/setup",
+            data={"username": "admin", "password": "adminpass123", "confirm": "adminpass123"},
+            follow_redirects=False,
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.tmpdir = tempfile.mkdtemp(prefix="am_cctvdashtest_import_")
+
+    def test_dashboard_renders_with_branch_compare_tree(self):
+        path = os.path.join(self.tmpdir, "report.xlsx")
+        _build_cctv_workbook(path, "Test Branch")
+        reports = import_asset_report(path, source_label="report.xlsx", period="2026-03")
+        self.assertEqual(reports[0].error, "")
+
+        resp = self.client.get("/cctv/dashboard/")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.data.decode("utf-8")
+        self.assertIn("Compare by Branch", body)
+        self.assertIn("2</strong> DVR/Recorder", body)
+        # 16 + 8 (the "8 (Live 7)" row's leading int) = 24 cameras.
+        self.assertIn("24</strong> Cameras", body)
+        # 3 + 2 ("2 HDD" row's leading int) = 5.
+        self.assertIn("5</strong> HDD Count", body)
+        # 24TB + 16TB (from "16TB (2X8TB) Total") = 40.00 TB.
+        self.assertIn("40.00 TB", body)
+
+    def test_dashboard_renders_with_no_cctv_data(self):
+        resp = self.client.get("/cctv/dashboard/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("No CCTV items currently on file.", resp.data.decode("utf-8"))
+
+
+if __name__ == "__main__":
+    unittest.main()

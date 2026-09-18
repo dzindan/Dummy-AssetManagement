@@ -138,6 +138,36 @@ def get_current_cctv_count(conn) -> int:
     return conn.execute(sql).fetchone()["c"]
 
 
+def get_current_cctv_items_for_tree(conn):
+    """Every currently-reported CCTV item (see CURRENT_CCTV_CTE), one row
+    per DVR/recorder/monitor, with its branch display name attached -
+    backs the CCTV Dashboard's expandable per-branch tree (recorder count,
+    camera/HDD totals per branch, with the individual rows underneath).
+    Raw rows only; aggregation (parsing camera_count/hdd_count/hdd_capacity
+    and grouping by branch) happens in the route, not here - the same
+    messy free-text values shown in Manage CCTV, not something SQL should
+    try to coerce into numbers."""
+    cte = CURRENT_CCTV_CTE
+    sql = f"""
+    SELECT
+        bk.bkey AS bkey,
+        bk.branch_no AS branch_no,
+        COALESCE(NULLIF(b.eng_name, ''), NULLIF(bk.branch_dept, ''), 'Unknown') AS display_name,
+        bk.device_name AS device_name,
+        bk.model_device AS model_device,
+        bk.manufacturer AS manufacturer,
+        bk.serial_tag AS serial_tag,
+        bk.camera_count AS camera_count,
+        bk.hdd_count AS hdd_count,
+        bk.hdd_capacity AS hdd_capacity,
+        bk.location AS location
+    FROM ({cte}) bk
+    LEFT JOIN branches b ON b.branch_no = bk.branch_no
+    ORDER BY display_name, bk.device_name
+    """
+    return conn.execute(sql).fetchall()
+
+
 def get_current_branch_breakdown(conn, table: str = "asset_items"):
     """One row per branch (resolved branch_no when known, otherwise grouped
     by its raw branch_dept text - see CURRENT_ASSETS_CTE), with a

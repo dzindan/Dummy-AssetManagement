@@ -1,3 +1,5 @@
+import re
+
 from flask import Blueprint, render_template, request
 
 from ..analytics import (
@@ -10,7 +12,12 @@ from ..analytics import (
 from ..charts import trend_chart_payload
 from ..db import get_connection
 from ..exports import build_workbook, send_workbook
-from ..queries import get_current_branch_breakdown, get_current_cctv_count, get_latest_batch
+from ..queries import (
+    get_current_branch_breakdown,
+    get_current_cctv_count,
+    get_current_cctv_items_for_tree,
+    get_latest_batch,
+)
 
 bp = Blueprint("cctv_dashboard", __name__, url_prefix="/cctv/dashboard")
 
@@ -19,6 +26,74 @@ bp = Blueprint("cctv_dashboard", __name__, url_prefix="/cctv/dashboard")
 # the shared trend/month-change/year-comparison logic serves both.
 TABLE = "cctv_items"
 YEARS_KINDS = ("cctv_report",)
+
+_LEADING_INT_RE = re.compile(r"\d+")
+# First "<number> TB/GB/T" in a capacity string - real files write this in
+# every shape from "24TB" to "16TB (2X8TB) Total" to "7452.04 GB" to
+# "21.86T" (see cctv_items.hdd_capacity in production); this only needs the
+# headline total, not to parse every parenthetical breakdown.
+_CAPACITY_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(TB|GB|T)\b", re.IGNORECASE)
+
+
+def _parse_leading_int(text: str) -> int | None:
+    match = _LEADING_INT_RE.search(text or "")
+    return int(match.group()) if match else None
+
+
+def _parse_capacity_tb(text: str) -> float | None:
+    match = _CAPACITY_RE.search(text or "")
+    if not match:
+        return None
+    value = float(match.group(1))
+    return value / 1024 if match.group(2).upper() == "GB" else value
+
+
+def _build_branch_cctv_tree(rows):
+    """Groups get_current_cctv_items_for_tree's flat rows into one entry
+    per branch (sorted by recorder count, most equipment first - same
+    convention as get_current_branch_breakdown) with per-item rows nested
+    underneath, plus best-effort numeric totals for the branch-level
+    summary row. A branch's total is left as None (rendered "-") rather
+    than silently undercounted when NONE of its items parsed - it's an
+    accurate reflection of "count/HDD size wasn't recorded this way for
+    any of them" rather than a wrong zero, but a PARTIAL parse still sums
+    what it can (that's the common case: one HDD row with a stray unit
+    typo alongside several clean ones)."""
+    # Note: the per-branch dict below deliberately never uses the key name
+    # "items" - Jinja's `b.items` attribute lookup finds dict.items (the
+    # builtin method) before ever trying `b["items"]`, so a real "items"
+    # key would only ever be reachable in the template via `b["items"]`,
+    # not the `b.items` dot-syntax the rest of this app's templates use
+    # for every other dict key.
+    by_branch: dict[str, dict] = {}
+    for row in rows:
+        branch = by_branch.setdefault(
+            row["bkey"],
+            {"branch_no": row["branch_no"], "display_name": row["display_name"], "rows": []},
+        )
+        branch["rows"].append(row)
+
+    tree = []
+    for branch in by_branch.values():
+        rows_for_branch = branch["rows"]
+        cameras = [v for v in (_parse_leading_int(i["camera_count"]) for i in rows_for_branch) if v is not None]
+        hdd_counts = [v for v in (_parse_leading_int(i["hdd_count"]) for i in rows_for_branch) if v is not None]
+        hdd_capacities = [
+            v for v in (_parse_capacity_tb(i["hdd_capacity"]) for i in rows_for_branch) if v is not None
+        ]
+        tree.append(
+            {
+                "branch_no": branch["branch_no"],
+                "display_name": branch["display_name"],
+                "recorder_count": len(rows_for_branch),
+                "camera_total": sum(cameras) if cameras else None,
+                "hdd_count_total": sum(hdd_counts) if hdd_counts else None,
+                "hdd_capacity_total_tb": sum(hdd_capacities) if hdd_capacities else None,
+                "rows": rows_for_branch,
+            }
+        )
+    tree.sort(key=lambda b: b["recorder_count"], reverse=True)
+    return tree
 
 
 @bp.route("/")
@@ -38,6 +113,7 @@ def index():
         )
 
         year_comparison = get_year_comparison_table(conn, table=TABLE, years_kinds=YEARS_KINDS)
+        branch_tree = _build_branch_cctv_tree(get_current_cctv_items_for_tree(conn))
     finally:
         conn.close()
 
@@ -58,6 +134,7 @@ def index():
         month_column_added=month_column_added,
         month_column_removed=month_column_removed,
         year_comparison=year_comparison,
+        branch_tree=branch_tree,
     )
 
 

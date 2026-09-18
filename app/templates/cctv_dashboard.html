@@ -22,6 +22,62 @@
 </div>
 
 <div class="panel" style="margin-top: 1.25rem;">
+  <h2>Compare by Branch</h2>
+  <p class="muted">
+    One row per branch, ranked by number of recorders - click a branch to expand its individual DVR/recorder rows.
+    Camera/HDD totals are a best-effort sum of each item's own free-text field (as typed in the branch's CCTV
+    sheet - see <a href="{{ url_for('cctv_edit.index') }}">Manage CCTV</a> to correct one at the source); a "-"
+    means none of that branch's items had a value in a summable format, not that the count is actually zero.
+  </p>
+  {% if branch_tree %}
+  <div class="cctv-branch-tree">
+    {% for b in branch_tree %}
+    <details class="cctv-branch-node">
+      <summary>
+        <span class="cctv-branch-name">
+          {% if b.branch_no %}
+          <a class="branch-link" href="{{ url_for('branch_detail.detail', branch_no=b.branch_no) }}" onclick="event.stopPropagation();">{{ b.display_name }}</a>
+          {% else %}
+          {{ b.display_name }}
+          {% endif %}
+        </span>
+        <span class="cctv-branch-stats">
+          <span><strong>{{ b.recorder_count }}</strong> DVR/Recorder</span>
+          <span><strong>{{ b.camera_total if b.camera_total is not none else '-' }}</strong> Cameras</span>
+          <span><strong>{{ b.hdd_count_total if b.hdd_count_total is not none else '-' }}</strong> HDD Count</span>
+          <span><strong>{{ '%.2f'|format(b.hdd_capacity_total_tb) if b.hdd_capacity_total_tb is not none else '-' }} TB</strong> HDD Capacity</span>
+        </span>
+      </summary>
+      <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Device</th><th>Manufacturer</th><th>Model</th><th>Serial</th><th>Cameras</th><th>HDD Count</th><th>HDD Capacity</th><th>Location</th></tr>
+        </thead>
+        <tbody>
+          {% for item in b.rows %}
+          <tr>
+            <td>{{ item.device_name }}</td>
+            <td>{{ item.manufacturer }}</td>
+            <td>{{ item.model_device }}</td>
+            <td>{{ item.serial_tag }}</td>
+            <td>{{ item.camera_count }}</td>
+            <td>{{ item.hdd_count }}</td>
+            <td>{{ item.hdd_capacity }}</td>
+            <td>{{ item.location }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    </details>
+    {% endfor %}
+  </div>
+  {% else %}
+    <p class="muted">No CCTV items currently on file.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
   <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
     <h2 style="margin:0;">CCTV by Branch (by month)</h2>
     <div style="display:flex; align-items:center; gap:0.5rem;">

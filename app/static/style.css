@@ -573,6 +573,45 @@ button.danger, .btn.danger { background: var(--danger); }
 a.branch-link { color: var(--brand); text-decoration: none; }
 a.branch-link:hover { text-decoration: underline; }
 
+/* CCTV Dashboard's per-branch expand/collapse comparison tree - each
+   branch is a native <details>, so open/closed state needs no JS. */
+.cctv-branch-node {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 0.5rem;
+}
+.cctv-branch-node + .cctv-branch-node { margin-top: 0.5rem; }
+.cctv-branch-node summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 0.65rem 0.85rem;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+}
+.cctv-branch-node summary::-webkit-details-marker { display: none; }
+.cctv-branch-node summary::before {
+  content: "\25B8";
+  display: inline-block;
+  margin-right: 0.35rem;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+.cctv-branch-node[open] summary::before { transform: rotate(90deg); }
+.cctv-branch-node summary:hover { background: var(--bg); }
+.cctv-branch-name { font-weight: 600; }
+.cctv-branch-stats {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-left: auto;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.cctv-branch-stats strong { color: var(--text); font-variant-numeric: tabular-nums; }
+.cctv-branch-node .table-scroll { padding: 0 0.85rem 0.75rem; }
+
 .app-footer {
   text-align: center;
   padding: 1.25rem 1rem;
