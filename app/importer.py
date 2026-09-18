@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass, field
 
 import openpyxl
+import xlrd
 from unidecode import unidecode
 
 from .db import get_connection, log_import
@@ -46,7 +47,7 @@ def _clean_serial(value) -> str:
 
 
 
-_TO_ABBREVIATION_RE = re.compile(r"\bT\.O\.?\b")
+_TO_ABBREVIATION_RE = re.compile(r"\bT[./]?O\.?\b")
 
 
 def normalize_branch_text(value) -> str:
@@ -56,7 +57,11 @@ def normalize_branch_text(value) -> str:
     a file labeled e.g. "South Saigon T.O" auto-resolves against a branch
     master eng_name like "...TRANSACTION OFFICE" without needing a manual
     alias first - the space-insensitive matching in resolve_branch already
-    absorbs spacing differences like "Saigon" vs "Sai Gon" on top of this."""
+    absorbs spacing differences like "Saigon" vs "Sai Gon" on top of this.
+    Different branches spell the same abbreviation differently across
+    reports - "T.O", "T/O", or bare "TO" - all three hit this one regex
+    (seen in practice: "Tay Ho T/O" and "My Dinh T/O" only started
+    resolving once "/" was accepted alongside ".")."""
     text = unidecode(_clean_str(value)).upper().strip()
     return _TO_ABBREVIATION_RE.sub("TRANSACTION OFFICE", text)
 
@@ -865,6 +870,55 @@ def _ingest_cctv_rows(
         )
 
 
+def _xls_cell_to_python(cell_type: int, value, book: xlrd.Book):
+    """Convert one xlrd (cell_type, value) pair to the same Python value
+    openpyxl(data_only=True) would hand back for the equivalent cell -
+    dates as datetime (openpyxl always resolves these, never a raw
+    serial number), numbers as int when they're whole (xlrd hands back
+    every number as float, even '1' - int rows/user IDs would otherwise
+    grow a spurious '.0' that isn't in a real .xlsx of the same report),
+    blanks/empty as None."""
+    if cell_type == xlrd.XL_CELL_DATE:
+        return xlrd.xldate.xldate_as_datetime(value, book.datemode)
+    if cell_type == xlrd.XL_CELL_NUMBER:
+        return int(value) if float(value).is_integer() else value
+    if cell_type in (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK):
+        return None
+    if cell_type == xlrd.XL_CELL_BOOLEAN:
+        return bool(value)
+    return value
+
+
+def _load_workbook(path: str, **kwargs) -> openpyxl.Workbook:
+    """Same job as openpyxl.load_workbook, plus transparent support for the
+    legacy binary .xls format openpyxl itself never will (it only handles
+    the newer .xlsx/zip-based format) - some branches still submit their
+    monthly report in .xls. Reads the old file with xlrd and replays every
+    sheet/cell into a fresh in-memory openpyxl Workbook, so every caller
+    (detect_equipment_sheets, _ingest_asset_rows, ...) keeps working
+    against a normal openpyxl Workbook/Worksheet without knowing which
+    format the file was actually authored in. `**kwargs` (data_only,
+    read_only, ...) only matter to openpyxl's own loader - they're no-ops
+    for the synthesized .xls workbook (no formulas or lazy loading to opt
+    into there)."""
+    if not path.lower().endswith(".xls"):
+        return openpyxl.load_workbook(path, **kwargs)
+
+    book = xlrd.open_workbook(path)
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    for sheet_name in book.sheet_names():
+        xls_sheet = book.sheet_by_name(sheet_name)
+        ws = wb.create_sheet(title=sheet_name)
+        for row_idx in range(xls_sheet.nrows):
+            row_values = [
+                _xls_cell_to_python(cell_type, value, book)
+                for cell_type, value in zip(xls_sheet.row_types(row_idx), xls_sheet.row_values(row_idx))
+            ]
+            ws.append(row_values)
+    return wb
+
+
 def peek_asset_report_branch(conn, path: str) -> dict:
     """Lightweight pre-import check: which branch a report file would
     resolve to, without creating a batch or inserting any rows. Used by
@@ -874,7 +928,7 @@ def peek_asset_report_branch(conn, path: str) -> dict:
     import_asset_report, so the real ingest path can't be affected by
     changes made for this peek."""
     try:
-        wb = openpyxl.load_workbook(path, data_only=True)
+        wb = _load_workbook(path, data_only=True)
     except Exception:  # noqa: BLE001 - just means the check is skipped, real import will report it
         return {"branch_no": "", "branch_matched": "", "branch_hint": ""}
 
@@ -912,7 +966,7 @@ def import_asset_report(
     source_file = source_label or path
     conn = get_connection()
     try:
-        wb = openpyxl.load_workbook(path, data_only=True)
+        wb = _load_workbook(path, data_only=True)
     except Exception as exc:  # noqa: BLE001 - surfaced to the user as-is
         report = CleaningReport(source_file=source_file)
         report.error = f"Could not open file: {exc}"
@@ -1037,7 +1091,7 @@ def import_total_asset_history(path: str, performed_by: str = "") -> list[Cleani
     historical import_batch, inserted oldest-first, using the same row
     normalization as a regular monthly asset report."""
     try:
-        wb = openpyxl.load_workbook(path, data_only=True)
+        wb = _load_workbook(path, data_only=True)
     except Exception as exc:  # noqa: BLE001 - surfaced to the user as-is, mirrors import_asset_report's guard
         error = f"Could not open file: {exc}"
         conn = get_connection()
