@@ -199,6 +199,118 @@ class ImportAssetReportMultiSheetTests(unittest.TestCase):
 
         self.assertEqual(sorted(r["serial_tag"] for r in rows), ["SN-PC-1", "SN-SHARED"])
 
+    def test_cctv_sheets_footer_legend_table_is_not_imported_as_equipment(self):
+        """Real CCTV sheets (see every file sampled from the June-Aug 2026
+        reports) follow their real DVR rows with a blank row, then a second
+        "NUMBER OF CAMERA CONNECTED / Qty" summary mini-table repeating each
+        DVR's name/manufacturer/model down to a "Grand Total" row - not more
+        equipment. That footer used to get ingested as a string of garbage
+        cctv_items/asset_items rows (bare numbers, "NUMBER OF CAMERA
+        CONNECTED" as a device name, a device name landing in the
+        BRANCH/DEPT column and failing branch resolution, ...)."""
+        wb = openpyxl.Workbook()
+        cctv = wb.active
+        cctv.title = "CCTV REPORT"
+        cctv.append([None] * 10 + ["Branch/TO/Center Name:", "Test Branch"])
+        cctv.append(
+            ["NO", "BRANCH / DEPT", "DEVICE NAME", "IP ADDRESS", "PRODUCTION", "MODEL DEVICE", "SERIAL NO",
+             "STATUS", "NUMBER  OF CAMERA CONNECTED", "NUMBER OF HARD DISK", "CAPACITY OF ALL HARD DISK",
+             "LOCATION", "REMARK"]
+        )
+        cctv.append(
+            [1, "TEST BRANCH", "CCTV RECORDING 1", "10.0.1.1", "HIK VISION", "DS-7316", "SN-CCTV-1",
+             "USING LOCAL", 16, "3", "24TB", "IT ROOM", ""]
+        )
+        cctv.append(
+            [2, "TEST BRANCH", "CCTV RECORDING 2", "10.0.1.2", "HIK VISION", "DS-7324", "SN-CCTV-2",
+             "USING LOCAL", 8, "2", "12TB", "IT ROOM", ""]
+        )
+        cctv.append([None] * 13)  # the real-world blank divider row
+        # The footer legend, reproduced from a real file: a header row, then
+        # per-DVR name/manufacturer/model rows with no relation to the real
+        # DEVICE NAME/BRANCH/SERIAL columns above, ending in a stray total.
+        cctv.append([None, None, "NUMBER  OF CAMERA CONNECTED", "Qty", None, None, None, None, None, None, None, None, None])
+        cctv.append([None, "CCTV RECORDING 1", 16, 1, None, None, None, None, None, None, None, None, None])
+        cctv.append([None, "HIK VISION", None, None, None, None, None, None, None, None, None, None, None])
+        cctv.append([None, "DS-7316", None, None, None, None, None, None, None, None, None, None, None])
+        cctv.append([None, "CCTV RECORDING 2", 8, 1, None, None, None, None, None, None, None, None, None])
+        cctv.append([None, "Grand Total", 24, 2, None, None, None, None, None, None, None, None, None])
+        path = os.path.join(self.tmpdir, "footer_legend.xlsx")
+        wb.save(path)
+
+        reports = import_asset_report(path, source_label="footer_legend.xlsx", period="2026-03")
+        self.assertEqual(len(reports), 2)
+        by_kind = {r.kind: r for r in reports}
+        cctv_report = by_kind["cctv_report"]
+        asset_report = by_kind["asset_report"]
+
+        self.assertEqual(cctv_report.rows_imported, 2)
+        # Only the two real device names - none of the footer's garbage
+        # ("NUMBER  OF CAMERA CONNECTED", "Grand Total", a bare "16", ...).
+        self.assertEqual(cctv_report.unrecognized_devices, ["CCTV RECORDING 1", "CCTV RECORDING 2"])
+        self.assertEqual(cctv_report.branch_no, "001")
+
+        conn = get_connection()
+        try:
+            cctv_rows = conn.execute(
+                "SELECT serial_tag, device_name FROM cctv_items WHERE batch_id = ? ORDER BY serial_tag",
+                (cctv_report.batch_id,),
+            ).fetchall()
+            asset_rows = conn.execute(
+                "SELECT serial_tag FROM asset_items WHERE batch_id = ?", (asset_report.batch_id,)
+            ).fetchall()
+        finally:
+            conn.close()
+
+        self.assertEqual([r["serial_tag"] for r in cctv_rows], ["SN-CCTV-1", "SN-CCTV-2"])
+        self.assertEqual([r["serial_tag"] for r in asset_rows], ["SN-CCTV-1", "SN-CCTV-2"])
+
+    def test_footer_legend_with_no_blank_row_gap_is_still_excluded(self):
+        """Same footer-legend problem as the test above, but reproducing a
+        real file (DISTRICT 7 T.O's Jan-2026 report) where the legend table
+        starts on the very next row after the last real one - no blank
+        divider at all. The row-number ("NO") column going blank, not a
+        blank row, is what actually has to stop the scan."""
+        wb = openpyxl.Workbook()
+        cctv = wb.active
+        cctv.title = "CCTV REPORT"
+        cctv.append([None] * 10 + ["Branch/TO/Center Name:", "Test Branch"])
+        cctv.append(
+            ["NO", "BRANCH / DEPT", "DEVICE NAME", "IP ADDRESS", "PRODUCTION", "MODEL DEVICE", "SERIAL NO",
+             "STATUS", "NUMBER  OF CAMERA CONNECTED"]
+        )
+        cctv.append(
+            [1, "TEST BRANCH", "CCTV RECORDING 1", "10.0.1.1", "HIK VISION", "DS-7324HQHI-K4", "SN-CCTV-1",
+             "USING LOCAL", 19]
+        )
+        cctv.append(
+            [2, "TEST BRANCH", "CCTV RECORDING 2", "10.0.1.2", "HIK VISION", "DS-7104HQHI-K1", "SN-CCTV-2",
+             "USING LOCAL", 1]
+        )
+        # No blank row here - the legend starts immediately.
+        cctv.append([None, None, " NUMBER  OF CAMERA CONNECTED", "Qty", None, None, None, None, None])
+        cctv.append([None, "CCTV RECORDING 1", 19, 1, None, None, None, None, None])
+        cctv.append([None, "HIK VISION", None, None, None, None, None, None, None])
+        cctv.append([None, "DS-7324HQHI-K4", None, None, None, None, None, None, None])
+        cctv.append([None, "CCTV RECORDING 2", 1, 1, None, None, None, None, None])
+        cctv.append([None, "Grand Total", 20, 2, None, None, None, None, None])
+        path = os.path.join(self.tmpdir, "no_gap_legend.xlsx")
+        wb.save(path)
+
+        reports = import_asset_report(path, source_label="no_gap_legend.xlsx", period="2026-03")
+        by_kind = {r.kind: r for r in reports}
+        cctv_report = by_kind["cctv_report"]
+        self.assertEqual(cctv_report.rows_imported, 2)
+
+        conn = get_connection()
+        try:
+            cctv_rows = conn.execute(
+                "SELECT serial_tag FROM cctv_items WHERE batch_id = ?", (cctv_report.batch_id,)
+            ).fetchall()
+        finally:
+            conn.close()
+        self.assertEqual(sorted(r["serial_tag"] for r in cctv_rows), ["SN-CCTV-1", "SN-CCTV-2"])
+
     def test_single_oa_sheet_file_still_imports_as_one_report(self):
         """Regression guard: a normal file with only one equipment sheet
         (the overwhelmingly common case) must still behave exactly like

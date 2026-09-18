@@ -734,6 +734,7 @@ def _ingest_cctv_rows(
     fixed_branch_no: str | None = None,
     mirror_batch_id: int | None = None,
     mirrored_serials: set[str] | None = None,
+    no_col_idx: int | None = None,
 ) -> None:
     """Same idea as _ingest_asset_rows, for a CCTV-report sheet's rows -
     device/status/model normalization and branch resolution are identical
@@ -790,8 +791,29 @@ def _ingest_cctv_rows(
         return row[idx] if idx is not None and idx < len(row) else None
 
     for row in rows:
+        # A CCTV sheet almost always follows its real DVR/camera rows with a
+        # second "NUMBER OF CAMERA CONNECTED / Qty" summary mini-table
+        # (device name, manufacturer, model repeated per DVR, down to a
+        # "Grand Total" row) - a footer legend, not more equipment. That
+        # summary table has no DEVICE NAME/SERIAL columns of its own, so its
+        # cells land in whatever columns the real header happened to
+        # define, and used to get ingested as a string of garbage rows
+        # (bare numbers, "NUMBER OF CAMERA CONNECTED" as a device name, a
+        # device name like "CCTV RECORDING 1" landing in the BRANCH/DEPT
+        # column and failing branch resolution, ...). A blank row usually
+        # separates it from the real rows above, but not always (seen in
+        # practice with zero gap) - the reliable signal in every file
+        # sampled is the row-number ("NO") column: every real row has it
+        # filled in 1, 2, 3, ..., the legend table never does. Stop the
+        # moment it goes blank (or the whole row does, as a fallback for a
+        # sheet with no recognized NO column at all) rather than continuing
+        # to scan past it.
         if row is None or all(c is None or _clean_str(c) == "" for c in row):
-            continue
+            break
+        if no_col_idx is not None:
+            no_value = row[no_col_idx] if no_col_idx < len(row) else None
+            if _clean_str(no_value) == "":
+                break
         report.rows_read += 1
 
         device_name_raw = _clean_str(get(row, "device_name"))
@@ -1088,6 +1110,15 @@ def import_asset_report(
             if text and idx not in known_col_idxs:
                 report.unmapped_columns.append(text)
 
+        # A CCTV sheet's row-number ("NO") column is the one reliable
+        # end-of-real-data marker (see _ingest_cctv_rows) - every real DVR/
+        # camera row has it filled in, and the trailing footer legend table
+        # never does, whether or not a blank row happens to separate them.
+        no_col_idx = next(
+            (idx for idx, cell in enumerate(header_row_values) if _normalize_header_cell(cell) in ("NO", "NO.", "STT")),
+            None,
+        )
+
         batch_id = conn.execute(
             """INSERT INTO import_batches
                (imported_at, kind, source_files_json, label, period, sheet_name, branch_hint, unmapped_columns_json)
@@ -1128,6 +1159,7 @@ def import_asset_report(
                 _ingest_cctv_rows(
                     conn, batch_id, data_rows, match.col_map, match.branch_hint, source_file, report,
                     fixed_branch_no=branch_no, mirror_batch_id=asset_batch_id, mirrored_serials=asset_batch_serials,
+                    no_col_idx=no_col_idx,
                 )
             else:
                 _ingest_asset_rows(
