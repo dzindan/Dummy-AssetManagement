@@ -732,13 +732,28 @@ def _ingest_cctv_rows(
     source_label: str,
     report: CleaningReport,
     fixed_branch_no: str | None = None,
+    mirror_batch_id: int | None = None,
+    mirrored_serials: set[str] | None = None,
 ) -> None:
     """Same idea as _ingest_asset_rows, for a CCTV-report sheet's rows -
     device/status/model normalization and branch resolution are identical
     (same alias tables, so Settings' existing mapping pools cover CCTV
     values too), but there's no user_id/full_name/position/handover_date
     (CCTV gear isn't assigned to a person), and camera_count/hdd_count/
-    hdd_capacity/location/manufacturer take their place instead."""
+    hdd_capacity/location/manufacturer take their place instead.
+
+    Recording equipment (DVR/recorder, monitor, ...) described only on a
+    CCTV sheet used to be invisible on Manage Assets entirely - only the
+    detailed CCTV-specific fields lived anywhere, in cctv_items. When
+    `mirror_batch_id` is given, every row here is ALSO inserted into
+    asset_items under that batch (bare equipment fields only - no
+    camera_count/hdd_*/location/manufacturer; Manage CCTV stays the place
+    for those), so the device shows up as ordinary equipment too - unless
+    a row with the same serial is already sitting in that batch (the same
+    physical DVR listed on both the file's OA sheet and its CCTV sheet),
+    in which case it's skipped rather than double-counted. `mirrored_serials`
+    is the (upper-cased) set of serials already in that batch, seeded by
+    the caller and grown here as rows get mirrored."""
     seen_keys: dict[str, int] = {}
     duplicate_ids: dict[str, list[int]] = {}
     serial_display: dict[str, str] = {}
@@ -852,6 +867,27 @@ def _ingest_cctv_rows(
         )
         new_id = cursor.lastrowid
         report.rows_imported += 1
+
+        if mirror_batch_id is not None:
+            serial_norm = serial_tag.upper() if serial_tag else ""
+            if not serial_norm or (mirrored_serials is not None and serial_norm not in mirrored_serials):
+                asset_asset_key = _asset_key(branch_dept_cell, device_name, model_device, serial_tag, "")
+                conn.execute(
+                    """
+                    INSERT INTO asset_items (
+                        batch_id, asset_key, branch_dept, branch_no, device_name, device_name_raw,
+                        user_id_raw, user_id_norm, full_name, full_name_raw, model_device, model_device_raw,
+                        serial_tag, status, status_raw, remark, position, handover_date, ip, extra_json, source_file
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        mirror_batch_id, asset_asset_key, branch_dept_cell, branch_no, device_name, device_name_raw,
+                        "", "", "", "", model_device, model_device_raw,
+                        serial_tag, status, status_raw, _clean_str(get(row, "remark")), "", "", ip, None, source_label,
+                    ),
+                )
+                if serial_norm and mirrored_serials is not None:
+                    mirrored_serials.add(serial_norm)
 
         if serial_tag:
             if asset_key in seen_keys:
@@ -968,7 +1004,15 @@ def import_asset_report(
     separate CCTV equipment sheet into one workbook (see
     detect_equipment_sheets), so each qualifying sheet gets its own
     import_batches row + CleaningReport rather than only the single
-    best-scoring sheet winning and the rest being silently dropped."""
+    best-scoring sheet winning and the rest being silently dropped.
+
+    A CCTV sheet's own rows (DVR/recorder, monitor, ...) are ALSO mirrored
+    into asset_items (bare equipment fields only, deduped by serial against
+    whatever the file's own OA sheet already put there) - see
+    _ingest_cctv_rows - so Manage Assets' equipment inventory includes
+    recording gear too, even from a file that only ever had a CCTV sheet
+    (which gets a synthetic asset_report batch created just to hold the
+    mirrored rows)."""
     source_file = source_label or path
     conn = get_connection()
     try:
@@ -996,6 +1040,14 @@ def import_asset_report(
     now = _now_iso()
     resolved_period = period.strip() if period and period.strip() else now[:7]
     reports: list[CleaningReport] = []
+
+    # Process the "asset" match before "cctv" (detect_equipment_sheets can
+    # return them in either order) so a shared asset batch already exists,
+    # with its serials known, by the time the CCTV sheet's rows try to
+    # mirror into it below.
+    matches = sorted(matches, key=lambda m: m.kind == "cctv")
+    asset_batch_id: int | None = None
+    asset_batch_serials: set[str] = set()
 
     for match in matches:
         is_cctv = match.kind == "cctv"
@@ -1050,15 +1102,44 @@ def import_asset_report(
         data_rows = ws.iter_rows(min_row=match.header_row_idx + 2, values_only=True)
         try:
             if is_cctv:
+                if asset_batch_id is None:
+                    # No OA/asset sheet in this file - create an asset batch
+                    # just to hold the mirrored DVR/monitor rows below, so
+                    # this branch's "current state" for the period isn't
+                    # missing its recording equipment entirely just because
+                    # the file only ever had a CCTV sheet.
+                    asset_batch_id = conn.execute(
+                        """INSERT INTO import_batches
+                           (imported_at, kind, source_files_json, label, period, sheet_name, branch_hint,
+                            unmapped_columns_json)
+                           VALUES (?, 'asset_report', ?, ?, ?, ?, ?, '[]')""",
+                        (
+                            now, json.dumps([source_file]), report.branch_hint or match.sheet_name, resolved_period,
+                            match.sheet_name, report.branch_hint,
+                        ),
+                    ).lastrowid
+                    mirror_report = CleaningReport(source_file=source_file, kind="asset_report")
+                    mirror_report.sheet_name = match.sheet_name
+                    mirror_report.branch_hint = report.branch_hint
+                    mirror_report.branch_matched = branch_matched
+                    mirror_report.branch_no = branch_no
+                    mirror_report.batch_id = asset_batch_id
+                    reports.append(mirror_report)
                 _ingest_cctv_rows(
                     conn, batch_id, data_rows, match.col_map, match.branch_hint, source_file, report,
-                    fixed_branch_no=branch_no,
+                    fixed_branch_no=branch_no, mirror_batch_id=asset_batch_id, mirrored_serials=asset_batch_serials,
                 )
             else:
                 _ingest_asset_rows(
                     conn, batch_id, data_rows, match.col_map, match.branch_hint, source_file, report,
                     fixed_branch_no=branch_no,
                 )
+                asset_batch_id = batch_id
+                asset_batch_serials = {
+                    r["serial_tag"].upper() for r in conn.execute(
+                        "SELECT serial_tag FROM asset_items WHERE batch_id = ? AND serial_tag != ''", (batch_id,)
+                    ).fetchall()
+                }
         except Exception as exc:  # noqa: BLE001 - surfaced to the user, mirrors the load_workbook guard above
             conn.rollback()
             report.error = f"Import failed while processing rows: {exc}"

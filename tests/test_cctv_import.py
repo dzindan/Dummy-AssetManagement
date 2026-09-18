@@ -120,10 +120,13 @@ class ImportAssetReportMultiSheetTests(unittest.TestCase):
                 "SELECT * FROM cctv_items WHERE batch_id = ? ORDER BY serial_tag", (cctv_report.batch_id,)
             ).fetchall()
 
-            # asset_items must never contain the CCTV batch's rows, and vice
-            # versa - the whole point of the separate table.
+            # cctv_items keeps the full detailed rows (camera_count/hdd_*/
+            # location/manufacturer) - those never leak into asset_items.
+            # But the CCTV sheet's own devices (different serials than the
+            # OA sheet's PCs) DO get mirrored into asset_items too, as bare
+            # equipment, so Manage Assets' inventory includes them.
             self.assertEqual(
-                conn.execute("SELECT COUNT(*) c FROM asset_items").fetchone()["c"], 2
+                conn.execute("SELECT COUNT(*) c FROM asset_items").fetchone()["c"], 4
             )
             self.assertEqual(
                 conn.execute("SELECT COUNT(*) c FROM cctv_items").fetchone()["c"], 2
@@ -131,9 +134,17 @@ class ImportAssetReportMultiSheetTests(unittest.TestCase):
         finally:
             conn.close()
 
-        self.assertEqual([r["serial_tag"] for r in asset_rows], ["SN-PC-1", "SN-PC-2"])
-        self.assertEqual(asset_rows[0]["device_name"], "PC")
-        self.assertEqual(asset_rows[0]["user_id_raw"], "1001")
+        self.assertEqual(
+            [r["serial_tag"] for r in asset_rows], ["SN-CCTV-1", "SN-CCTV-2", "SN-PC-1", "SN-PC-2"]
+        )
+        pc_rows = {r["serial_tag"]: r for r in asset_rows if r["serial_tag"].startswith("SN-PC")}
+        self.assertEqual(pc_rows["SN-PC-1"]["device_name"], "PC")
+        self.assertEqual(pc_rows["SN-PC-1"]["user_id_raw"], "1001")
+
+        mirrored_rows = {r["serial_tag"]: r for r in asset_rows if r["serial_tag"].startswith("SN-CCTV")}
+        self.assertEqual(mirrored_rows["SN-CCTV-1"]["user_id_raw"], "")
+        self.assertEqual(mirrored_rows["SN-CCTV-1"]["full_name"], "")
+        self.assertEqual(mirrored_rows["SN-CCTV-1"]["branch_no"], "001")
 
         self.assertEqual([r["serial_tag"] for r in cctv_rows], ["SN-CCTV-1", "SN-CCTV-2"])
         dvr_row = cctv_rows[0]
@@ -143,6 +154,50 @@ class ImportAssetReportMultiSheetTests(unittest.TestCase):
         self.assertEqual(dvr_row["hdd_capacity"], "24TB")
         self.assertEqual(dvr_row["location"], "IT ROOM")
         self.assertEqual(dvr_row["ip"], "10.0.1.1")
+
+    def test_cctv_row_sharing_a_serial_with_an_oa_sheet_row_is_not_duplicated(self):
+        """The same physical DVR can legitimately appear as its own row on
+        both the OA sheet (someone typed it into the generic equipment
+        list) and the CCTV sheet (with its full camera/HDD detail) - the
+        mirror must not create a second asset_items row for it."""
+        wb = openpyxl.Workbook()
+        oa = wb.active
+        oa.title = "OA EQUIPMENT"
+        oa.append([None] * 7 + ["Branch/TO/Center Name:", "Test Branch"])
+        oa.append(
+            ["NO", "BRANCH / DEPT", "DEVICE NAME", "USER ID", "FULL NAME", "IP", "MODEL DEVICE",
+             "SERIAL/ SERVICE TAG", "STATUS", "REMARK"]
+        )
+        oa.append([1, "TEST BRANCH", "PC", "1001", "NGUYEN VAN A", "10.0.0.1", "DELL 3060", "SN-PC-1", "USING LOCAL", ""])
+        oa.append([2, "TEST BRANCH", "DVR", "", "", "", "DS-7316", "SN-SHARED", "USING LOCAL", ""])
+
+        cctv = wb.create_sheet("CCTV REPORT")
+        cctv.append([None] * 10 + ["Branch/TO/Center Name:", "Test Branch"])
+        cctv.append(
+            ["NO", "BRANCH / DEPT", "DEVICE NAME", "IP ADDRESS", "PRODUCTION", "MODEL DEVICE", "SERIAL NO",
+             "STATUS", "NUMBER  OF CAMERA CONNECTED", "NUMBER OF HARD DISK", "CAPACITY OF ALL HARD DISK",
+             "LOCATION", "REMARK"]
+        )
+        cctv.append(
+            [1, "TEST BRANCH", "CCTV RECORDING 1", "10.0.1.1", "HIK VISION", "DS-7316", "SN-SHARED",
+             "USING LOCAL", 16, "3", "24TB", "IT ROOM", ""]
+        )
+        path = os.path.join(self.tmpdir, "shared_serial.xlsx")
+        wb.save(path)
+
+        reports = import_asset_report(path, source_label="shared_serial.xlsx", period="2026-03")
+        by_kind = {r.kind: r for r in reports}
+        asset_batch_id = by_kind["asset_report"].batch_id
+
+        conn = get_connection()
+        try:
+            rows = conn.execute(
+                "SELECT serial_tag FROM asset_items WHERE batch_id = ?", (asset_batch_id,)
+            ).fetchall()
+        finally:
+            conn.close()
+
+        self.assertEqual(sorted(r["serial_tag"] for r in rows), ["SN-PC-1", "SN-SHARED"])
 
     def test_single_oa_sheet_file_still_imports_as_one_report(self):
         """Regression guard: a normal file with only one equipment sheet
@@ -196,10 +251,13 @@ class ReresolveCctvUnresolvedTests(unittest.TestCase):
         path = os.path.join(self.tmpdir, "report.xlsx")
         wb.save(path)
 
+        # A CCTV-only file (no OA sheet) now also gets a synthetic
+        # asset_report batch created to hold the mirrored DVR row.
         reports = import_asset_report(path, source_label="report.xlsx", period="2026-03")
-        self.assertEqual(len(reports), 1)
-        cctv_report = reports[0]
-        self.assertEqual(cctv_report.kind, "cctv_report")
+        self.assertEqual(len(reports), 2)
+        by_kind = {r.kind: r for r in reports}
+        cctv_report = by_kind["cctv_report"]
+        asset_report = by_kind["asset_report"]
         self.assertEqual(cctv_report.branch_no, "")
 
         conn = get_connection()
@@ -208,22 +266,28 @@ class ReresolveCctvUnresolvedTests(unittest.TestCase):
                 "INSERT INTO branches (branch_no, local_name, eng_name, updated_at) "
                 "VALUES ('001', 'Test Branch', 'TEST BRANCH', datetime('now'))"
             )
-            row = conn.execute(
+            cctv_row = conn.execute(
                 "SELECT branch_no FROM cctv_items WHERE batch_id = ?", (cctv_report.batch_id,)
             ).fetchone()
-            self.assertEqual(row["branch_no"], "")
+            self.assertEqual(cctv_row["branch_no"], "")
 
             fixed_count = reresolve_unresolved_assets(conn, cctv_report.branch_hint, "001")
             conn.commit()
 
-            row = conn.execute(
+            cctv_row = conn.execute(
                 "SELECT branch_no FROM cctv_items WHERE batch_id = ?", (cctv_report.batch_id,)
+            ).fetchone()
+            asset_row = conn.execute(
+                "SELECT branch_no FROM asset_items WHERE batch_id = ?", (asset_report.batch_id,)
             ).fetchone()
         finally:
             conn.close()
 
-        self.assertEqual(fixed_count, 1)
-        self.assertEqual(row["branch_no"], "001")
+        # Both the cctv_items row and its mirrored asset_items row shared
+        # the same unresolved hint, so one alias fixes both.
+        self.assertEqual(fixed_count, 2)
+        self.assertEqual(cctv_row["branch_no"], "001")
+        self.assertEqual(asset_row["branch_no"], "001")
 
 
 if __name__ == "__main__":
