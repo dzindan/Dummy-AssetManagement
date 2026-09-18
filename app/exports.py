@@ -131,11 +131,11 @@ def build_asset_rows_workbook(
 # location/manufacturer fields in their place.
 CCTV_ROW_COLUMNS: list[ColumnSpec] = [
     ("Device", "device_name"),
-    ("Model", "model_device"),
+    ("IP", "ip"),
     ("Manufacturer", "manufacturer"),
+    ("Model", "model_device"),
     ("Serial/Service Tag", "serial_tag"),
     ("Status", "status"),
-    ("IP", "ip"),
     ("Camera Count", "camera_count"),
     ("HDD Count", "hdd_count"),
     ("HDD Capacity", "hdd_capacity"),

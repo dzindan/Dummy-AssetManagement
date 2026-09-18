@@ -122,7 +122,7 @@
     <thead>
       <tr>
         <th><input type="checkbox" data-select-all="cctv-row-checkbox"></th>
-        <th>Branch</th><th>Device</th><th>Model</th><th>Manufacturer</th><th>Serial/Tag</th><th>Status</th><th>IP</th><th>Cameras</th><th>HDD Count</th><th>HDD Capacity</th><th>Location</th><th>Remark</th><th></th>
+        <th>Branch</th><th>Device</th><th>IP</th><th>Manufacturer</th><th>Model</th><th>Serial/Tag</th><th>Status</th><th>Cameras</th><th>HDD Count</th><th>HDD Capacity</th><th>Location</th><th>Remark</th><th></th>
       </tr>
     </thead>
     <tbody>
@@ -131,11 +131,11 @@
         <td><input type="checkbox" class="cctv-row-checkbox" value="{{ a['id'] }}"></td>
         <td>{{ a['branch_eng_name'] or a['branch_dept'] }}</td>
         <td>{{ a['device_name'] }}</td>
-        <td>{{ a['model_device'] }}</td>
+        <td>{{ a['ip'] }}</td>
         <td>{{ a['manufacturer'] }}</td>
+        <td>{{ a['model_device'] }}</td>
         <td>{{ a['serial_tag'] }}</td>
         <td>{{ a['status'] }}</td>
-        <td>{{ a['ip'] }}</td>
         <td>{{ a['camera_count'] }}</td>
         <td>{{ a['hdd_count'] }}</td>
         <td>{{ a['hdd_capacity'] }}</td>
