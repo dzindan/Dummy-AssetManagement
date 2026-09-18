@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import create_app  # noqa: E402
 from app.db import get_connection  # noqa: E402
-from app.importer import detect_equipment_sheets, import_asset_report  # noqa: E402
+from app.importer import detect_equipment_sheets, import_asset_report, reresolve_unresolved_assets  # noqa: E402
 
 
 def _fresh_app():
@@ -164,6 +164,66 @@ class ImportAssetReportMultiSheetTests(unittest.TestCase):
         self.assertEqual(len(reports), 1)
         self.assertEqual(reports[0].kind, "asset_report")
         self.assertEqual(reports[0].rows_imported, 1)
+
+
+class ReresolveCctvUnresolvedTests(unittest.TestCase):
+    """reresolve_unresolved_assets used to only touch asset_items - a CCTV
+    sheet's own garbled/unresolvable branch hint stayed stuck on
+    branch_no = '' forever after assigning it a branch alias in Settings,
+    even though the exact same fix worked instantly for a plain asset
+    report. Both tables must resync."""
+
+    def setUp(self):
+        self.app = _fresh_app()
+        self.tmpdir = tempfile.mkdtemp(prefix="am_cctvtest_reresolve_")
+
+    def test_assigning_a_branch_alias_backfills_cctv_items_too(self):
+        wb = openpyxl.Workbook()
+        cctv = wb.active
+        cctv.title = "CCTV REPORT"
+        # No "Branch/TO/Center Name:" label row and an empty BRANCH/DEPT
+        # column - same shape as a real file whose branch-name cell got
+        # left blank, which is what produces an unresolvable garbled hint.
+        cctv.append(
+            ["NO", "BRANCH / DEPT", "DEVICE NAME", "IP ADDRESS", "PRODUCTION", "MODEL DEVICE", "SERIAL NO",
+             "STATUS", "NUMBER  OF CAMERA CONNECTED", "NUMBER OF HARD DISK", "CAPACITY OF ALL HARD DISK",
+             "LOCATION", "REMARK"]
+        )
+        cctv.append(
+            [1, "NOTABRANCH", "CCTV RECORDING 1", "10.0.1.1", "HIK VISION", "DS-7316", "SN-CCTV-1",
+             "USING LOCAL", 16, "3", "24TB", "IT ROOM", ""]
+        )
+        path = os.path.join(self.tmpdir, "report.xlsx")
+        wb.save(path)
+
+        reports = import_asset_report(path, source_label="report.xlsx", period="2026-03")
+        self.assertEqual(len(reports), 1)
+        cctv_report = reports[0]
+        self.assertEqual(cctv_report.kind, "cctv_report")
+        self.assertEqual(cctv_report.branch_no, "")
+
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO branches (branch_no, local_name, eng_name, updated_at) "
+                "VALUES ('001', 'Test Branch', 'TEST BRANCH', datetime('now'))"
+            )
+            row = conn.execute(
+                "SELECT branch_no FROM cctv_items WHERE batch_id = ?", (cctv_report.batch_id,)
+            ).fetchone()
+            self.assertEqual(row["branch_no"], "")
+
+            fixed_count = reresolve_unresolved_assets(conn, cctv_report.branch_hint, "001")
+            conn.commit()
+
+            row = conn.execute(
+                "SELECT branch_no FROM cctv_items WHERE batch_id = ?", (cctv_report.batch_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+
+        self.assertEqual(fixed_count, 1)
+        self.assertEqual(row["branch_no"], "001")
 
 
 if __name__ == "__main__":

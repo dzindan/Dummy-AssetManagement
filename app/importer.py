@@ -366,12 +366,12 @@ def _resolve_branch_uncached(conn, branch_text: str) -> tuple[str, str]:
 
 def reresolve_unresolved_assets(conn, raw_hint: str, branch_no: str) -> int:
     """After a branch alias is assigned in Settings, retroactively fix any
-    already-imported asset_items rows that are still sitting unresolved
-    (branch_no = '') for this exact hint - otherwise the Dashboard and
-    Manage Assets would keep showing them as "Unresolved" until the next
-    time that file happens to be re-imported, which is confusing right
-    after you've just fixed the mapping. Matches two ways, since either can
-    apply depending on how the row was imported:
+    already-imported asset_items/cctv_items rows that are still sitting
+    unresolved (branch_no = '') for this exact hint - otherwise the
+    Dashboard and Manage Assets/CCTV would keep showing them as
+    "Unresolved" until the next time that file happens to be re-imported,
+    which is confusing right after you've just fixed the mapping. Matches
+    two ways, since either can apply depending on how the row was imported:
 
     1. The row's own `branch_dept` text matches - true for multi-branch
        imports (Total Asset baseline) where each row is resolved
@@ -381,34 +381,40 @@ def reresolve_unresolved_assets(conn, raw_hint: str, branch_no: str) -> int:
        resolution (see `_ingest_asset_rows`'s `fixed_branch_no`), even when
        a row's own raw `branch_dept` text differs from that file-level
        label (e.g. label "South saigon T.O" but a row's own text just says
-       "SOUTH SAIGON").
+       "SOUTH SAIGON"). This is also the path a CCTV sheet's own garbled
+       branch-hint cell goes through, so an unresolved CCTV batch fixes the
+       same way as an unresolved asset one.
 
-    Returns how many rows were updated.
+    Returns how many rows were updated, across both tables.
     """
     target_norm = normalize_branch_text(raw_hint)
     if not target_norm:
         return 0
 
-    dept_rows = conn.execute(
-        "SELECT id, branch_dept FROM asset_items WHERE branch_no = '' AND branch_dept != ''"
-    ).fetchall()
-    ids = {r["id"] for r in dept_rows if normalize_branch_text(r["branch_dept"]) == target_norm}
-
     batches = conn.execute("SELECT id, label FROM import_batches").fetchall()
     matching_batch_ids = [b["id"] for b in batches if normalize_branch_text(b["label"]) == target_norm]
-    if matching_batch_ids:
-        placeholders = ",".join("?" * len(matching_batch_ids))
-        batch_rows = conn.execute(
-            f"SELECT id FROM asset_items WHERE branch_no = '' AND batch_id IN ({placeholders})",
-            matching_batch_ids,
-        ).fetchall()
-        ids.update(r["id"] for r in batch_rows)
 
-    if ids:
-        id_list = list(ids)
-        placeholders = ",".join("?" * len(id_list))
-        conn.execute(f"UPDATE asset_items SET branch_no = ? WHERE id IN ({placeholders})", [branch_no, *id_list])
-    return len(ids)
+    total_fixed = 0
+    for table in ("asset_items", "cctv_items"):
+        dept_rows = conn.execute(
+            f"SELECT id, branch_dept FROM {table} WHERE branch_no = '' AND branch_dept != ''"
+        ).fetchall()
+        ids = {r["id"] for r in dept_rows if normalize_branch_text(r["branch_dept"]) == target_norm}
+
+        if matching_batch_ids:
+            placeholders = ",".join("?" * len(matching_batch_ids))
+            batch_rows = conn.execute(
+                f"SELECT id FROM {table} WHERE branch_no = '' AND batch_id IN ({placeholders})",
+                matching_batch_ids,
+            ).fetchall()
+            ids.update(r["id"] for r in batch_rows)
+
+        if ids:
+            id_list = list(ids)
+            placeholders = ",".join("?" * len(id_list))
+            conn.execute(f"UPDATE {table} SET branch_no = ? WHERE id IN ({placeholders})", [branch_no, *id_list])
+        total_fixed += len(ids)
+    return total_fixed
 
 
 def record_unresolved_branch(conn, raw_hint: str) -> None:
