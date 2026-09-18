@@ -209,6 +209,21 @@ h3 { font-size: 1.02rem; }
 
 .table-scroll { overflow-x: auto; }
 
+/* Synced "shadow" horizontal scrollbar (see app.js) inserted right above a
+   .table-scroll table - its own native scrollbar sits at the table's
+   bottom edge, which for a long table means scrolling the whole page down
+   just to reach it. This one stays reachable without scrolling down, and
+   is hidden by app.js when the table doesn't actually overflow. */
+.table-scroll-shadow {
+  overflow-x: auto;
+  overflow-y: hidden;
+  height: 14px;
+  margin-bottom: 0.35rem;
+}
+.table-scroll-shadow > div {
+  height: 1px;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;

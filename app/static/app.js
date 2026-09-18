@@ -111,6 +111,55 @@ document.addEventListener("DOMContentLoaded", function () {
   });
 });
 
+// Synced "shadow" horizontal scrollbar above every .table-scroll table -
+// its own native scrollbar sits at the table's bottom edge, which for a
+// long table means scrolling the whole page down just to even reach it.
+// This mirror bar sits right above the table instead (always in view
+// without scrolling down first) and stays in sync with the real one in
+// both directions. Hidden entirely for a table that doesn't overflow.
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll(".table-scroll").forEach(function (scrollBox) {
+    const inner = scrollBox.firstElementChild;
+    if (!inner) return;
+
+    const shadow = document.createElement("div");
+    shadow.className = "table-scroll-shadow";
+    const shadowInner = document.createElement("div");
+    shadow.appendChild(shadowInner);
+    scrollBox.parentNode.insertBefore(shadow, scrollBox);
+
+    function syncWidth() {
+      shadowInner.style.width = inner.scrollWidth + "px";
+      shadow.style.display = inner.scrollWidth > scrollBox.clientWidth ? "" : "none";
+    }
+    // Runs after the resizable-table block above (registered earlier on
+    // this same DOMContentLoaded event, so it always finishes first),
+    // meaning inner.scrollWidth already reflects any per-column widths
+    // that block just set rather than the table's pre-resize auto layout.
+    syncWidth();
+    window.addEventListener("resize", syncWidth);
+
+    // Re-check after column drag-resizing (app.js's own resizable-table
+    // handler) or any other later DOM change - a plain 'resize' listener
+    // above only catches the browser window itself resizing.
+    new ResizeObserver(syncWidth).observe(inner);
+
+    let syncing = false;
+    shadow.addEventListener("scroll", function () {
+      if (syncing) return;
+      syncing = true;
+      scrollBox.scrollLeft = shadow.scrollLeft;
+      syncing = false;
+    });
+    scrollBox.addEventListener("scroll", function () {
+      if (syncing) return;
+      syncing = true;
+      shadow.scrollLeft = scrollBox.scrollLeft;
+      syncing = false;
+    });
+  });
+});
+
 // Floating scroll-to-top/scroll-to-bottom buttons (every page, see base.html).
 document.addEventListener("click", function (e) {
   const btn = e.target.closest("[data-scroll-to]");
