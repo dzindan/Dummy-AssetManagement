@@ -76,6 +76,14 @@ class CctvDashboardRenderTests(unittest.TestCase):
         # 24TB + 16TB (from "16TB (2X8TB) Total") = 40.00 TB.
         self.assertIn("40.00 TB", body)
 
+        # Month-by-month breakdown for the report's own period (2026-03) -
+        # same underlying numbers as the branch-level totals above, but
+        # this is the actual thing that was missing before: per-branch
+        # comparison "of each month", not just the current snapshot.
+        self.assertIn("By Month (2026)", body)
+        self.assertIn("2026-03", body)
+        self.assertIn("Current Items", body)
+
     def test_dashboard_renders_with_no_cctv_data(self):
         resp = self.client.get("/cctv/dashboard/")
         self.assertEqual(resp.status_code, 200)

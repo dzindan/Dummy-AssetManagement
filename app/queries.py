@@ -168,6 +168,52 @@ def get_current_cctv_items_for_tree(conn):
     return conn.execute(sql).fetchall()
 
 
+def get_cctv_items_by_branch_period(conn):
+    """Every CCTV item from each branch's most-recent batch *for each
+    reporting period on file* (not just the single latest one - see
+    CURRENT_CCTV_CTE's docstring on why "latest batch per (branch, period)"
+    is the right unit here too), with its branch display name and period
+    attached. Backs the CCTV Dashboard's per-branch tree's month-by-month
+    breakdown - the same idea as analytics.get_branch_month_change_table,
+    but split out per item instead of pre-summed, since the route needs to
+    compute several different per-period totals (recorder count, parsed
+    camera/HDD sums) from the same row set rather than just one count."""
+    sql = """
+    WITH rows AS (
+        SELECT
+            ci.id, ci.batch_id,
+            COALESCE(NULLIF(ci.branch_no, ''), 'UNRESOLVED:' || ci.branch_dept) AS bkey,
+            ci.branch_no AS branch_no, ci.branch_dept AS branch_dept,
+            ib.period AS period,
+            ci.camera_count AS camera_count, ci.hdd_count AS hdd_count, ci.hdd_capacity AS hdd_capacity
+        FROM cctv_items ci
+        JOIN import_batches ib ON ci.batch_id = ib.id
+        WHERE ib.period IS NOT NULL AND ib.period != ''
+    ),
+    latest AS (
+        SELECT bkey, period, MAX(batch_id) AS batch_id FROM rows GROUP BY bkey, period
+    )
+    SELECT
+        r.bkey AS bkey, r.branch_no AS branch_no, r.branch_dept AS branch_dept, r.period AS period,
+        r.camera_count AS camera_count, r.hdd_count AS hdd_count, r.hdd_capacity AS hdd_capacity
+    FROM rows r
+    JOIN latest l ON r.bkey = l.bkey AND r.period = l.period AND r.batch_id = l.batch_id
+    """
+    rows = conn.execute(sql).fetchall()
+    names = {b["branch_no"]: b["eng_name"] for b in conn.execute("SELECT branch_no, eng_name FROM branches")}
+    result = []
+    for r in rows:
+        display_name = (names.get(r["branch_no"]) or "").strip() or (r["branch_dept"] or "").strip() or "Unknown"
+        result.append(
+            {
+                "bkey": r["bkey"], "branch_no": r["branch_no"], "display_name": display_name,
+                "period": r["period"], "camera_count": r["camera_count"], "hdd_count": r["hdd_count"],
+                "hdd_capacity": r["hdd_capacity"],
+            }
+        )
+    return result
+
+
 def get_current_branch_breakdown(conn, table: str = "asset_items"):
     """One row per branch (resolved branch_no when known, otherwise grouped
     by its raw branch_dept text - see CURRENT_ASSETS_CTE), with a

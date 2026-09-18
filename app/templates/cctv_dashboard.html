@@ -22,12 +22,25 @@
 </div>
 
 <div class="panel" style="margin-top: 1.25rem;">
-  <h2>Compare by Branch</h2>
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+    <h2 style="margin:0;">Compare by Branch</h2>
+    {% if available_years %}
+    <form method="get" action="{{ url_for('cctv_dashboard.index') }}" style="display:flex; align-items:center; gap:0.35rem;">
+      <label for="cctv-compare-year" class="muted" style="font-size:0.85rem;">Monthly breakdown year</label>
+      <select id="cctv-compare-year" name="year" onchange="this.form.submit()">
+        {% for y in available_years %}
+        <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
+        {% endfor %}
+      </select>
+    </form>
+    {% endif %}
+  </div>
   <p class="muted">
-    One row per branch, ranked by number of recorders - click a branch to expand its individual DVR/recorder rows.
-    Camera/HDD totals are a best-effort sum of each item's own free-text field (as typed in the branch's CCTV
-    sheet - see <a href="{{ url_for('cctv_edit.index') }}">Manage CCTV</a> to correct one at the source); a "-"
-    means none of that branch's items had a value in a summable format, not that the count is actually zero.
+    One row per branch, ranked by number of recorders - click a branch to expand its month-by-month breakdown
+    (for the selected year above) and its individual current DVR/recorder rows. Camera/HDD totals are a
+    best-effort sum of each item's own free-text field (as typed in the branch's CCTV sheet - see
+    <a href="{{ url_for('cctv_edit.index') }}">Manage CCTV</a> to correct one at the source); a "-" means
+    nothing had a value in a summable format that month, not that the count is actually zero.
   </p>
   {% if branch_tree %}
   <div class="cctv-branch-tree">
@@ -48,7 +61,36 @@
           <span><strong>{{ '%.2f'|format(b.hdd_capacity_total_tb) if b.hdd_capacity_total_tb is not none else '-' }} TB</strong> HDD Capacity</span>
         </span>
       </summary>
-      <div class="table-scroll">
+
+      <h3 style="margin: 0 0.85rem;">By Month ({{ selected_year }})</h3>
+      <div class="table-scroll" style="padding: 0 0.85rem;">
+      <table>
+        <thead>
+          <tr><th>Metric</th>{% for p in month_periods %}<th>{{ p }}</th>{% endfor %}</tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>DVR/Recorder</td>
+            {% for cell in b.month_cells %}<td>{{ cell.recorder_count if cell else '-' }}</td>{% endfor %}
+          </tr>
+          <tr>
+            <td>Cameras</td>
+            {% for cell in b.month_cells %}<td>{{ (cell.camera_total if cell.camera_total is not none else '-') if cell else '-' }}</td>{% endfor %}
+          </tr>
+          <tr>
+            <td>HDD Count</td>
+            {% for cell in b.month_cells %}<td>{{ (cell.hdd_count_total if cell.hdd_count_total is not none else '-') if cell else '-' }}</td>{% endfor %}
+          </tr>
+          <tr>
+            <td>HDD Capacity (TB)</td>
+            {% for cell in b.month_cells %}<td>{{ ('%.2f'|format(cell.hdd_capacity_total_tb) if cell.hdd_capacity_total_tb is not none else '-') if cell else '-' }}</td>{% endfor %}
+          </tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h3 style="margin: 1rem 0.85rem 0;">Current Items</h3>
+      <div class="table-scroll" style="padding: 0 0.85rem 0.75rem;">
       <table>
         <thead>
           <tr><th>Device</th><th>Manufacturer</th><th>Model</th><th>Serial</th><th>Cameras</th><th>HDD Count</th><th>HDD Capacity</th><th>Location</th></tr>

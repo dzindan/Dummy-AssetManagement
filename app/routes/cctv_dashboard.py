@@ -13,6 +13,7 @@ from ..charts import trend_chart_payload
 from ..db import get_connection
 from ..exports import build_workbook, send_workbook
 from ..queries import (
+    get_cctv_items_by_branch_period,
     get_current_branch_breakdown,
     get_current_cctv_count,
     get_current_cctv_items_for_tree,
@@ -69,7 +70,7 @@ def _build_branch_cctv_tree(rows):
     for row in rows:
         branch = by_branch.setdefault(
             row["bkey"],
-            {"branch_no": row["branch_no"], "display_name": row["display_name"], "rows": []},
+            {"bkey": row["bkey"], "branch_no": row["branch_no"], "display_name": row["display_name"], "rows": []},
         )
         branch["rows"].append(row)
 
@@ -83,6 +84,7 @@ def _build_branch_cctv_tree(rows):
         ]
         tree.append(
             {
+                "bkey": branch["bkey"],
                 "branch_no": branch["branch_no"],
                 "display_name": branch["display_name"],
                 "recorder_count": len(rows_for_branch),
@@ -94,6 +96,37 @@ def _build_branch_cctv_tree(rows):
         )
     tree.sort(key=lambda b: b["recorder_count"], reverse=True)
     return tree
+
+
+def _build_branch_month_metrics(rows, month_periods):
+    """Same per-item parsing as _build_branch_cctv_tree, but grouped by
+    (branch, period) instead of just branch - the month-by-month table
+    each branch's tree row expands to, alongside its item-level detail.
+    `month_periods` is the selected year's 12 "YYYY-MM" strings (same list
+    get_branch_month_change_table already produced for this request, so
+    the year selector controls both) - a branch/period with nothing on
+    file at all gets None (rendered "-" across the row) rather than a row
+    of zeros, same reasoning as the tree's own per-branch totals."""
+    by_branch_period: dict[tuple[str, str], list] = {}
+    for row in rows:
+        by_branch_period.setdefault((row["bkey"], row["period"]), []).append(row)
+
+    by_branch: dict[str, list] = {}
+    for (bkey, period), items in by_branch_period.items():
+        cameras = [v for v in (_parse_leading_int(i["camera_count"]) for i in items) if v is not None]
+        hdd_counts = [v for v in (_parse_leading_int(i["hdd_count"]) for i in items) if v is not None]
+        hdd_capacities = [v for v in (_parse_capacity_tb(i["hdd_capacity"]) for i in items) if v is not None]
+        by_branch.setdefault(bkey, {})[period] = {
+            "recorder_count": len(items),
+            "camera_total": sum(cameras) if cameras else None,
+            "hdd_count_total": sum(hdd_counts) if hdd_counts else None,
+            "hdd_capacity_total_tb": sum(hdd_capacities) if hdd_capacities else None,
+        }
+
+    result: dict[str, list] = {}
+    for bkey, by_period in by_branch.items():
+        result[bkey] = [by_period.get(period) for period in month_periods]
+    return result
 
 
 @bp.route("/")
@@ -114,6 +147,12 @@ def index():
 
         year_comparison = get_year_comparison_table(conn, table=TABLE, years_kinds=YEARS_KINDS)
         branch_tree = _build_branch_cctv_tree(get_current_cctv_items_for_tree(conn))
+
+        branch_month_metrics = _build_branch_month_metrics(
+            get_cctv_items_by_branch_period(conn), month_periods
+        )
+        for b in branch_tree:
+            b["month_cells"] = branch_month_metrics.get(b["bkey"], [None] * len(month_periods))
     finally:
         conn.close()
 
