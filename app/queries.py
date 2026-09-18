@@ -133,19 +133,26 @@ def get_current_asset_count(conn) -> int:
     return conn.execute(sql).fetchone()["c"]
 
 
-def get_current_branch_breakdown(conn):
+def get_current_cctv_count(conn) -> int:
+    sql = f"SELECT COUNT(*) AS c FROM ({CURRENT_CCTV_CTE})"
+    return conn.execute(sql).fetchone()["c"]
+
+
+def get_current_branch_breakdown(conn, table: str = "asset_items"):
     """One row per branch (resolved branch_no when known, otherwise grouped
     by its raw branch_dept text - see CURRENT_ASSETS_CTE), with a
     dashboard-friendly display name and count. `branch_no` is empty for
     unresolved buckets, which the dashboard renders as plain text instead of
-    a link to the branch detail page."""
+    a link to the branch detail page. `table="cctv_items"` backs the CCTV
+    Dashboard's equivalent breakdown."""
+    cte = CURRENT_ASSETS_CTE if table == "asset_items" else CURRENT_CCTV_CTE
     sql = f"""
     SELECT
         bk.bkey AS bkey,
         MAX(bk.branch_no) AS branch_no,
         COALESCE(NULLIF(MAX(b.eng_name), ''), NULLIF(MAX(bk.branch_dept), ''), 'Unknown') AS display_name,
         COUNT(*) AS c
-    FROM ({CURRENT_ASSETS_CTE}) bk
+    FROM ({cte}) bk
     LEFT JOIN branches b ON b.branch_no = bk.branch_no
     GROUP BY bk.bkey
     ORDER BY c DESC

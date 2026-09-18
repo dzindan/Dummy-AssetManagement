@@ -96,6 +96,7 @@ def create_app() -> Flask:
     from .routes.branch_detail import bp as branch_detail_bp
     from .routes.asset_edit import bp as asset_edit_bp
     from .routes.cctv_edit import bp as cctv_edit_bp
+    from .routes.cctv_dashboard import bp as cctv_dashboard_bp
     from .routes.user_history import bp as user_history_bp
     from .routes.network_check import bp as network_check_bp
     from .routes.user_admin import bp as user_admin_bp
@@ -111,6 +112,7 @@ def create_app() -> Flask:
     app.register_blueprint(branch_detail_bp)
     app.register_blueprint(asset_edit_bp)
     app.register_blueprint(cctv_edit_bp)
+    app.register_blueprint(cctv_dashboard_bp)
     app.register_blueprint(user_history_bp)
     app.register_blueprint(network_check_bp)
     app.register_blueprint(user_admin_bp)

@@ -19,10 +19,11 @@ from .queries import current_assets_cte
 # (see app/charts.py) so a chart never needs a 9th generated hue.
 MAX_SERIES = 7
 
-BRANCH_TREND_SQL = """
+def _branch_trend_sql(table: str) -> str:
+    return f"""
 WITH rows AS (
     SELECT ai.batch_id, ib.period AS period, ai.device_name AS item
-    FROM asset_items ai
+    FROM {table} ai
     JOIN import_batches ib ON ai.batch_id = ib.id
     WHERE ai.branch_no = ? AND ib.period IS NOT NULL AND ib.period != ''
 ),
@@ -36,10 +37,12 @@ GROUP BY r.period, r.item
 ORDER BY r.period, r.item
 """
 
-ALL_BRANCHES_TREND_SQL = """
+
+def _all_branches_trend_sql(table: str) -> str:
+    return f"""
 WITH rows AS (
     SELECT ai.batch_id, ai.branch_no AS branch_no, ib.period AS period, ai.device_name AS item
-    FROM asset_items ai
+    FROM {table} ai
     JOIN import_batches ib ON ai.batch_id = ib.id
     WHERE ib.period IS NOT NULL AND ib.period != ''
 ),
@@ -83,13 +86,17 @@ def _build_trend(rows) -> tuple[list[str], list[str], dict[str, dict[str, int]]]
     return periods, items, matrix
 
 
-def get_branch_item_trend(conn, branch_no: str):
-    rows = conn.execute(BRANCH_TREND_SQL, (branch_no,)).fetchall()
+def get_branch_item_trend(conn, branch_no: str, table: str = "asset_items"):
+    rows = conn.execute(_branch_trend_sql(table), (branch_no,)).fetchall()
     return _build_trend(rows)
 
 
-def get_all_branches_item_trend(conn):
-    rows = conn.execute(ALL_BRANCHES_TREND_SQL).fetchall()
+def get_all_branches_item_trend(conn, table: str = "asset_items"):
+    """`table="cctv_items"` backs the CCTV Dashboard's equivalent trend
+    chart - same per-(branch, period) latest-batch logic, just over CCTV
+    gear (DVR/recorder/monitor `device_name`) instead of person-assigned
+    equipment."""
+    rows = conn.execute(_all_branches_trend_sql(table)).fetchall()
     return _build_trend(rows)
 
 
@@ -149,14 +156,26 @@ def _walk_period_changes(rows: list[tuple[str, str, str]]) -> dict[str, dict]:
     return result
 
 
-def get_available_report_years(conn) -> list[str]:
-    """Distinct calendar years ("YYYY") with at least one asset-report/
-    baseline import on file, newest first - backs the Dashboard's and
-    Branch Detail's year selectors and the year comparison table below."""
-    rows = conn.execute(
-        "SELECT DISTINCT substr(period, 1, 4) AS y FROM import_batches "
-        "WHERE period IS NOT NULL AND period != '' ORDER BY y DESC"
-    ).fetchall()
+def get_available_report_years(conn, kinds: tuple[str, ...] | None = None) -> list[str]:
+    """Distinct calendar years ("YYYY") with at least one import on file,
+    newest first - backs the Dashboard's and Branch Detail's year selectors
+    and the year comparison table below. `kinds` narrows this to only
+    import_batches of those kinds when given (e.g. `("cctv_report",)` for
+    the CCTV Dashboard's equivalent selector, so it only ever offers years
+    CCTV data actually exists for) - left as-is (any kind) by default so
+    every existing caller keeps its exact prior behavior."""
+    if kinds:
+        placeholders = ",".join("?" * len(kinds))
+        rows = conn.execute(
+            f"SELECT DISTINCT substr(period, 1, 4) AS y FROM import_batches "
+            f"WHERE period IS NOT NULL AND period != '' AND kind IN ({placeholders}) ORDER BY y DESC",
+            kinds,
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT DISTINCT substr(period, 1, 4) AS y FROM import_batches "
+            "WHERE period IS NOT NULL AND period != '' ORDER BY y DESC"
+        ).fetchall()
     return [r["y"] for r in rows]
 
 
@@ -221,10 +240,11 @@ def _column_totals_and_deltas(visible_periods: list[str], table: list[dict]) -> 
     return column_totals, column_added, column_removed
 
 
-BRANCH_MONTH_CHANGES_SQL = """
+def _branch_month_changes_sql(table: str) -> str:
+    return f"""
 WITH rows AS (
     SELECT ai.batch_id, ai.branch_no AS branch_no, ib.period AS period, ai.asset_key AS asset_key
-    FROM asset_items ai
+    FROM {table} ai
     JOIN import_batches ib ON ai.batch_id = ib.id
     WHERE ib.period IS NOT NULL AND ib.period != ''
 ),
@@ -237,15 +257,16 @@ JOIN latest l ON r.branch_no = l.branch_no AND r.period = l.period AND r.batch_i
 """
 
 
-def get_branch_month_change_table(conn, year: str):
+def get_branch_month_change_table(conn, year: str, table: str = "asset_items"):
     """Dashboard summary table: one row per branch, showing its asset count
     for each of the 12 months of `year`, sorted by current (latest-in-year)
     count. Every column carries its own added/removed indicator (diffed
     against whatever period actually precedes it, which may fall in the
     prior year for January) - see _walk_period_changes for why that's
     computed from actual asset identity rather than a naive count
-    difference."""
-    rows = conn.execute(BRANCH_MONTH_CHANGES_SQL).fetchall()
+    difference. `table="cctv_items"` backs the CCTV Dashboard's equivalent
+    table."""
+    rows = conn.execute(_branch_month_changes_sql(table)).fetchall()
     by_group = _walk_period_changes((r["grp"] or "", r["period"], r["asset_key"]) for r in rows)
     visible_periods, prepared = _prepare_year_columns(by_group, year)
 
@@ -275,33 +296,37 @@ def get_branch_month_change_table(conn, year: str):
 # past "as of" snapshot can't mean anything for one of those) - see
 # current_assets_cte()'s docstring for why that's not the unbounded
 # version's own default behavior too.
-YEAR_SNAPSHOT_SQL = (
-    "SELECT COUNT(*) AS c FROM ("
-    + current_assets_cte("WHERE ib.period IS NOT NULL AND ib.period != '' AND ib.period <= ?")
-    + ")"
-)
+def _year_snapshot_sql(table: str) -> str:
+    return (
+        "SELECT COUNT(*) AS c FROM ("
+        + current_assets_cte("WHERE ib.period IS NOT NULL AND ib.period != '' AND ib.period <= ?", table=table)
+        + ")"
+    )
 
 
-def get_year_comparison_table(conn) -> list[dict]:
+def get_year_comparison_table(conn, table: str = "asset_items", years_kinds: tuple[str, ...] | None = None) -> list[dict]:
     """Dashboard year-comparison panel: one row per calendar year with any
     reporting data, oldest first, showing that year's end-of-year asset
     snapshot (same per-branch "latest period up to and including this
     year's December" logic as CURRENT_ASSETS_CTE in queries.py, just bounded
     by a "<= YYYY-12" cutoff instead of unbounded) and its change versus the
     year immediately before it. `change` is None for the first year on
-    record, since there's nothing earlier to compare against."""
-    years = get_available_report_years(conn)
+    record, since there's nothing earlier to compare against. `table`/
+    `years_kinds` together back the CCTV Dashboard's equivalent panel
+    (`table="cctv_items", years_kinds=("cctv_report",)`)."""
+    years = get_available_report_years(conn, kinds=years_kinds)
     years.sort()  # oldest first, opposite of get_available_report_years' newest-first default
 
-    table = []
+    sql = _year_snapshot_sql(table)
+    table_rows = []
     prev_count: int | None = None
     for year in years:
         cutoff = f"{year}-12"
-        count = conn.execute(YEAR_SNAPSHOT_SQL, (cutoff,)).fetchone()["c"]
+        count = conn.execute(sql, (cutoff,)).fetchone()["c"]
         change = None if prev_count is None else count - prev_count
-        table.append({"year": year, "count": count, "change": change})
+        table_rows.append({"year": year, "count": count, "change": change})
         prev_count = count
-    return table
+    return table_rows
 
 
 def get_branch_device_year_table(conn, branch_no: str, year: str, top_items: list[str]):
