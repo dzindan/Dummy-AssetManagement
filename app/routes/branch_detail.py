@@ -6,11 +6,12 @@ from ..analytics import (
     get_branch_item_trend,
     resolve_report_year,
 )
+from ..cctv_metrics import build_month_metrics_by_branch, summarize_cctv_rows
 from ..charts import trend_chart_payload
 from ..db import get_connection
-from ..exports import build_asset_rows_workbook, dated_download_name, send_workbook
+from ..exports import build_asset_rows_workbook, build_cctv_rows_workbook, dated_download_name, send_workbook
 from ..paths import safe_filename
-from ..queries import get_branch, get_current_assets
+from ..queries import get_branch, get_cctv_items_by_branch_period, get_current_assets, search_cctv
 
 bp = Blueprint("branch_detail", __name__, url_prefix="/branch")
 
@@ -70,10 +71,25 @@ def detail(branch_no):
         trend_periods, trend_rows, trend_column_totals, trend_column_added, trend_column_removed = (
             get_branch_device_year_table(conn, branch_no, selected_year, items)
         )
+
+        # CCTV section - same idea as the asset one above, over cctv_items
+        # instead: current items (Manage CCTV's own row shape), a device-
+        # type trend chart (full history), and a By Month breakdown of the
+        # 4 headline metrics (recorder count, parsed camera/HDD totals)
+        # for the same selected_year the asset table above uses, so one
+        # year selector drives both instead of two independent ones.
+        cctv_items, _cctv_total = search_cctv(conn, {"branch_no": [branch_no]}, per_page=None)
+        cctv_summary = summarize_cctv_rows(cctv_items)
+        cctv_periods, _cctv_items, cctv_matrix = get_branch_item_trend(conn, branch_no, table="cctv_items")
+        cctv_month_metrics = build_month_metrics_by_branch(
+            get_cctv_items_by_branch_period(conn, branch_no=branch_no), trend_periods
+        )
+        cctv_month_cells = cctv_month_metrics.get(branch_no, [None] * len(trend_periods))
     finally:
         conn.close()
 
     chart_data = trend_chart_payload(periods, matrix)
+    cctv_chart_data = trend_chart_payload(cctv_periods, cctv_matrix)
     device_status_breakdown = _device_status_breakdown(assets)
 
     return render_template(
@@ -90,6 +106,10 @@ def detail(branch_no):
         trend_column_totals=trend_column_totals,
         trend_column_added=trend_column_added,
         trend_column_removed=trend_column_removed,
+        cctv_items=cctv_items,
+        cctv_summary=cctv_summary,
+        cctv_chart_data=cctv_chart_data,
+        cctv_month_cells=cctv_month_cells,
     )
 
 
@@ -107,3 +127,19 @@ def export(branch_no):
     safe_name = safe_filename(branch["eng_name"] or branch_no, fallback=branch_no)
     wb = build_asset_rows_workbook(assets, sheet_title="Current Assets")
     return send_workbook(wb, dated_download_name(f"{safe_name} - assets"))
+
+
+@bp.route("/<branch_no>/export-cctv")
+def export_cctv(branch_no):
+    conn = get_connection()
+    try:
+        branch = get_branch(conn, branch_no)
+        if not branch:
+            abort(404, description="Branch not found.")
+        cctv_items, _total = search_cctv(conn, {"branch_no": [branch_no]}, per_page=None)
+    finally:
+        conn.close()
+
+    safe_name = safe_filename(branch["eng_name"] or branch_no, fallback=branch_no)
+    wb = build_cctv_rows_workbook(cctv_items, sheet_title="Current CCTV")
+    return send_workbook(wb, dated_download_name(f"{safe_name} - cctv"))

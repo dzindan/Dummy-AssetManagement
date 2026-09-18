@@ -168,7 +168,7 @@ def get_current_cctv_items_for_tree(conn):
     return conn.execute(sql).fetchall()
 
 
-def get_cctv_items_by_branch_period(conn):
+def get_cctv_items_by_branch_period(conn, branch_no: str | None = None):
     """Every CCTV item from each branch's most-recent batch *for each
     reporting period on file* (not just the single latest one - see
     CURRENT_CCTV_CTE's docstring on why "latest batch per (branch, period)"
@@ -177,7 +177,9 @@ def get_cctv_items_by_branch_period(conn):
     breakdown - the same idea as analytics.get_branch_month_change_table,
     but split out per item instead of pre-summed, since the route needs to
     compute several different per-period totals (recorder count, parsed
-    camera/HDD sums) from the same row set rather than just one count."""
+    camera/HDD sums) from the same row set rather than just one count.
+    `branch_no` narrows this to one branch - Branch Detail's own CCTV
+    section."""
     sql = """
     WITH rows AS (
         SELECT
@@ -199,7 +201,11 @@ def get_cctv_items_by_branch_period(conn):
     FROM rows r
     JOIN latest l ON r.bkey = l.bkey AND r.period = l.period AND r.batch_id = l.batch_id
     """
-    rows = conn.execute(sql).fetchall()
+    params: tuple = ()
+    if branch_no:
+        sql += " WHERE r.branch_no = ?"
+        params = (branch_no,)
+    rows = conn.execute(sql, params).fetchall()
     names = {b["branch_no"]: b["eng_name"] for b in conn.execute("SELECT branch_no, eng_name FROM branches")}
     result = []
     for r in rows:
