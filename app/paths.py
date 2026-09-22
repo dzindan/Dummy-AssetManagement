@@ -9,6 +9,35 @@ def is_frozen() -> bool:
     return getattr(sys, "frozen", False)
 
 
+def read_json(path: str) -> dict:
+    """Tolerant JSON read for the small config files this module hands out
+    paths for (data_location.json, settings.json, local_settings.json) -
+    a missing or corrupt file is treated as "nothing set yet" rather than
+    raising, matching how _configured_data_dir() already behaves."""
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f) or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def write_json_atomic(path: str, data: dict) -> None:
+    """Write via a temp file + os.replace() rather than an in-place open("w")
+    - this app is used by several people on the LAN at once (see
+    get_connection()'s docstring), and a plain in-place write is not safe
+    against two near-simultaneous writers or an interrupted write leaving a
+    truncated file. SQLite gave the old settings table this durability for
+    free; a JSON file needs it done explicitly."""
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.replace(tmp_path, path)
+
+
 def is_network_path(path: str) -> bool:
     """True for a UNC path (\\\\server\\share\\...) or a drive letter mapped to
     one (`net use Z: \\\\server\\share`, or Explorer's "Map network drive").
@@ -76,14 +105,7 @@ def _location_pointer_path() -> str:
 def _configured_data_dir() -> str:
     """The custom path stored via Settings > Data Storage Location, if any -
     "" if none has ever been set (or the pointer file itself can't be read)."""
-    pointer = _location_pointer_path()
-    if not os.path.exists(pointer):
-        return ""
-    try:
-        with open(pointer, "r", encoding="utf-8") as f:
-            return (json.load(f) or {}).get("data_dir", "").strip()
-    except (OSError, ValueError):
-        return ""
+    return read_json(_location_pointer_path()).get("data_dir", "").strip()
 
 
 def _ensure_data_subdirs(base: str) -> None:
@@ -136,12 +158,37 @@ def get_app_data_dir() -> str:
 
 
 def set_app_data_dir(new_dir: str) -> None:
-    with open(_location_pointer_path(), "w", encoding="utf-8") as f:
-        json.dump({"data_dir": new_dir}, f)
+    write_json_atomic(_location_pointer_path(), {"data_dir": new_dir})
 
 
-def get_db_path() -> str:
-    return os.path.join(get_app_data_dir(), "app.db")
+def get_data_db_path() -> str:
+    return os.path.join(get_app_data_dir(), "data.db")
+
+
+def get_logs_db_path() -> str:
+    return os.path.join(get_app_data_dir(), "logs.db")
+
+
+def get_settings_path() -> str:
+    """Portable settings (ict_rep_name/id, cucm_*) - travels with the data
+    dir like data.db/logs.db, since these are safe/wanted on a new machine.
+    See get_local_settings_path() for the machine-local ones that aren't."""
+    return os.path.join(get_app_data_dir(), "settings.json")
+
+
+def get_local_settings_path() -> str:
+    """Machine-local settings (secret_key, asset_reports_folder,
+    id_files_folder) - deliberately kept at the fixed default location,
+    never the (possibly redirected/custom) data dir, for the same reason
+    _location_pointer_path() already is: it must be structurally impossible
+    to accidentally copy along with a data folder headed to another machine.
+    A new machine simply finds none of these set and starts fresh (a new
+    secret_key generates itself; the two folder paths get re-entered once in
+    Settings) rather than inheriting values that would be wrong or unsafe
+    there."""
+    default_dir = get_default_app_data_dir()
+    os.makedirs(default_dir, exist_ok=True)
+    return os.path.join(default_dir, "local_settings.json")
 
 
 def get_handovers_dir() -> str:

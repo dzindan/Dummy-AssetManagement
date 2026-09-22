@@ -901,8 +901,16 @@ def open_data_folder():
 # --- Data storage location ---------------------------------------------
 
 # Moved as a unit so nothing already imported is lost when redirecting to a
-# new folder; -wal/-shm are SQLite's WAL-mode sidecar files for app.db.
-_DATA_ITEMS_TO_MOVE = ["app.db", "app.db-wal", "app.db-shm", "handovers", "exports", "uploads"]
+# new folder; -wal/-shm are SQLite's WAL-mode sidecar files. settings.json
+# (portable settings) moves with the rest - local_settings.json deliberately
+# does NOT appear here, since it always stays at the fixed default location
+# regardless of where the data dir is redirected to (see
+# paths.get_local_settings_path()'s docstring).
+_DATA_ITEMS_TO_MOVE = [
+    "data.db", "data.db-wal", "data.db-shm",
+    "logs.db", "logs.db-wal", "logs.db-shm",
+    "settings.json", "handovers", "exports", "uploads",
+]
 
 
 def _move_with_retry(src: str, dest: str, attempts: int = 5, delay: float = 0.3) -> None:
@@ -1072,7 +1080,7 @@ def reset_imported_data():
             conn.execute("DELETE FROM asset_items")
             conn.execute("DELETE FROM cctv_items")
             conn.execute("DELETE FROM import_batches")
-            conn.execute("DELETE FROM network_check_log")
+            conn.execute("DELETE FROM logsdb.network_check_log")
             for row in conn.execute("SELECT file_path FROM diff_reports").fetchall():
                 if row["file_path"] and os.path.exists(row["file_path"]):
                     try:
@@ -1086,7 +1094,7 @@ def reset_imported_data():
             conn.execute("DELETE FROM users")
 
         if "import_log" in selected:
-            conn.execute("DELETE FROM import_log")
+            conn.execute("DELETE FROM logsdb.import_log")
 
         if "unmapped" in selected:
             conn.execute("DELETE FROM device_unmapped")
@@ -1144,7 +1152,7 @@ ACTIVITY_LOG_EXPORT_COLUMNS = [
 def _activity_log_rows(category: str):
     conn = get_connection()
     try:
-        sql = "SELECT * FROM activity_log"
+        sql = "SELECT * FROM logsdb.activity_log"
         params = []
         if category:
             sql += " WHERE category = ?"

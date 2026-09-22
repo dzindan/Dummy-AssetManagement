@@ -48,7 +48,7 @@ def create_app() -> Flask:
     # Jinja filter to run).
     app.jinja_env.filters["usage_duration"] = usage_duration_years
 
-    # get_app_data_dir_status() (used by init_db -> get_connection -> get_db_path)
+    # get_app_data_dir_status() (used by init_db -> get_connection)
     # already falls back to the default location on its own if a configured
     # custom path (network share, external drive...) is unreachable, so this
     # almost never fails anymore. Still wrapped, rather than letting the whole
@@ -76,7 +76,7 @@ def create_app() -> Flask:
 
         return app
 
-    # Persisted in the `settings` table (generated once, reused after) rather
+    # Persisted in local_settings.json (generated once, reused after) rather
     # than a fresh os.urandom() per process start - login sessions are signed
     # with this key, so a key that changes on every restart would silently
     # log everyone out each time the app relaunches.

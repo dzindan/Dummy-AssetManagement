@@ -6,7 +6,7 @@ from ..analytics import (
     get_branch_item_trend,
     resolve_report_year,
 )
-from ..cctv_metrics import build_month_metrics_by_branch, summarize_cctv_rows
+from ..cctv_metrics import build_month_metrics_by_branch, summarize_by_period, summarize_cctv_rows
 from ..charts import trend_chart_payload
 from ..db import get_connection
 from ..exports import build_asset_rows_workbook, build_cctv_rows_workbook, dated_download_name, send_workbook
@@ -82,14 +82,21 @@ def detail(branch_no):
         cctv_items, _cctv_total = search_cctv(conn, {"branch_no": [branch_no]}, per_page=None)
         cctv_summary = summarize_cctv_rows(cctv_items)
         cctv_periods, _cctv_items, cctv_matrix = get_branch_item_trend(conn, branch_no, table="cctv_items")
-        cctv_month_metrics = build_month_metrics_by_branch(
-            get_cctv_items_by_branch_period(conn, branch_no=branch_no), trend_periods
-        )
+        cctv_period_rows = get_cctv_items_by_branch_period(conn, branch_no=branch_no)
+        cctv_month_metrics = build_month_metrics_by_branch(cctv_period_rows, trend_periods)
         cctv_month_cells = cctv_month_metrics.get(branch_no, [None] * len(trend_periods))
+        # Same "Cameras" line added to the CCTV Dashboard's all-branches
+        # chart, scoped to this one branch - a best-effort sum of this
+        # branch's own recorders' free-text camera count field, not a
+        # device count like the other series.
+        camera_totals_by_period = summarize_by_period(cctv_period_rows)
     finally:
         conn.close()
 
     chart_data = trend_chart_payload(periods, matrix)
+    cctv_matrix["Cameras"] = {
+        period: (data["camera_total"] or 0) for period, data in camera_totals_by_period.items()
+    }
     cctv_chart_data = trend_chart_payload(cctv_periods, cctv_matrix)
     device_status_breakdown = _device_status_breakdown(assets)
     # Same shape, same helper - a cctv_items row also has device_name/status.

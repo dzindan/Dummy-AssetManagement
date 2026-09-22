@@ -102,81 +102,6 @@
 </div>
 
 <div class="panel">
-  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
-    <h2 style="margin:0;">CCTV by Branch (by month)</h2>
-    <div style="display:flex; align-items:center; gap:0.5rem;">
-      {% if available_years %}
-      <form method="get" action="{{ url_for('cctv_dashboard.index') }}" style="display:flex; align-items:center; gap:0.35rem;">
-        <label for="cctv-dash-year" class="muted" style="font-size:0.85rem;">Report year</label>
-        <select id="cctv-dash-year" name="year" onchange="this.form.submit()">
-          {% for y in available_years %}
-          <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
-          {% endfor %}
-        </select>
-      </form>
-      {% endif %}
-      <a class="btn secondary" href="{{ url_for('cctv_dashboard.export', year=selected_year) }}">Export to Excel</a>
-    </div>
-  </div>
-  {% if month_table %}
-    <p class="muted">
-      Each cell is that branch's CCTV item count for the month (its most recent CCTV-sheet import that month), for
-      the selected report year. Every month also shows its change vs. the month before it -
-      <span style="color:var(--ok);">+added</span> / <span style="color:var(--danger);">-removed</span>, matched by
-      actual item identity (not just a count difference).
-    </p>
-    <div class="table-scroll">
-    <table>
-      <thead>
-        <tr>
-          <th>Branch / Dept</th>
-          {% for p in month_periods %}<th>{{ p }}</th>{% endfor %}
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in month_table %}
-        <tr>
-          <td>{{ row.label }}</td>
-          {% for cell in row.cells %}
-          <td>
-            {% if cell %}
-              {{ cell.count }}
-              {% if cell.added is not none %}
-              <br><span style="font-size:0.75rem;">
-                {% if cell.added %}<span style="color:var(--ok);">+{{ cell.added }}</span>{% endif %}
-                {% if cell.added and cell.removed %} / {% endif %}
-                {% if cell.removed %}<span style="color:var(--danger);">-{{ cell.removed }}</span>{% endif %}
-                {% if not cell.added and not cell.removed %}<span class="muted">no change</span>{% endif %}
-              </span>
-              {% endif %}
-            {% else %}-{% endif %}
-          </td>
-          {% endfor %}
-        </tr>
-        {% endfor %}
-      </tbody>
-      <tfoot>
-        <tr>
-          <td><strong>Total</strong></td>
-          {% for c in month_column_totals %}
-          <td>
-            <strong>{{ c }}</strong>
-            <br><span style="font-size:0.75rem;">
-              <span style="color:var(--ok);">+{{ month_column_added[loop.index0] }}</span> /
-              <span style="color:var(--danger);">-{{ month_column_removed[loop.index0] }}</span>
-            </span>
-          </td>
-          {% endfor %}
-        </tr>
-      </tfoot>
-    </table>
-    </div>
-  {% else %}
-    <p class="muted">No CCTV reports imported for {{ selected_year }}. Go to <a href="{{ url_for('import_data.index') }}">Import Data</a> to get started.</p>
-  {% endif %}
-</div>
-
-<div class="panel">
   <h2>Year Comparison</h2>
   {% if year_comparison %}
     <p class="muted">
@@ -216,8 +141,9 @@
 <div class="panel">
   <h2>Item Count Trend - All Branches (by month)</h2>
   <p class="muted">Each line is a CCTV device type (DVR/recorder, monitor, ...), summed across every branch; counts
-    come from each branch's most recent CCTV-sheet import for that month. Click a chip to isolate or hide a line;
-    hover the chart for exact monthly counts.</p>
+    come from each branch's most recent CCTV-sheet import for that month. "Cameras" is different from the others -
+    a best-effort sum of every recorder's own free-text camera count field, not a device count. Click a chip to
+    isolate or hide a line; hover the chart for exact monthly counts.</p>
   <div id="cctvAllBranchesTrendChart"></div>
 </div>
 

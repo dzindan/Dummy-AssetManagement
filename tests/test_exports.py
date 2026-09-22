@@ -58,11 +58,11 @@ def _seed_common(conn):
         "VALUES (datetime('now'), '2026-01-01', 'U1', 'A', '001', 'PERMANENT', 'test', 'A')"
     )
     conn.execute(
-        "INSERT INTO network_check_log (applied_at, branch_no, ip, asset_id, field, old_value, new_value) "
+        "INSERT INTO logsdb.network_check_log (applied_at, branch_no, ip, asset_id, field, old_value, new_value) "
         "VALUES (datetime('now'), '001', '10.0.0.1', 1, 'serial', 'OLD', 'NEW')"
     )
     conn.execute(
-        "INSERT INTO import_log (imported_at, kind, source_file, rows_processed, result) "
+        "INSERT INTO logsdb.import_log (imported_at, kind, source_file, rows_processed, result) "
         "VALUES (datetime('now'), 'asset_report', 'test.xlsx', 1, 'OK')"
     )
 

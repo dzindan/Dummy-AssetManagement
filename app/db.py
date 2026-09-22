@@ -1,8 +1,27 @@
 import os
+import shutil
 import sqlite3
 
-from .paths import get_app_data_dir, is_network_path
+from .paths import (
+    get_app_data_dir,
+    get_data_db_path,
+    get_local_settings_path,
+    get_logs_db_path,
+    get_settings_path,
+    is_network_path,
+    read_json,
+    write_json_atomic,
+)
 from .text_utils import clean_ip, normalize_handover_date, normalize_user_id, strip_bank_prefix
+
+# Machine-local settings can never live in data.db (that's exactly what gets
+# copied to a new machine) or in settings.json (portable, meant to travel) -
+# see get_local_settings_path()'s docstring. secret_key must never be copied
+# between machines (it would let one machine's session cookies be replayed
+# on another); the two folder paths are literal local filesystem paths,
+# meaningless on another machine. Every other setting key defaults to
+# portable, which is the right default for anything added here later.
+LOCAL_SETTING_KEYS = frozenset({"secret_key", "asset_reports_folder", "id_files_folder"})
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS branches (
@@ -132,11 +151,6 @@ CREATE TABLE IF NOT EXISTS handover_records (
 
 CREATE INDEX IF NOT EXISTS idx_handover_user ON handover_records (user_no);
 
-CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT
-);
-
 CREATE TABLE IF NOT EXISTS branch_aliases (
     alias TEXT PRIMARY KEY,
     branch_no TEXT NOT NULL
@@ -210,53 +224,6 @@ CREATE TABLE IF NOT EXISTS diff_reports (
     label TEXT
 );
 
-CREATE TABLE IF NOT EXISTS network_check_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    applied_at TEXT NOT NULL,
-    branch_no TEXT,
-    ip TEXT,
-    asset_id INTEGER,
-    field TEXT,
-    old_value TEXT,
-    new_value TEXT
-);
-
-CREATE TABLE IF NOT EXISTS import_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    imported_at TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    source_file TEXT,
-    period TEXT,
-    rows_processed INTEGER,
-    result TEXT,
-    imported_by TEXT
-);
-
--- General-purpose audit trail for every hand-edit that doesn't already have
--- its own dedicated log table (imports have import_log, Network Check has
--- network_check_log) - Manage Assets edits/deletes, Settings/Mapping
--- changes, and Users & Roles changes. `category` groups entries for the
--- Activity Log page's filter (asset/mapping/settings/user_admin);
--- field/old_value/new_value are populated for a field-level edit and left
--- blank for a create/delete/action-only entry, where `target` alone
--- (plus `action`) already says what happened.
-CREATE TABLE IF NOT EXISTS activity_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    logged_at TEXT NOT NULL,
-    performed_by TEXT,
-    category TEXT NOT NULL,
-    action TEXT NOT NULL,
-    target TEXT,
-    field TEXT,
-    old_value TEXT,
-    new_value TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_activity_log_logged_at ON activity_log (logged_at);
-CREATE INDEX IF NOT EXISTS idx_activity_log_category ON activity_log (category);
-
-CREATE INDEX IF NOT EXISTS idx_import_log_imported_at ON import_log (imported_at);
-
 -- Login/permissions. Deliberately named `accounts`/`roles`, not `users` -
 -- `users` above is bank-staff domain data imported from IDFromAither
 -- (PK user_no), unrelated to who can log into this tool.
@@ -293,6 +260,61 @@ CREATE TABLE IF NOT EXISTS accounts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_accounts_role ON accounts (role_id);
+"""
+
+# Audit-trail tables, split into their own attached database (logsdb, see
+# get_connection()) so they can be copied to a new machine independently of
+# the business data in the main file (or left behind entirely). Every
+# statement is qualified `logsdb.` - required for CREATE TABLE/INDEX (there's
+# no "current database" to default to the way plain queries default to
+# `main`), and kept qualified on purpose everywhere else too, for clarity.
+LOGS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS logsdb.network_check_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    applied_at TEXT NOT NULL,
+    branch_no TEXT,
+    ip TEXT,
+    asset_id INTEGER,
+    field TEXT,
+    old_value TEXT,
+    new_value TEXT
+);
+
+CREATE TABLE IF NOT EXISTS logsdb.import_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    imported_at TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    source_file TEXT,
+    period TEXT,
+    rows_processed INTEGER,
+    result TEXT,
+    imported_by TEXT
+);
+
+-- General-purpose audit trail for every hand-edit that doesn't already have
+-- its own dedicated log table (imports have import_log, Network Check has
+-- network_check_log) - Manage Assets edits/deletes, Settings/Mapping
+-- changes, and Users & Roles changes. `category` groups entries for the
+-- Activity Log page's filter (asset/mapping/settings/user_admin);
+-- field/old_value/new_value are populated for a field-level edit and left
+-- blank for a create/delete/action-only entry, where `target` alone
+-- (plus `action`) already says what happened.
+CREATE TABLE IF NOT EXISTS logsdb.activity_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    logged_at TEXT NOT NULL,
+    performed_by TEXT,
+    category TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target TEXT,
+    field TEXT,
+    old_value TEXT,
+    new_value TEXT
+);
+
+CREATE INDEX IF NOT EXISTS logsdb.idx_activity_log_logged_at ON activity_log (logged_at);
+CREATE INDEX IF NOT EXISTS logsdb.idx_activity_log_category ON activity_log (category);
+
+CREATE INDEX IF NOT EXISTS logsdb.idx_import_log_imported_at ON import_log (imported_at);
 """
 
 # Single source of truth for what a role can be granted - `view` isn't
@@ -480,14 +502,112 @@ DEFAULT_MODEL_ALIASES = {
 }
 
 
+def _migrate_legacy_single_file_db(data_dir: str) -> None:
+    """One-time split of a pre-existing single `app.db` (business data +
+    settings table + log tables all together) into the current data.db/
+    logs.db/settings.json/local_settings.json layout - see LOGS_SCHEMA's and
+    get_connection()'s comments above for why the split exists.
+
+    Gated on file existence (old app.db present, new data.db absent) rather
+    than a schema-version flag, matching every other one-time fixup in this
+    file (e.g. _renormalize_handover_dates below) - the difference here is
+    this one only needs to run once ever (subsequent boots see data.db
+    already exists and return immediately), not on every boot.
+
+    All the risky work happens on `.migrating` temp files; the original
+    app.db is never touched until every step below has succeeded and
+    committed, and even then it's renamed aside (app.db.pre-split-backup),
+    never deleted. If this is interrupted at any point before the final
+    renames, the next launch finds app.db untouched and new data.db still
+    absent, and retries the whole thing from scratch - so a crash mid-split
+    can never leave a half-migrated data.db that this function would
+    mistake for "already done" and skip.
+    """
+    old_path = os.path.join(data_dir, "app.db")
+    new_data_path = get_data_db_path()
+    if not os.path.exists(old_path) or os.path.exists(new_data_path):
+        return
+
+    data_tmp = new_data_path + ".migrating"
+    logs_tmp = get_logs_db_path() + ".migrating"
+    settings_tmp = get_settings_path() + ".migrating"
+    local_settings_tmp = get_local_settings_path() + ".migrating"
+    for tmp in (data_tmp, logs_tmp, settings_tmp, local_settings_tmp):
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+    try:
+        # Checkpoint first: a plain file copy of app.db alone, without also
+        # copying whatever's still only sitting in app.db-wal, could
+        # silently drop the most recently committed rows.
+        old_conn = sqlite3.connect(old_path)
+        try:
+            old_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        finally:
+            old_conn.close()
+
+        shutil.copy2(old_path, data_tmp)
+
+        conn = sqlite3.connect(data_tmp)
+        try:
+            conn.execute("ATTACH DATABASE ? AS logsdb", (logs_tmp,))
+            conn.executescript(LOGS_SCHEMA)
+
+            settings_rows = conn.execute("SELECT key, value FROM settings").fetchall()
+            portable_settings = {}
+            local_settings = {}
+            for key, value in settings_rows:
+                (local_settings if key in LOCAL_SETTING_KEYS else portable_settings)[key] = value
+
+            for table in ("network_check_log", "import_log", "activity_log"):
+                conn.execute(f"INSERT INTO logsdb.{table} SELECT * FROM {table}")
+                conn.execute(f"DROP TABLE {table}")
+            conn.execute("DROP TABLE settings")
+            conn.commit()
+        finally:
+            conn.close()
+
+        write_json_atomic(settings_tmp, portable_settings)
+        write_json_atomic(local_settings_tmp, local_settings)
+
+        # Finalize: only now does anything touch the real filenames.
+        os.replace(data_tmp, new_data_path)
+        os.replace(logs_tmp, get_logs_db_path())
+        os.replace(settings_tmp, get_settings_path())
+        os.replace(local_settings_tmp, get_local_settings_path())
+        for suffix in ("-wal", "-shm"):
+            leftover = old_path + suffix
+            if os.path.exists(leftover):
+                os.remove(leftover)
+        os.replace(old_path, old_path + ".pre-split-backup")
+    except Exception:
+        for tmp in (data_tmp, logs_tmp, settings_tmp, local_settings_tmp):
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
+        raise
+
+
 def get_connection() -> sqlite3.Connection:
     data_dir = get_app_data_dir()
     # timeout: wait for a lock instead of failing immediately - matters once
     # several people on the network are using this at once and one of them
     # is mid-import (imports hold a write lock for the whole batch).
-    conn = sqlite3.connect(os.path.join(data_dir, "app.db"), timeout=30)
+    conn = sqlite3.connect(get_data_db_path(), timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # Audit-trail tables (import_log/activity_log/network_check_log) live in
+    # their own physical file so they can be copied to a new machine
+    # independently of the business data - see LOGS_SCHEMA's docstring. They
+    # get attached to every connection so every existing query/transaction
+    # that touches both a business table and a log table (imports, Network
+    # Check's apply_updates, Settings' reset-imported-data) keeps working
+    # unchanged: one connection, one commit, same atomicity as before the
+    # split. Parameter-bound, not an f-string - this app's data dir can
+    # contain spaces/apostrophes (OneDrive paths, user-redirected drives).
+    conn.execute("ATTACH DATABASE ? AS logsdb", (get_logs_db_path(),))
     if is_network_path(data_dir):
         # WAL (below) needs shared-memory locking for its -shm file that
         # SMB/NFS network filesystems don't all support the way a local
@@ -498,6 +618,12 @@ def get_connection() -> sqlite3.Connection:
         # needs ordinary file locking, which network shares have always
         # handled fine (one writer at a time, same as WAL's real limit here
         # anyway once mmap isn't reliable).
+        #
+        # This PRAGMA must run AFTER the ATTACH above: an unqualified
+        # `PRAGMA journal_mode = ...` applies to every currently-attached
+        # database in one call, but only to the ones already attached at the
+        # time it runs - attaching logsdb after this line would silently
+        # leave it on SQLite's DELETE-mode default even on local disk.
         conn.execute("PRAGMA journal_mode = DELETE")
     else:
         # WAL lets readers (dashboard, lookup) proceed without blocking on a
@@ -508,9 +634,11 @@ def get_connection() -> sqlite3.Connection:
 
 
 def init_db() -> None:
+    _migrate_legacy_single_file_db(get_app_data_dir())
     conn = get_connection()
     try:
         conn.executescript(SCHEMA)
+        conn.executescript(LOGS_SCHEMA)
         _add_missing_columns(conn)
         for name in DEFAULT_STANDARD_DEVICE_NAMES:
             conn.execute(
@@ -591,9 +719,11 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
     if "security_answer_hash" not in existing_account_cols:
         conn.execute("ALTER TABLE accounts ADD COLUMN security_answer_hash TEXT")
 
-    existing_import_log_cols = {row["name"] for row in conn.execute("PRAGMA table_info(import_log)").fetchall()}
+    existing_import_log_cols = {
+        row["name"] for row in conn.execute("PRAGMA logsdb.table_info(import_log)").fetchall()
+    }
     if "imported_by" not in existing_import_log_cols:
-        conn.execute("ALTER TABLE import_log ADD COLUMN imported_by TEXT")
+        conn.execute("ALTER TABLE logsdb.import_log ADD COLUMN imported_by TEXT")
 
     existing_handover_cols = {row["name"] for row in conn.execute("PRAGMA table_info(handover_records)").fetchall()}
     if "created_by" not in existing_handover_cols:
@@ -795,42 +925,42 @@ def _seed_permissions_and_roles(conn: sqlite3.Connection) -> None:
         )
 
 
+def _setting_path_for(key: str) -> str:
+    return get_local_settings_path() if key in LOCAL_SETTING_KEYS else get_settings_path()
+
+
 def get_setting_on(conn, key: str, default: str | None = None) -> str | None:
-    """Same read as get_setting(), against an already-open connection - for
-    a caller batching several settings reads/writes (+ other work, e.g. an
-    activity_log entry) into one connection/transaction instead of paying
-    for a fresh get_connection() per call. See routes/settings.py's
-    save_general() for the caller this exists for."""
-    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-    return row["value"] if row else default
+    """Same read as get_setting() - `conn` is accepted but unused, kept only
+    so callers that batch a settings read alongside other `conn`-based work
+    (e.g. routes/settings.py's save_general(), which also writes an
+    activity_log entry) don't need two different call shapes. Settings live
+    in settings.json/local_settings.json (see LOCAL_SETTING_KEYS), not a
+    SQLite table, so there's nothing to actually read through `conn` for."""
+    return read_json(_setting_path_for(key)).get(key, default)
 
 
 def get_setting(key: str, default: str | None = None) -> str | None:
-    conn = get_connection()
-    try:
-        return get_setting_on(conn, key, default)
-    finally:
-        conn.close()
+    return get_setting_on(None, key, default)
 
 
 def set_setting_on(conn, key: str, value: str) -> None:
-    """Same upsert as set_setting(), against an already-open connection -
-    same reasoning as get_setting_on() above. Doesn't commit; the caller
-    batches this into its own transaction."""
-    conn.execute(
-        "INSERT INTO settings (key, value) VALUES (?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        (key, value),
-    )
+    """Same upsert as set_setting() - `conn` is accepted but unused, same
+    reasoning as get_setting_on() above. Unlike the old SQLite-table version,
+    this write is immediate, not deferred into the caller's transaction: a
+    JSON file has no transaction to defer into. A caller that logs an
+    activity_log entry for this same change and then fails before its own
+    conn.commit() will end up with the setting changed but that one
+    audit-log line rolled back - narrow (admin-only, rare action), accepted
+    rather than re-plumbing every caller to write settings only after its
+    own commit succeeds."""
+    path = _setting_path_for(key)
+    data = read_json(path)
+    data[key] = value
+    write_json_atomic(path, data)
 
 
 def set_setting(key: str, value: str) -> None:
-    conn = get_connection()
-    try:
-        set_setting_on(conn, key, value)
-        conn.commit()
-    finally:
-        conn.close()
+    set_setting_on(None, key, value)
 
 
 def log_import(conn, kind: str, source_file: str, rows_processed: int | None = None,
@@ -846,7 +976,7 @@ def log_import(conn, kind: str, source_file: str, rows_processed: int | None = N
     see its module docstring), so every caller in routes/import_data.py
     passes it down from auth.current_account() instead."""
     conn.execute(
-        "INSERT INTO import_log (imported_at, kind, source_file, period, rows_processed, result, imported_by) "
+        "INSERT INTO logsdb.import_log (imported_at, kind, source_file, period, rows_processed, result, imported_by) "
         "VALUES (datetime('now'), ?, ?, ?, ?, ?, ?)",
         (kind, source_file, period, rows_processed, result, imported_by),
     )
@@ -861,7 +991,8 @@ def log_activity(
     network_check_log. Doesn't commit - same convention as log_import,
     callers batch this into their own transaction."""
     conn.execute(
-        "INSERT INTO activity_log (logged_at, performed_by, category, action, target, field, old_value, new_value) "
+        "INSERT INTO logsdb.activity_log "
+        "(logged_at, performed_by, category, action, target, field, old_value, new_value) "
         "VALUES (datetime('now'), ?, ?, ?, ?, ?, ?, ?)",
         (performed_by, category, action, target, field, old_value, new_value),
     )

@@ -268,7 +268,7 @@ def apply_updates():
             old_value = row["current_value"]
             conn.execute(f"UPDATE asset_items SET {column} = ? WHERE id = ?", (new_value, asset_id))
             conn.execute(
-                "INSERT INTO network_check_log "
+                "INSERT INTO logsdb.network_check_log "
                 "(applied_at, branch_no, ip, asset_id, field, old_value, new_value) "
                 "VALUES (datetime('now'), ?, ?, ?, ?, ?, ?)",
                 (row["branch_no"], ip, asset_id, field, old_value, new_value),

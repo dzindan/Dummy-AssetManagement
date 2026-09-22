@@ -99,7 +99,7 @@ def template_user_ids():
     return send_workbook(wb, "user_ids_template.xlsx")
 
 
-IMPORT_LOG_SQL = "SELECT * FROM import_log ORDER BY id DESC LIMIT 500"
+IMPORT_LOG_SQL = "SELECT * FROM logsdb.import_log ORDER BY id DESC LIMIT 500"
 
 IMPORT_HISTORY_EXPORT_COLUMNS = [
     ("Imported At", "imported_at"),

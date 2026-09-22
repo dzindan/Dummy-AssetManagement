@@ -7,7 +7,7 @@ from ..analytics import (
     get_year_comparison_table,
     resolve_report_year,
 )
-from ..cctv_metrics import build_month_metrics_by_branch, summarize_cctv_rows
+from ..cctv_metrics import build_month_metrics_by_branch, summarize_by_period, summarize_cctv_rows
 from ..charts import trend_chart_payload
 from ..db import get_connection
 from ..exports import build_workbook, send_workbook, style_header_row
@@ -84,11 +84,25 @@ def index():
         latest_cctv_batch = get_latest_batch(conn, kind="cctv_report")
 
         all_periods, all_items, all_matrix = get_all_branches_item_trend(conn, table=TABLE)
+        # Item Count Trend counts DVR/recorder *units* per device-name
+        # series above - that's a different question from "how many cameras
+        # are attached account-wide", which is a best-effort sum of each
+        # unit's own free-text camera_count field, not a row count. Folded
+        # into the same chart as one more series rather than a separate
+        # chart/tile, per how this was asked for.
+        camera_totals_by_period = summarize_by_period(get_cctv_items_by_branch_period(conn))
+        all_matrix["Cameras"] = {
+            period: (data["camera_total"] or 0) for period, data in camera_totals_by_period.items()
+        }
 
         available_years = get_available_report_years(conn, kinds=YEARS_KINDS)
         selected_year = resolve_report_year(request.args.get("year"), available_years)
-        month_periods, month_table, month_column_totals, month_column_added, month_column_removed = (
-            get_branch_month_change_table(conn, selected_year, table=TABLE)
+        # Only month_periods is used below (Compare by Branch's own By Month
+        # columns) - the rest of get_branch_month_change_table's return backed
+        # the flat "CCTV by Branch (by month)" table, removed as redundant
+        # with Compare by Branch's per-branch month breakdown.
+        month_periods, _month_table, _totals, _added, _removed = get_branch_month_change_table(
+            conn, selected_year, table=TABLE
         )
 
         year_comparison = get_year_comparison_table(conn, table=TABLE, years_kinds=YEARS_KINDS)
@@ -108,35 +122,9 @@ def index():
         available_years=available_years,
         selected_year=selected_year,
         month_periods=month_periods,
-        month_table=month_table,
-        month_column_totals=month_column_totals,
-        month_column_added=month_column_added,
-        month_column_removed=month_column_removed,
         year_comparison=year_comparison,
         branch_tree=branch_tree,
     )
-
-
-@bp.route("/export")
-def export():
-    """Branch x month CCTV-count table for the selected year - same idea as
-    dashboard.export, re-computed rather than reusing state from index()."""
-    conn = get_connection()
-    try:
-        available_years = get_available_report_years(conn, kinds=YEARS_KINDS)
-        selected_year = resolve_report_year(request.args.get("year"), available_years)
-        month_periods, month_table, _totals, _added, _removed = get_branch_month_change_table(
-            conn, selected_year, table=TABLE
-        )
-    finally:
-        conn.close()
-
-    columns = [("Branch", "label")]
-    for i, period in enumerate(month_periods):
-        columns.append((period, lambda r, i=i: (r["cells"][i]["count"] if r["cells"][i] else 0)))
-
-    wb = build_workbook(f"CCTV by Branch by Month {selected_year}", columns, month_table)
-    return send_workbook(wb, f"cctv_by_branch_by_month_{selected_year}.xlsx")
 
 
 @bp.route("/export-compare")

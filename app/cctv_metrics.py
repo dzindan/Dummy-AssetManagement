@@ -53,6 +53,17 @@ def summarize_cctv_rows(rows) -> dict:
     }
 
 
+def summarize_by_period(rows) -> dict[str, dict]:
+    """summarize_cctv_rows(), applied per period across every branch at once
+    (rather than grouped by branch like build_month_metrics_by_branch below)
+    - backs the CCTV Dashboard's "Cameras" trend line, which needs one
+    account-wide total per period, not one per (branch, period)."""
+    by_period: dict[str, list] = {}
+    for row in rows:
+        by_period.setdefault(row["period"], []).append(row)
+    return {period: summarize_cctv_rows(items) for period, items in by_period.items()}
+
+
 def build_month_metrics_by_branch(rows, month_periods):
     """Groups rows (each needs `bkey`, `period`, `camera_count`,
     `hdd_count`, `hdd_capacity`) into one summarize_cctv_rows() result per

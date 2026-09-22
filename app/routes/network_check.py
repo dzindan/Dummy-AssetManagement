@@ -361,7 +361,7 @@ def apply_updates(scan_id: str):
                 old_value = row[column]
                 conn.execute(f"UPDATE asset_items SET {column} = ? WHERE id = ?", (new_value, asset_id))
                 conn.execute(
-                    "INSERT INTO network_check_log "
+                    "INSERT INTO logsdb.network_check_log "
                     "(applied_at, branch_no, ip, asset_id, field, old_value, new_value) "
                     "VALUES (datetime('now'), ?, ?, ?, ?, ?, ?)",
                     (branch_no, ip, asset_id, field, old_value, new_value),
@@ -449,7 +449,7 @@ def export_xlsx(scan_id: str):
 
 NETWORK_CHECK_LOG_SQL = """
     SELECT ncl.*, b.eng_name AS branch_eng_name
-    FROM network_check_log ncl
+    FROM logsdb.network_check_log ncl
     LEFT JOIN branches b ON b.branch_no = ncl.branch_no
     ORDER BY ncl.id DESC LIMIT 500
 """
