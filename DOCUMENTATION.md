@@ -191,8 +191,15 @@ computers on the same office network.
 
 - **Backend**: Python + Flask, serving server-rendered HTML (Jinja2
   templates) — no separate frontend build step.
-- **Storage**: SQLite (`app.db`), single file. Chosen because this is a
-  small-team internal tool; see §8 for its concurrency characteristics.
+- **Storage**: split across `data.db` (business data), `logs.db` (audit
+  logs, attached to `data.db` via `ATTACH DATABASE` inside
+  `get_connection()` so every existing transaction boundary is unchanged),
+  `settings.json` (portable settings), and `local_settings.json`
+  (machine-local: `secret_key` and the two folder paths — fixed at
+  `%LOCALAPPDATA%\AssetManagementTool\`, never redirected, never copied on
+  migration). See §5 for the full layout and why it's split this way; §8
+  for the DB's concurrency characteristics. Chosen because this is a
+  small-team internal tool.
 - **Charts**: interactive line charts with clickable device/branch slicer
   chips, hand-rolled (`app/charts.py` shapes the data server-side into a
   small JSON payload; `app/static/trend_chart.js` draws the SVG and wires
@@ -302,7 +309,9 @@ Tables (see `app/db.py` for the full schema):
   what the source file actually said.
 - `handover_records` — one row per generated hand-over form, written only
   when the user clicks **Confirm & Download** on the Review page (see §6).
-- `settings`, `branch_aliases` — user-editable configuration (Settings page).
+- `branch_aliases` — user-editable configuration (Settings page). Portable
+  settings (`ict_rep_*`, `cucm_*`) and machine-local settings (`secret_key`,
+  folder paths) no longer live in a `settings` table — see §5.
 - `device_standard_names` — the editable master list of recognized device
   types (seeded with common ones, but fully add/rename/delete-able in
   Settings → Device Name Mapping).
@@ -797,16 +806,39 @@ for a one-off typo that's already been fixed at the source and won't recur.
 
 ## 5. Where data lives
 
-Everything the app writes — the database, generated hand-over `.docx`
-files, and temporary upload files — lives in:
+Everything the app writes — the databases, settings, generated hand-over
+`.docx` files, and temporary upload files — lives in:
 
 ```
 %LOCALAPPDATA%\AssetManagementTool\
-  app.db
+  data.db              (+ -wal/-shm) business data: branches, users,
+                        import_batches, asset_items, cctv_items,
+                        handover_records, alias/standard-name/unmapped
+                        tables, accounts/roles/permissions, diff_reports
+  logs.db              (+ -wal/-shm) import_log, activity_log,
+                        network_check_log — attached to data.db via
+                        ATTACH DATABASE inside get_connection(), so every
+                        existing write transaction spans both unchanged
+  settings.json         portable settings: ict_rep_name, ict_rep_id,
+                         cucm_ip, cucm_axluser, cucm_axlpassword,
+                         cucm_riswsdl, cucm_scan_prefixes
+  local_settings.json    machine-local: secret_key, asset_reports_folder,
+                          id_files_folder — always at this fixed default
+                          location, never in a redirected data folder,
+                          never moved or copied (see below)
   handovers\   (every generated hand-over form)
   uploads\     (temporary, cleaned up after each import)
   exports\
 ```
+
+This split exists so migrating to a new machine only needs `data.db` +
+`logs.db` + `settings.json` copied over — `secret_key` regenerates
+automatically and the two local folder paths get re-entered once in
+Settings, rather than dragging along machine-local config that would be
+meaningless (or harmful, for `secret_key`) on another machine. A legacy
+single `app.db` is migrated automatically and losslessly on first launch
+(`db._migrate_legacy_single_file_db()`): the original file is preserved as
+`app.db.pre-split-backup`, never deleted.
 
 This is **independent of where the `.exe` itself is placed**, so it keeps
 working even if the exe sits in a read-only folder. It also means: **the
@@ -816,15 +848,18 @@ separate, empty-until-imported database.
 
 ### Changing where data lives
 
-Settings → Data Storage Location lets you redirect all of the above to any
+Settings → Data Storage Location lets you redirect most of the above to any
 other folder (a drive with more space, a shared network path, etc.):
 
 - Enter a full path and click **Change Location**. The app verifies the
-  folder is writable, then moves `app.db` (and its `-wal`/`-shm` sidecar
-  files if present), `handovers/`, `exports/`, and `uploads/` there —
-  nothing already imported is lost. Existing files already in the *target*
-  folder (e.g. switching back to a folder used before) are never
-  overwritten.
+  folder is writable, then moves `data.db`/`logs.db` (and their `-wal`/
+  `-shm` sidecar files if present), `settings.json`, `handovers/`,
+  `exports/`, and `uploads/` there — nothing already imported is lost.
+  Existing files already in the *target* folder (e.g. switching back to a
+  folder used before) are never overwritten. `local_settings.json` is
+  deliberately **not** in this list — it never moves, staying at the fixed
+  default location by design (same rationale as the `data_location.json`
+  pointer below).
 - The pointer to the current location is itself always kept at the default
   `%LOCALAPPDATA%\AssetManagementTool\data_location.json`, since that's the
   one place guaranteed to exist before any choice is made. The change takes
@@ -970,7 +1005,7 @@ concurrency.
     replaced, the question/answer is reusable and isn't cleared after a
     successful reset. An account with neither an active Admin nor a saved
     security question has no self-service recovery path short of editing
-    `accounts.password_hash` directly in `app.db`.
+    `accounts.password_hash` directly in `data.db`.
 - **SQLite concurrency.** Reads are unaffected by a concurrent writer (WAL
   mode), but two people importing large files (like the Total Asset
   baseline) at the exact same moment could see a "database is locked" error
