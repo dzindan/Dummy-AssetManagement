@@ -11,7 +11,7 @@ from ..charts import per_series_trend_payloads, trend_chart_payload
 from ..db import get_connection
 from ..exports import (
     add_solo_item_charts,
-    add_stacked_total_chart,
+    add_trend_line_chart,
     build_asset_rows_workbook,
     build_cctv_rows_workbook,
     dated_download_name,
@@ -138,7 +138,7 @@ def detail(branch_no):
 
 def _add_trend_sheet(wb, title, periods, matrix):
     """Shared by both export routes below - a period x device-type matrix
-    sheet plus a stacked total chart and one solo chart per device type,
+    sheet plus a combined line chart and one solo chart per device type,
     skipped gracefully (no sheet at all) when there's under 2 periods of
     history, same guard charts.trend_chart_payload()/per_series_trend_payloads()
     already apply to the on-page charts."""
@@ -146,7 +146,7 @@ def _add_trend_sheet(wb, title, periods, matrix):
     if len(periods) < 2 or not items:
         return
     ws = write_trend_matrix_sheet(wb, title, periods, items, matrix)
-    add_stacked_total_chart(ws, title, len(periods), len(items), "A" + str(len(periods) + 3))
+    add_trend_line_chart(ws, title, len(periods), len(items), "A" + str(len(periods) + 3))
     add_solo_item_charts(ws, items, len(periods), len(periods) + 20)
 
 

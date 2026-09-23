@@ -241,11 +241,11 @@ class FilteredExportTests(unittest.TestCase):
 
 class TrendChartExportTests(unittest.TestCase):
     """The native openpyxl trend charts (app/exports.py's
-    write_trend_matrix_sheet/add_stacked_total_chart/add_solo_item_charts)
+    write_trend_matrix_sheet/add_trend_line_chart/add_solo_item_charts)
     only get added once there are >=2 periods of history - seed two months
     of both asset_items and cctv_items for one branch, then check every
     export route that should now carry an extra "Item Count Trend" sheet
-    with a stacked chart plus one solo chart per device type."""
+    with a combined line chart plus one solo chart per device type."""
 
     def setUp(self):
         self.app = _fresh_app()
@@ -283,7 +283,7 @@ class TrendChartExportTests(unittest.TestCase):
         wb = _wb_from_response(resp)
         self.assertIn(sheet_name, wb.sheetnames)
         ws = wb[sheet_name]
-        self.assertGreaterEqual(len(ws._charts), 2)  # 1 stacked total + >=1 solo item chart
+        self.assertGreaterEqual(len(ws._charts), 2)  # 1 combined line chart + >=1 solo item chart
         return ws
 
     def test_dashboard_export_has_trend_chart_sheet(self):

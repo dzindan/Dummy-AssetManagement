@@ -121,7 +121,7 @@ def per_series_trend_payloads(periods: list[str], series: dict[str, dict[str, in
     per device type" grid alongside the combined chart. Colors come from
     the same _assign_colors() call the combined chart's trend_chart_payload()
     would make for this same `series` dict, so a device's solo chart always
-    matches its segment color in the combined stacked chart above it. Empty
+    matches its line color in the combined chart above it. Empty
     dict under the same "not enough history" guard as trend_chart_payload."""
     if len(periods) < 2 or not series:
         return {}

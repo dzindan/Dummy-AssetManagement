@@ -11,7 +11,7 @@ from typing import Any, Iterable, Sequence
 
 import openpyxl
 from flask import Response, send_file
-from openpyxl.chart import BarChart, Reference
+from openpyxl.chart import LineChart, Reference
 from openpyxl.styles import Font
 from openpyxl.worksheet.worksheet import Worksheet
 
@@ -102,7 +102,7 @@ def send_workbook(wb: openpyxl.Workbook, download_name: str) -> Response:
     return send_file(buf, as_attachment=True, download_name=download_name, mimetype=XLSX_MIMETYPE)
 
 
-# --- Trend charts (combined stacked total + one solo chart per device type) -
+# --- Trend charts (one combined line chart + one solo chart per device type) -
 # mirrors app/charts.py + app/static/trend_chart.js's on-page equivalents as
 # native openpyxl charts, so a report keeps working once downloaded instead
 # of just being a data dump. `items` is always `list(matrix.keys())` at the
@@ -116,7 +116,7 @@ def write_trend_matrix_sheet(
     wb: openpyxl.Workbook, sheet_title: str, periods: list[str], items: list[str], matrix: dict[str, dict[str, int]]
 ) -> Worksheet:
     """Periods as rows, one column per item - the rectangular grid a
-    BarChart's Reference can point at directly (openpyxl charts reference
+    LineChart's Reference can point at directly (openpyxl charts reference
     cell ranges, not raw Python values)."""
     ws = wb.create_sheet(sheet_title)
     ws.append(["Period", *items])
@@ -126,14 +126,10 @@ def write_trend_matrix_sheet(
     return ws
 
 
-def add_stacked_total_chart(ws: Worksheet, title: str, n_periods: int, n_items: int, anchor: str) -> None:
-    """One stacked column chart, bar height per period = that period's
-    total across every item - the Excel counterpart of the page's combined
-    "Item Count Trend" chart."""
-    chart = BarChart()
-    chart.type = "col"
-    chart.grouping = "stacked"
-    chart.overlap = 100
+def add_trend_line_chart(ws: Worksheet, title: str, n_periods: int, n_items: int, anchor: str) -> None:
+    """One line chart, one line per item - the Excel counterpart of the
+    page's combined "Item Count Trend" chart."""
+    chart = LineChart()
     chart.title = title
     chart.y_axis.title = "Count"
     last_row = 1 + n_periods
@@ -146,15 +142,14 @@ def add_stacked_total_chart(ws: Worksheet, title: str, n_periods: int, n_items: 
 
 
 def add_solo_item_charts(ws: Worksheet, items: list[str], n_periods: int, start_row: int, col: str = "A") -> None:
-    """One small single-series column chart per item, anchored in a
-    vertical stack - the Excel counterpart of the page's per-device-type
-    chart grid. `start_row` should be well clear of the data table and the
-    stacked total chart added above it."""
+    """One small single-series line chart per item, anchored one below
+    the other - the Excel counterpart of the page's per-device-type chart
+    grid. `start_row` should be well clear of the data table and the
+    combined chart added above it."""
     last_row = 1 + n_periods
     for i, item in enumerate(items):
         data_col = 2 + i
-        chart = BarChart()
-        chart.type = "col"
+        chart = LineChart()
         chart.title = item
         chart.legend = None
         chart.y_axis.title = None

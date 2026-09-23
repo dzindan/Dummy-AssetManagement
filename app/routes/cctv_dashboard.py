@@ -12,7 +12,7 @@ from ..charts import per_series_trend_payloads, trend_chart_payload
 from ..db import get_connection
 from ..exports import (
     add_solo_item_charts,
-    add_stacked_total_chart,
+    add_trend_line_chart,
     build_workbook,
     send_workbook,
     style_header_row,
@@ -201,7 +201,7 @@ def export_compare():
     items = list(all_matrix.keys())
     if len(all_periods) >= 2 and items:
         trend_ws = write_trend_matrix_sheet(wb, "Item Count Trend", all_periods, items, all_matrix)
-        add_stacked_total_chart(
+        add_trend_line_chart(
             trend_ws, "CCTV Item Count Trend - All Branches", len(all_periods), len(items),
             "A" + str(len(all_periods) + 3),
         )

@@ -1,8 +1,8 @@
-/* Interactive stacked-column chart with clickable slicer chips
- * (app/charts.py ships a small {periods, series} JSON payload via
+/* Interactive line chart with clickable slicer chips (app/charts.py
+ * ships a small {periods, series} JSON payload via
  * trend_chart_payload()/per_series_trend_payloads(), and this file draws +
- * hovers it client-side so clicking a chip can show/hide a series without a
- * page reload, recomputing the stack). Each series' color comes from the
+ * hovers it client-side so clicking a chip can show/hide a line without a
+ * page reload, rescaling the y-axis to what's left). Each series' color comes from the
  * payload already resolved server-side (charts._assign_colors) and never
  * changes when chips are toggled - see that module's docstring.
  *
@@ -25,24 +25,6 @@
     return v.toLocaleString("en-US");
   }
 
-  // A bar/column mark: 4px rounded data-end (the visible top of the whole
-  // stack), square at the baseline - see the dataviz skill's mark spec.
-  // Degrades to a plain rect when there's no room for the radius.
-  function roundedTopRectPath(x, y, w, h, r) {
-    if (h <= 0 || w <= 0) { return ""; }
-    r = Math.min(r, w / 2, h);
-    if (r <= 0.5) {
-      return "M" + x.toFixed(1) + "," + y.toFixed(1) + " h" + w.toFixed(1) + " v" + h.toFixed(1) + " h" + (-w).toFixed(1) + " Z";
-    }
-    return "M" + x.toFixed(1) + "," + (y + h).toFixed(1) +
-      " L" + x.toFixed(1) + "," + (y + r).toFixed(1) +
-      " Q" + x.toFixed(1) + "," + y.toFixed(1) + " " + (x + r).toFixed(1) + "," + y.toFixed(1) +
-      " L" + (x + w - r).toFixed(1) + "," + y.toFixed(1) +
-      " Q" + (x + w).toFixed(1) + "," + y.toFixed(1) + " " + (x + w).toFixed(1) + "," + (y + r).toFixed(1) +
-      " L" + (x + w).toFixed(1) + "," + (y + h).toFixed(1) +
-      " Z";
-  }
-
   // escapeHtml() now lives in dom_utils.js, loaded by branch_detail.html /
   // dashboard.html before this file.
 
@@ -61,7 +43,7 @@
     options = options || {};
     var emptyMessage = options.emptyMessage ||
       "Not enough historical data yet - import at least two months to see a trend.";
-    var ariaLabel = options.ariaLabel || "Bar chart of item counts by month";
+    var ariaLabel = options.ariaLabel || "Line chart of item counts by month";
     var hideLegend = !!options.hideLegend;
     var compact = !!options.compact;
 
@@ -76,12 +58,14 @@
 
     var gridColor = getComputedStyle(document.documentElement).getPropertyValue("--chart-grid").trim() || "#e5e7eb";
     var axisColor = getComputedStyle(document.documentElement).getPropertyValue("--muted").trim() || "#6b7280";
+    var textColor = getComputedStyle(document.documentElement).getPropertyValue("--text").trim() || "#1f2937";
+    var surfaceColor = getComputedStyle(document.documentElement).getPropertyValue("--panel").trim() || "#ffffff";
 
     var active = {};
     allSeries.forEach(function (s) { active[s.name] = true; });
 
     container.innerHTML =
-      (hideLegend ? "" : '<div class="pill-slicer" role="group" aria-label="Filter which bars are shown"></div>') +
+      (hideLegend ? "" : '<div class="pill-slicer" role="group" aria-label="Filter which lines are shown"></div>') +
       '<div class="chart-wrap"></div>';
     var pillsEl = container.querySelector(".pill-slicer");
     var chartWrap = container.querySelector(".chart-wrap");
@@ -107,13 +91,9 @@
     }
 
     var W = 900, H = compact ? 220 : 380;
-    // PAD_L must clear both the y-axis tick labels (up to "20,000", 6 chars
-    // with the thousands comma) AND half of MAX_BAR_WIDTH, since the first
-    // bar is centered at x=PAD_L and its left edge extends further left
-    // than a zero-width line-chart point ever did - undersizing this was
-    // exactly what let January's bar overlap the "5,000" label.
-    var MAX_BAR_WIDTH = 24;
-    var PAD_L = 58, PAD_R = 18, PAD_T = 18, PAD_B = 30;
+    // PAD_L clears the y-axis tick labels (up to "20,000", 6 chars with the
+    // thousands comma); PAD_R leaves room for the end-of-line value label.
+    var PAD_L = 58, PAD_R = 44, PAD_T = 18, PAD_B = 30;
     var plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
     var lastN = n - 1; // safe: the guard above already requires n >= 2
 
@@ -124,15 +104,10 @@
     function render() {
       var visible = allSeries.filter(function (s) { return active[s.name]; });
 
-      // Stacked bars: the y-scale is driven by each period's STACKED sum
-      // across visible series, not any one series' own max - the bar's
-      // full height is meant to read as that period's total.
+      // Lines: the y-scale is driven by the largest single visible value, so
+      // hiding a big series (e.g. CCTV's "Cameras") rescales the rest.
       var maxVal = 1;
-      for (var pIdx = 0; pIdx < n; pIdx++) {
-        var stackSum = 0;
-        visible.forEach(function (s) { stackSum += s.values[pIdx]; });
-        if (stackSum > maxVal) { maxVal = stackSum; }
-      }
+      visible.forEach(function (s) { s.values.forEach(function (v) { if (v > maxVal) { maxVal = v; } }); });
       var step = niceStep(maxVal);
       var yMax = step * 4;
       function yFor(v) { return PAD_T + plotH * (1 - v / yMax); }
@@ -179,45 +154,36 @@
           '" text-anchor="middle">No series selected - click a chip above to show it.</text>');
       }
 
-      // Bar/column mark spec: capped thickness (never fill the slot - let
-      // the leftover be air), a 2px surface-color gap between every
-      // touching segment (stacked segments and adjacent bars alike), and a
-      // 4px rounded cap only at the true top of each stack (the data end) -
-      // interior segment boundaries stay square, separated by the gap
-      // rather than a border.
-      var slot = plotW / n;
-      var barWidth = Math.min(MAX_BAR_WIDTH, Math.max(2, slot * 0.6));
-      var GAP = 2, RADIUS = 4;
-      for (var i = 0; i < n; i++) {
-        var cumulative = 0;
-        var barX = xFor(i) - barWidth / 2;
-        var topIdx = -1;
-        for (var k = 0; k < visible.length; k++) {
-          if (visible[k].values[i] > 0) { topIdx = k; }
+      // Line mark spec: 2px lines, an end marker with a 2px surface ring so
+      // it stays legible where lines cross, and a value label at the end of
+      // each line in text ink (never the series color) - only when there
+      // are few enough lines (<= 4) for the labels not to collide; the
+      // chips + tooltip carry identity/values otherwise.
+      var lastI = n - 1;
+      var labelEnds = visible.length <= 4;
+      visible.forEach(function (s) {
+        var d = s.values.map(function (v, i) {
+          return (i === 0 ? "M" : "L") + xFor(i).toFixed(1) + "," + yFor(v).toFixed(1);
+        }).join(" ");
+        svg.push('<path d="' + d + '" fill="none" stroke="' + s.color +
+          '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>');
+      });
+      visible.forEach(function (s) {
+        var ex = xFor(lastI), ey = yFor(s.values[lastI]);
+        svg.push('<circle cx="' + ex.toFixed(1) + '" cy="' + ey.toFixed(1) + '" r="4" fill="' + s.color +
+          '" stroke="' + surfaceColor + '" stroke-width="2"/>');
+        if (labelEnds) {
+          svg.push('<text x="' + (ex + 8).toFixed(1) + '" y="' + (ey + 4).toFixed(1) + '" font-size="11" font-weight="600" fill="' +
+            textColor + '">' + formatNumber(s.values[lastI]) + "</text>");
         }
-        visible.forEach(function (s, idx) {
-          var v = s.values[i];
-          if (v > 0) {
-            var rawTop = yFor(cumulative + v);
-            var rawBottom = yFor(cumulative);
-            var segTop = cumulative > 0 ? rawTop + GAP / 2 : rawTop;
-            var segBottom = idx < topIdx ? rawBottom - GAP / 2 : rawBottom;
-            var h = Math.max(0, segBottom - segTop);
-            if (h > 0) {
-              if (idx === topIdx) {
-                svg.push('<path d="' + roundedTopRectPath(barX, segTop, barWidth, h, RADIUS) + '" fill="' + s.color + '"/>');
-              } else {
-                svg.push('<rect x="' + barX.toFixed(1) + '" y="' + segTop.toFixed(1) + '" width="' + barWidth.toFixed(1) +
-                  '" height="' + h.toFixed(1) + '" fill="' + s.color + '"/>');
-              }
-            }
-          }
-          cumulative += v;
-        });
-      }
+      });
 
       svg.push('<g class="hoverLayer" style="opacity:0">' +
         '<line class="crosshairLine" x1="0" y1="' + PAD_T + '" x2="0" y2="' + (H - PAD_B) + '" stroke="#9ca3af" stroke-width="1" stroke-dasharray="3,3"/>' +
+        visible.map(function (s, idx) {
+          return '<circle class="hoverDot" data-idx="' + idx + '" r="4" fill="' + s.color +
+            '" stroke="' + surfaceColor + '" stroke-width="2"/>';
+        }).join("") +
         "</g>");
       svg.push('<rect class="hoverCatcher" x="' + PAD_L + '" y="' + PAD_T + '" width="' + plotW + '" height="' + plotH + '" fill="transparent"/>');
       svg.push("</svg>");
@@ -226,7 +192,7 @@
       if (oldSvg) { oldSvg.remove(); }
       chartWrap.insertAdjacentHTML("afterbegin", svg.join(""));
 
-      hoverState = { xFor: xFor, visible: visible };
+      hoverState = { xFor: xFor, yFor: yFor, visible: visible };
       wireHover();
     }
 
@@ -247,6 +213,11 @@
         var x = hoverState.xFor(i);
         crosshairLine.setAttribute("x1", x.toFixed(1));
         crosshairLine.setAttribute("x2", x.toFixed(1));
+        hoverLayer.querySelectorAll(".hoverDot").forEach(function (dot) {
+          var s = hoverState.visible[Number(dot.getAttribute("data-idx"))];
+          dot.setAttribute("cx", x.toFixed(1));
+          dot.setAttribute("cy", hoverState.yFor(s.values[i]).toFixed(1));
+        });
         hoverLayer.style.opacity = 1;
 
         var total = 0;
@@ -282,7 +253,7 @@
 
   // One compact, legend-less solo chart per entry of `payloadsByName` (from
   // charts.per_series_trend_payloads), each in its own .panel card - the
-  // "per device type" grid that sits alongside the combined stacked chart.
+  // "per device type" grid that sits alongside the combined chart.
   // Looping in JS (rather than one templated container id per device in
   // Jinja) sidesteps having to sanitize device names like "DVR/CCTV
   // RECORDER" into DOM ids.
@@ -314,7 +285,7 @@
       init(chartDiv, payloadsByName[name], {
         hideLegend: true,
         compact: true,
-        ariaLabel: "Bar chart of " + name + " counts by month",
+        ariaLabel: "Line chart of " + name + " counts by month",
         emptyMessage: options.emptyMessage,
       });
     });

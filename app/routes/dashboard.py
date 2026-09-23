@@ -11,7 +11,7 @@ from ..charts import per_series_trend_payloads, trend_chart_payload
 from ..db import get_connection
 from ..exports import (
     add_solo_item_charts,
-    add_stacked_total_chart,
+    add_trend_line_chart,
     build_workbook,
     send_workbook,
     write_trend_matrix_sheet,
@@ -102,7 +102,7 @@ def export():
     items = list(all_matrix.keys())
     if len(all_periods) >= 2 and items:
         ws = write_trend_matrix_sheet(wb, "Item Count Trend", all_periods, items, all_matrix)
-        add_stacked_total_chart(ws, "Item Count Trend - All Branches", len(all_periods), len(items), "A" + str(len(all_periods) + 3))
+        add_trend_line_chart(ws, "Item Count Trend - All Branches", len(all_periods), len(items), "A" + str(len(all_periods) + 3))
         add_solo_item_charts(ws, items, len(all_periods), len(all_periods) + 20)
 
     return send_workbook(wb, f"assets_by_branch_by_month_{selected_year}.xlsx")
