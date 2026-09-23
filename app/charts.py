@@ -114,3 +114,22 @@ def trend_chart_payload(periods: list[str], series: dict[str, dict[str, int]]) -
             for name in series
         ],
     }
+
+
+def per_series_trend_payloads(periods: list[str], series: dict[str, dict[str, int]]) -> dict[str, dict]:
+    """One single-series payload per item in `series`, for the "one chart
+    per device type" grid alongside the combined chart. Colors come from
+    the same _assign_colors() call the combined chart's trend_chart_payload()
+    would make for this same `series` dict, so a device's solo chart always
+    matches its segment color in the combined stacked chart above it. Empty
+    dict under the same "not enough history" guard as trend_chart_payload."""
+    if len(periods) < 2 or not series:
+        return {}
+    colors = _assign_colors(list(series))
+    return {
+        name: {
+            "periods": periods,
+            "series": [{"name": name, "color": colors[name], "values": [series[name].get(p, 0) for p in periods]}],
+        }
+        for name in series
+    }

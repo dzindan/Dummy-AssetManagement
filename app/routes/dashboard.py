@@ -7,9 +7,15 @@ from ..analytics import (
     get_year_comparison_table,
     resolve_report_year,
 )
-from ..charts import trend_chart_payload
+from ..charts import per_series_trend_payloads, trend_chart_payload
 from ..db import get_connection
-from ..exports import build_workbook, send_workbook
+from ..exports import (
+    add_solo_item_charts,
+    add_stacked_total_chart,
+    build_workbook,
+    send_workbook,
+    write_trend_matrix_sheet,
+)
 from ..queries import get_current_asset_count, get_current_branch_breakdown, get_latest_batch
 
 bp = Blueprint("dashboard", __name__)
@@ -46,6 +52,7 @@ def index():
         conn.close()
 
     all_branches_chart_data = trend_chart_payload(all_periods, all_matrix)
+    device_trend_charts = per_series_trend_payloads(all_periods, all_matrix)
 
     return render_template(
         "dashboard.html",
@@ -58,6 +65,7 @@ def index():
         branch_breakdown=branch_breakdown,
         recent_handovers=recent_handovers,
         all_branches_chart_data=all_branches_chart_data,
+        device_trend_charts=device_trend_charts,
         unmapped_device_count=unmapped_device_count,
         available_years=available_years,
         selected_year=selected_year,
@@ -81,6 +89,7 @@ def export():
         available_years = get_available_report_years(conn)
         selected_year = resolve_report_year(request.args.get("year"), available_years)
         month_periods, month_table, _totals, _added, _removed = get_branch_month_change_table(conn, selected_year)
+        all_periods, _all_items, all_matrix = get_all_branches_item_trend(conn)
     finally:
         conn.close()
 
@@ -89,4 +98,11 @@ def export():
         columns.append((period, lambda r, i=i: (r["cells"][i]["count"] if r["cells"][i] else 0)))
 
     wb = build_workbook(f"Assets by Branch by Month {selected_year}", columns, month_table)
+
+    items = list(all_matrix.keys())
+    if len(all_periods) >= 2 and items:
+        ws = write_trend_matrix_sheet(wb, "Item Count Trend", all_periods, items, all_matrix)
+        add_stacked_total_chart(ws, "Item Count Trend - All Branches", len(all_periods), len(items), "A" + str(len(all_periods) + 3))
+        add_solo_item_charts(ws, items, len(all_periods), len(all_periods) + 20)
+
     return send_workbook(wb, f"assets_by_branch_by_month_{selected_year}.xlsx")

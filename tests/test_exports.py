@@ -173,6 +173,16 @@ class ExportRouteSmokeTests(unittest.TestCase):
             expected_rows=1,
         )
 
+    def test_device_handover_history_export(self):
+        resp = self.client.get("/user-history/export?q=SN1&search_by=serial")
+        self._assert_valid_xlsx(
+            resp,
+            expected_header=(
+                "From Period", "To Period", "User ID", "Full Name", "Branch", "Device", "Model", "Status",
+            ),
+            expected_rows=1,
+        )
+
 
 class FilteredExportTests(unittest.TestCase):
     """Manage Assets and Hand-Over History exports must respect whatever
@@ -227,6 +237,72 @@ class FilteredExportTests(unittest.TestCase):
         filtered = self._row_count(self.client.get("/history/export?branch_no=001"))
         self.assertEqual(unfiltered, 2)
         self.assertEqual(filtered, 1)
+
+
+class TrendChartExportTests(unittest.TestCase):
+    """The native openpyxl trend charts (app/exports.py's
+    write_trend_matrix_sheet/add_stacked_total_chart/add_solo_item_charts)
+    only get added once there are >=2 periods of history - seed two months
+    of both asset_items and cctv_items for one branch, then check every
+    export route that should now carry an extra "Item Count Trend" sheet
+    with a stacked chart plus one solo chart per device type."""
+
+    def setUp(self):
+        self.app = _fresh_app()
+        conn = get_connection()
+        try:
+            admin_role_id = _role_id(conn, "Admin")
+            conn.execute("INSERT INTO branches (branch_no, eng_name) VALUES ('001', 'Hanoi Branch')")
+            conn.execute(
+                "INSERT INTO import_batches (id, imported_at, kind, period) VALUES "
+                "(1, datetime('now'), 'asset_report', '2026-01'), "
+                "(2, datetime('now'), 'asset_report', '2026-02'), "
+                "(3, datetime('now'), 'cctv_report', '2026-01'), "
+                "(4, datetime('now'), 'cctv_report', '2026-02')"
+            )
+            conn.execute(
+                "INSERT INTO asset_items (batch_id, asset_key, branch_no, branch_dept, device_name, device_name_raw, "
+                "model_device, serial_tag, status, full_name, user_id_norm, user_id_raw) VALUES "
+                "(1, 'k1', '001', 'Hanoi', 'PC', 'PC', 'M1', 'SN1', 'IN USE', 'A', '1001', '1001'), "
+                "(2, 'k1', '001', 'Hanoi', 'PC', 'PC', 'M1', 'SN1', 'IN USE', 'A', '1001', '1001')"
+            )
+            conn.execute(
+                "INSERT INTO cctv_items (batch_id, asset_key, branch_no, branch_dept, device_name, device_name_raw, "
+                "model_device, serial_tag, status, camera_count) VALUES "
+                "(3, 'c1', '001', 'Hanoi', 'DVR/CCTV RECORDER', 'DVR', 'M1', 'SN1', 'IN USE', '4'), "
+                "(4, 'c1', '001', 'Hanoi', 'DVR/CCTV RECORDER', 'DVR', 'M1', 'SN1', 'IN USE', '4')"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        create_account("trendtester", "trendpass1", admin_role_id)
+        self.client = self.app.test_client()
+        self.client.post("/login", data={"username": "trendtester", "password": "trendpass1"})
+
+    def _trend_sheet(self, resp, sheet_name):
+        wb = _wb_from_response(resp)
+        self.assertIn(sheet_name, wb.sheetnames)
+        ws = wb[sheet_name]
+        self.assertGreaterEqual(len(ws._charts), 2)  # 1 stacked total + >=1 solo item chart
+        return ws
+
+    def test_dashboard_export_has_trend_chart_sheet(self):
+        resp = self.client.get("/export")
+        ws = self._trend_sheet(resp, "Item Count Trend")
+        self.assertEqual(ws["A1"].value, "Period")
+        self.assertEqual(ws["B1"].value, "PC")
+
+    def test_cctv_compare_export_has_trend_chart_sheet(self):
+        resp = self.client.get("/cctv/dashboard/export-compare")
+        self._trend_sheet(resp, "Item Count Trend")
+
+    def test_branch_detail_export_has_trend_chart_sheet(self):
+        resp = self.client.get("/branch/001/export")
+        self._trend_sheet(resp, "Item Count Trend")
+
+    def test_branch_detail_export_cctv_has_trend_chart_sheet(self):
+        resp = self.client.get("/branch/001/export-cctv")
+        self._trend_sheet(resp, "CCTV Item Count Trend")
 
 
 class TemplateDownloadTests(unittest.TestCase):

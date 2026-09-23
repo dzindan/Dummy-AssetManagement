@@ -7,9 +7,17 @@ from ..analytics import (
     resolve_report_year,
 )
 from ..cctv_metrics import build_month_metrics_by_branch, summarize_by_period, summarize_cctv_rows
-from ..charts import trend_chart_payload
+from ..charts import per_series_trend_payloads, trend_chart_payload
 from ..db import get_connection
-from ..exports import build_asset_rows_workbook, build_cctv_rows_workbook, dated_download_name, send_workbook
+from ..exports import (
+    add_solo_item_charts,
+    add_stacked_total_chart,
+    build_asset_rows_workbook,
+    build_cctv_rows_workbook,
+    dated_download_name,
+    send_workbook,
+    write_trend_matrix_sheet,
+)
 from ..paths import safe_filename
 from ..queries import get_branch, get_cctv_items_by_branch_period, get_current_assets, search_cctv
 
@@ -94,10 +102,12 @@ def detail(branch_no):
         conn.close()
 
     chart_data = trend_chart_payload(periods, matrix)
+    device_trend_charts = per_series_trend_payloads(periods, matrix)
     cctv_matrix["Cameras"] = {
         period: (data["camera_total"] or 0) for period, data in camera_totals_by_period.items()
     }
     cctv_chart_data = trend_chart_payload(cctv_periods, cctv_matrix)
+    cctv_device_trend_charts = per_series_trend_payloads(cctv_periods, cctv_matrix)
     device_status_breakdown = _device_status_breakdown(assets)
     # Same shape, same helper - a cctv_items row also has device_name/status.
     cctv_status_breakdown = _device_status_breakdown(cctv_items)
@@ -110,6 +120,7 @@ def detail(branch_no):
         device_status_breakdown=device_status_breakdown,
         cctv_status_breakdown=cctv_status_breakdown,
         chart_data=chart_data,
+        device_trend_charts=device_trend_charts,
         available_years=available_years,
         selected_year=selected_year,
         trend_periods=trend_periods,
@@ -120,8 +131,23 @@ def detail(branch_no):
         cctv_items=cctv_items,
         cctv_summary=cctv_summary,
         cctv_chart_data=cctv_chart_data,
+        cctv_device_trend_charts=cctv_device_trend_charts,
         cctv_month_cells=cctv_month_cells,
     )
+
+
+def _add_trend_sheet(wb, title, periods, matrix):
+    """Shared by both export routes below - a period x device-type matrix
+    sheet plus a stacked total chart and one solo chart per device type,
+    skipped gracefully (no sheet at all) when there's under 2 periods of
+    history, same guard charts.trend_chart_payload()/per_series_trend_payloads()
+    already apply to the on-page charts."""
+    items = list(matrix.keys())
+    if len(periods) < 2 or not items:
+        return
+    ws = write_trend_matrix_sheet(wb, title, periods, items, matrix)
+    add_stacked_total_chart(ws, title, len(periods), len(items), "A" + str(len(periods) + 3))
+    add_solo_item_charts(ws, items, len(periods), len(periods) + 20)
 
 
 @bp.route("/<branch_no>/export")
@@ -132,11 +158,13 @@ def export(branch_no):
         if not branch:
             abort(404, description="Branch not found.")
         assets = get_current_assets(conn, branch_no=branch_no)
+        periods, _items, matrix = get_branch_item_trend(conn, branch_no)
     finally:
         conn.close()
 
     safe_name = safe_filename(branch["eng_name"] or branch_no, fallback=branch_no)
     wb = build_asset_rows_workbook(assets, sheet_title="Current Assets")
+    _add_trend_sheet(wb, "Item Count Trend", periods, matrix)
     return send_workbook(wb, dated_download_name(f"{safe_name} - assets"))
 
 
@@ -148,9 +176,15 @@ def export_cctv(branch_no):
         if not branch:
             abort(404, description="Branch not found.")
         cctv_items, _total = search_cctv(conn, {"branch_no": [branch_no]}, per_page=None)
+        cctv_periods, _cctv_items, cctv_matrix = get_branch_item_trend(conn, branch_no, table="cctv_items")
+        camera_totals_by_period = summarize_by_period(get_cctv_items_by_branch_period(conn, branch_no=branch_no))
+        cctv_matrix["Cameras"] = {
+            period: (data["camera_total"] or 0) for period, data in camera_totals_by_period.items()
+        }
     finally:
         conn.close()
 
     safe_name = safe_filename(branch["eng_name"] or branch_no, fallback=branch_no)
     wb = build_cctv_rows_workbook(cctv_items, sheet_title="Current CCTV")
+    _add_trend_sheet(wb, "CCTV Item Count Trend", cctv_periods, cctv_matrix)
     return send_workbook(wb, dated_download_name(f"{safe_name} - cctv"))

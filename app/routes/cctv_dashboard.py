@@ -8,9 +8,16 @@ from ..analytics import (
     resolve_report_year,
 )
 from ..cctv_metrics import build_month_metrics_by_branch, summarize_by_period, summarize_cctv_rows
-from ..charts import trend_chart_payload
+from ..charts import per_series_trend_payloads, trend_chart_payload
 from ..db import get_connection
-from ..exports import build_workbook, send_workbook, style_header_row
+from ..exports import (
+    add_solo_item_charts,
+    add_stacked_total_chart,
+    build_workbook,
+    send_workbook,
+    style_header_row,
+    write_trend_matrix_sheet,
+)
 from ..queries import (
     get_cctv_items_by_branch_period,
     get_current_branch_breakdown,
@@ -111,6 +118,7 @@ def index():
         conn.close()
 
     all_branches_chart_data = trend_chart_payload(all_periods, all_matrix)
+    device_trend_charts = per_series_trend_payloads(all_periods, all_matrix)
 
     return render_template(
         "cctv_dashboard.html",
@@ -119,6 +127,7 @@ def index():
         cctv_count=cctv_count,
         latest_cctv_batch=latest_cctv_batch,
         all_branches_chart_data=all_branches_chart_data,
+        device_trend_charts=device_trend_charts,
         available_years=available_years,
         selected_year=selected_year,
         month_periods=month_periods,
@@ -144,6 +153,12 @@ def export_compare():
             conn, selected_year, table=TABLE
         )
         branch_tree = _build_branch_tree_with_months(conn, month_periods)
+
+        all_periods, _all_items, all_matrix = get_all_branches_item_trend(conn, table=TABLE)
+        camera_totals_by_period = summarize_by_period(get_cctv_items_by_branch_period(conn))
+        all_matrix["Cameras"] = {
+            period: (data["camera_total"] or 0) for period, data in camera_totals_by_period.items()
+        }
     finally:
         conn.close()
 
@@ -182,5 +197,14 @@ def export_compare():
                 ]
             )
     style_header_row(month_ws)
+
+    items = list(all_matrix.keys())
+    if len(all_periods) >= 2 and items:
+        trend_ws = write_trend_matrix_sheet(wb, "Item Count Trend", all_periods, items, all_matrix)
+        add_stacked_total_chart(
+            trend_ws, "CCTV Item Count Trend - All Branches", len(all_periods), len(items),
+            "A" + str(len(all_periods) + 3),
+        )
+        add_solo_item_charts(trend_ws, items, len(all_periods), len(all_periods) + 20)
 
     return send_workbook(wb, f"cctv_compare_by_branch_{selected_year}.xlsx")

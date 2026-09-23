@@ -534,6 +534,12 @@ button.danger, .btn.danger { background: var(--danger); }
 .chart-wrap { position: relative; }
 .chart-wrap svg { width: 100%; height: auto; display: block; }
 
+/* Per-device mini-chart card title (TrendChart.initGrid): a single series
+   needs no legend box, but the swatch beside the title still carries
+   identity - text itself stays in ink, never the series color. */
+.chart-card-title { margin-top: 0; display: flex; align-items: center; gap: 0.45rem; }
+.chart-card-title .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+
 .crosshair-tip {
   position: absolute;
   top: 8px;
@@ -568,6 +574,12 @@ button.danger, .btn.danger { background: var(--danger); }
   margin-left: auto;
   font-variant-numeric: tabular-nums;
   font-weight: 600;
+}
+.crosshair-tip .tip-row.tip-total {
+  margin-top: 0.3rem;
+  padding-top: 0.3rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  font-weight: 700;
 }
 
 a.branch-link { color: var(--brand); text-decoration: none; }

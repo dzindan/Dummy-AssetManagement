@@ -11,6 +11,7 @@ from typing import Any, Iterable, Sequence
 
 import openpyxl
 from flask import Response, send_file
+from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import Font
 from openpyxl.worksheet.worksheet import Worksheet
 
@@ -99,6 +100,70 @@ def send_workbook(wb: openpyxl.Workbook, download_name: str) -> Response:
     wb.save(buf)
     buf.seek(0)
     return send_file(buf, as_attachment=True, download_name=download_name, mimetype=XLSX_MIMETYPE)
+
+
+# --- Trend charts (combined stacked total + one solo chart per device type) -
+# mirrors app/charts.py + app/static/trend_chart.js's on-page equivalents as
+# native openpyxl charts, so a report keeps working once downloaded instead
+# of just being a data dump. `items` is always `list(matrix.keys())` at the
+# call site - the same order/membership the on-page chart already uses
+# (including any manually merged-in series like CCTV's "Cameras") - never a
+# separately maintained list, so an export can't silently drift from what
+# the page shows.
+
+
+def write_trend_matrix_sheet(
+    wb: openpyxl.Workbook, sheet_title: str, periods: list[str], items: list[str], matrix: dict[str, dict[str, int]]
+) -> Worksheet:
+    """Periods as rows, one column per item - the rectangular grid a
+    BarChart's Reference can point at directly (openpyxl charts reference
+    cell ranges, not raw Python values)."""
+    ws = wb.create_sheet(sheet_title)
+    ws.append(["Period", *items])
+    for period in periods:
+        ws.append([period, *[matrix[item].get(period, 0) for item in items]])
+    style_header_row(ws)
+    return ws
+
+
+def add_stacked_total_chart(ws: Worksheet, title: str, n_periods: int, n_items: int, anchor: str) -> None:
+    """One stacked column chart, bar height per period = that period's
+    total across every item - the Excel counterpart of the page's combined
+    "Item Count Trend" chart."""
+    chart = BarChart()
+    chart.type = "col"
+    chart.grouping = "stacked"
+    chart.overlap = 100
+    chart.title = title
+    chart.y_axis.title = "Count"
+    last_row = 1 + n_periods
+    data = Reference(ws, min_col=2, max_col=1 + n_items, min_row=1, max_row=last_row)
+    cats = Reference(ws, min_col=1, min_row=2, max_row=last_row)
+    chart.add_data(data, titles_from_data=True)
+    chart.set_categories(cats)
+    chart.width, chart.height = 24, 10
+    ws.add_chart(chart, anchor)
+
+
+def add_solo_item_charts(ws: Worksheet, items: list[str], n_periods: int, start_row: int, col: str = "A") -> None:
+    """One small single-series column chart per item, anchored in a
+    vertical stack - the Excel counterpart of the page's per-device-type
+    chart grid. `start_row` should be well clear of the data table and the
+    stacked total chart added above it."""
+    last_row = 1 + n_periods
+    for i, item in enumerate(items):
+        data_col = 2 + i
+        chart = BarChart()
+        chart.type = "col"
+        chart.title = item
+        chart.legend = None
+        chart.y_axis.title = None
+        data = Reference(ws, min_col=data_col, max_col=data_col, min_row=1, max_row=last_row)
+        cats = Reference(ws, min_col=1, min_row=2, max_row=last_row)
+        chart.add_data(data, titles_from_data=True)
+        chart.set_categories(cats)
+        chart.width, chart.height = 12, 7
+        ws.add_chart(chart, f"{col}{start_row + i * 15}")
 
 
 # Column shape shared by the "list of current asset rows" exports (Branch

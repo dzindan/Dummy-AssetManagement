@@ -555,6 +555,33 @@ def get_user_asset_history(conn, user_id_norm: str):
     return conn.execute(sql, [user_id_norm]).fetchall()
 
 
+def get_serial_history(conn, serial_tag: str):
+    """Every period's snapshot of one serial-tagged device, oldest first -
+    the raw material for a custody timeline (see
+    user_history._build_custody_segments). A serial is the only asset
+    identity that stays stable across a hand-over (importer._asset_key()'s
+    no-serial fallback key bakes user_id_norm into the key itself, so a
+    no-serial device's identity changes the moment it's reassigned - this
+    function only makes sense for serialed devices). Deduped to the latest
+    batch per period, same convention as analytics.py/diffing.py, unlike
+    get_user_asset_history() above (which intentionally spans every batch)."""
+    sql = """
+    WITH rows AS (
+        SELECT ai.*, ib.period AS period, ib.label AS batch_label
+        FROM asset_items ai
+        JOIN import_batches ib ON ib.id = ai.batch_id
+        WHERE UPPER(ai.serial_tag) = ? AND ib.period IS NOT NULL AND ib.period != ''
+    ),
+    latest AS (
+        SELECT period, MAX(batch_id) AS batch_id FROM rows GROUP BY period
+    )
+    SELECT r.* FROM rows r
+    JOIN latest l ON r.period = l.period AND r.batch_id = l.batch_id
+    ORDER BY r.period
+    """
+    return conn.execute(sql, [serial_tag.strip().upper()]).fetchall()
+
+
 def get_latest_batch(conn, kind: str = "asset_report"):
     return conn.execute(
         "SELECT * FROM import_batches WHERE kind = ? ORDER BY id DESC LIMIT 1",
