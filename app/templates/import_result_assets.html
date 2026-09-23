@@ -14,6 +14,12 @@
       <div class="stat-tile"><div class="value">{{ r.rows_imported }}</div><div class="label">Rows imported</div></div>
       <div class="stat-tile"><div class="value">{{ r.rows_skipped_no_data }}</div><div class="label">Skipped (empty)</div></div>
     </div>
+    {% if r.rows_skipped_header_repeat %}
+    <p class="muted" style="margin-top:0.6rem;">
+      Also skipped <strong>{{ r.rows_skipped_header_repeat }}</strong> row(s) that just repeat the column headers
+      (e.g. "Device Name" / "Serial Number") - not devices.
+    </p>
+    {% endif %}
     <p class="muted" style="margin-top:0.9rem;">
       Sheet: <strong>{{ r.sheet_name }}</strong> &middot;
       Branch label found in file: <strong>{{ r.branch_hint or '-' }}</strong> &middot;

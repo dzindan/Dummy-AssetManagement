@@ -332,6 +332,50 @@ class ImportAssetReportMultiSheetTests(unittest.TestCase):
         self.assertEqual(reports[0].kind, "asset_report")
         self.assertEqual(reports[0].rows_imported, 1)
 
+    def test_repeated_header_rows_are_not_imported_as_devices(self):
+        """Both shapes seen in real files: an exact copy of the header row
+        below it (DIST 10 T.O's OA sheet), and a template sample row with
+        its own spelling (CMC's CCTV sheet: Device Name / MODEL DIVECE /
+        Serial Number / Branch Name)."""
+        wb = openpyxl.Workbook()
+        oa = wb.active
+        oa.title = "OA EQUIPMENT"
+        oa.append([None] * 7 + ["Branch/TO/Center Name:", "Test Branch"])
+        header = ["NO", "BRANCH / DEPT", "DEVICE NAME", "USER ID", "FULL NAME", "IP", "MODEL DEVICE",
+                  "SERIAL/ SERVICE TAG", "STATUS", "REMARK"]
+        oa.append(header)
+        oa.append(["NO", "BRANCH / DEPT", "DEVICE NAME", "USER ID", "FULL NAME", "IP", "MODEL DEVICE",
+                   "SERIAL/ SERVICE TAG", "STATUS", "REMARK"])
+        oa.append([1, "TEST BRANCH", "PC", "1001", "NGUYEN VAN A", "10.0.0.1", "DELL 3060", "SN-PC-1", "USING LOCAL", ""])
+
+        cctv = wb.create_sheet("CCTV REPORT")
+        cctv.append([None] * 10 + ["Branch/TO/Center Name:", "Test Branch"])
+        cctv.append(
+            ["NO", "BRANCH / DEPT", "DEVICE NAME", "IP ADDRESS", "PRODUCTION", "MODEL DEVICE", "SERIAL NO",
+             "STATUS", "NUMBER  OF CAMERA CONNECTED", "NUMBER OF HARD DISK", "CAPACITY OF ALL HARD DISK",
+             "LOCATION", "REMARK"]
+        )
+        cctv.append([1, "Branch Name", "Device Name", "", "", "MODEL DIVECE", "Serial Number",
+                     "USING LOCAL", None, None, None, "IT ROOM", ""])
+        cctv.append([2, "TEST BRANCH", "DVR", "10.0.1.1", "HIK VISION", "DS-7316", "SN-CCTV-1",
+                     "USING LOCAL", 16, "3", "24TB", "IT ROOM", ""])
+        path = os.path.join(self.tmpdir, "header_repeat.xlsx")
+        wb.save(path)
+
+        reports = {r.kind: r for r in import_asset_report(path, source_label="header_repeat.xlsx", period="2026-03")}
+        self.assertEqual(reports["asset_report"].rows_skipped_header_repeat, 1)
+        self.assertEqual(reports["cctv_report"].rows_skipped_header_repeat, 1)
+        self.assertEqual(reports["cctv_report"].rows_imported, 1)
+
+        conn = get_connection()
+        try:
+            asset_devices = sorted(r["device_name"] for r in conn.execute("SELECT device_name FROM asset_items"))
+            cctv_devices = [r["device_name"] for r in conn.execute("SELECT device_name FROM cctv_items")]
+        finally:
+            conn.close()
+        self.assertEqual(asset_devices, ["DVR", "PC"])  # the PC + the mirrored DVR, no header rows
+        self.assertEqual(cctv_devices, ["DVR"])
+
 
 class ReresolveCctvUnresolvedTests(unittest.TestCase):
     """reresolve_unresolved_assets used to only touch asset_items - a CCTV

@@ -141,6 +141,20 @@ def _build_alias_lookup() -> dict[str, str]:
 _ALIAS_LOOKUP = _build_alias_lookup()
 
 
+def _is_repeated_header_row(device_cell, serial_cell) -> bool:
+    """True when a data row's Device Name or Serial cell is itself one of
+    those columns' header labels ("Device Name", "Serial Number", ...) - a
+    second copy of the header row, or a template's sample row, sitting
+    below the real header. Seen in practice on a CCTV sheet: a row reading
+    Device Name / MODEL DIVECE / Serial Number / Branch Name got imported
+    as a device called "DEVICE NAME". No real device is named after its
+    own column header, so these rows are skipped rather than imported."""
+    return (
+        _ALIAS_LOOKUP.get(_normalize_header_cell(device_cell)) == "device_name"
+        or _ALIAS_LOOKUP.get(_normalize_header_cell(serial_cell)) == "serial_tag"
+    )
+
+
 @dataclass
 class HeaderMatch:
     sheet_name: str
@@ -517,6 +531,8 @@ class CleaningReport:
     rows_read: int = 0
     rows_imported: int = 0
     rows_skipped_no_data: int = 0
+    # Rows that just repeat the column headers (see _is_repeated_header_row).
+    rows_skipped_header_repeat: int = 0
     # [{"serial": "...", "asset_ids": [id, id, ...]}] - one entry per serial
     # that appeared more than once in this import, so each occurrence can be
     # opened directly for editing from the cleaning report.
@@ -621,6 +637,9 @@ def _ingest_asset_rows(
 
         if not device_name_raw and not serial_tag:
             report.rows_skipped_no_data += 1
+            continue
+        if _is_repeated_header_row(get(row, "device_name"), get(row, "serial_tag")):
+            report.rows_skipped_header_repeat += 1
             continue
 
         device_clean = device_name_raw.upper()
@@ -824,6 +843,9 @@ def _ingest_cctv_rows(
 
         if not device_name_raw and not serial_tag:
             report.rows_skipped_no_data += 1
+            continue
+        if _is_repeated_header_row(get(row, "device_name"), get(row, "serial_tag")):
+            report.rows_skipped_header_repeat += 1
             continue
 
         device_clean = device_name_raw.upper()
