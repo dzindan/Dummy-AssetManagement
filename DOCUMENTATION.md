@@ -68,9 +68,10 @@ computers on the same office network.
     link, so it can be pulled up again without re-importing or hunting for
     the original Cleaning Report page.
 12. **Grouped navigation**: the top menu collapses related pages into
-    dropdowns — **Assets** (Manage Assets, User History, Network Check) and
-    **Hand-Over** (Lookup & Hand-Over, History) — alongside standalone
-    Dashboard, Import Data, and Settings links, so related functionality
+    dropdowns — **Assets** (Manage Assets, Manage CCTV, User History,
+    Network Check, CUCM Phone Scan) and **Hand-Over** (Lookup & Hand-Over,
+    History) — alongside standalone Asset Dashboard, CCTV Dashboard, Import
+    Data, and Settings links, so related functionality
     lives in one place instead of a long flat list.
 13. **Network Check** (Assets → Network Check): either picks a branch and
     pings every IP address recorded against that branch's current assets
@@ -188,6 +189,33 @@ computers on the same office network.
     optional local WSDL path, auto-split ranges) live in Settings → CUCM
     Connection - the AXL password is never written in plaintext to the
     Activity Log, only that it changed.
+23. **CCTV tracking**: a branch's monthly asset report file often has a
+    separate CCTV sheet (DVRs/recorders and monitors, with camera count,
+    HDD count, HDD capacity, location). Importing the file picks it up
+    automatically as its own `cctv_report` batch - no separate upload. Three
+    places show it:
+    - **CCTV Dashboard** (top menu): the same layout as the Asset
+      Dashboard, but for CCTV - a trend line chart per device type plus
+      a **Cameras** series, one small chart per type, a Year Comparison
+      panel, and a **Compare by Branch** tree (one row per branch with
+      DVR/Recorder count and Camera / HDD Count / HDD Capacity totals;
+      expand for the individual units and a month-by-month breakdown with
+      +/- deltas). **Export to Excel** downloads the Compare by Branch data
+      plus the trend sheet.
+    - **Manage CCTV** (Assets → Manage CCTV): the CCTV version of Manage
+      Assets - a paginated, filterable table (branch, device, status,
+      free-text search) with Edit / Delete / bulk delete (needs the
+      `edit_assets` permission) and Excel export. Edits and deletes go to
+      the Activity Log under the "Manage CCTV" category.
+    - **Branch Detail**: a CCTV section under the asset trend chart
+      (summary tiles, its own trend chart, month table, CCTV Breakdown by
+      status) and a separate **Export CCTV to Excel** button.
+
+    DVRs/monitors from the CCTV sheet also appear in Manage Assets as
+    ordinary equipment (see §4 CCTV), so a branch's inventory includes its
+    recording gear. Editing a device's shared fields (serial, model,
+    status, ...) in either Manage CCTV or Manage Assets updates the other
+    one too.
 
 ---
 
@@ -204,10 +232,10 @@ computers on the same office network.
   migration). See §5 for the full layout and why it's split this way; §8
   for the DB's concurrency characteristics. Chosen because this is a
   small-team internal tool.
-- **Charts**: interactive stacked-column charts (bar height = that month's
-  total) with clickable device/branch slicer chips that re-stack the
-  remaining series, plus a grid of small one-series charts, one per device
-  type, beneath each combined chart. Hand-rolled (`app/charts.py` shapes the data server-side into a
+- **Charts**: interactive line charts, one line per device type, with
+  clickable device/branch slicer chips (hiding a line rescales the y-axis
+  to the lines that are left), plus a grid of small one-series charts, one
+  per device type, beneath each combined chart. Hand-rolled (`app/charts.py` shapes the data server-side into a
   small JSON payload; `app/static/trend_chart.js` draws the SVG and wires
   hover/click client-side) — no JS charting library, so the app stays fully
   offline with nothing to bundle or fetch.
@@ -237,6 +265,8 @@ app/
   charts.py                   Trend-chart JSON payload + stable per-name
                                  color hashing (SVG itself is drawn by
                                  app/static/trend_chart.js, client-side)
+  cctv_metrics.py              Parses CCTV free-text camera/HDD fields into
+                                 totals + month-over-month deltas (§4 CCTV)
   handover.py                  Hand-over .docx rendering + history logging +
                                  stamping asset_items.handover_date (§6)
   text_utils.py                 Tiny string/date helpers (IP cleaning,
@@ -249,9 +279,12 @@ app/
   routes/                       One module per page (dashboard, import_data,
                                  lookup, history, settings, branch_detail,
                                  asset_edit, user_history, network_check,
-                                 cucm_scan, user_admin) - asset_edit.py
+                                 cucm_scan, user_admin, cctv_dashboard,
+                                 cctv_edit) - asset_edit.py
                                  serves both the Manage Assets list/filter
-                                 page and the single-asset edit form;
+                                 page and the single-asset edit form
+                                 (cctv_edit.py does the same for Manage
+                                 CCTV);
                                  update_compare.py is now just the Excel
                                  diff-export endpoint (see §4 - the upload +
                                  diff flow itself lives on Import Data)
@@ -282,6 +315,15 @@ build.spec                            PyInstaller spec
   the branch name in its own per-row column), the importer falls back to the
   first non-empty value in that column as the file's branch hint, so it
   still resolves instead of landing entirely in the "unresolved" bucket.
+  A file can also carry a **CCTV sheet** (headers like `NUMBER OF CAMERA
+  CONNECTED`, `NUMBER OF HARD DISK`, `CAPACITY OF ALL HARD DISK`,
+  `LOCATION`, `PRODUCTION` for manufacturer - see `CCTV_FIELD_ALIASES`);
+  both sheets are imported, each as its own batch (§4 CCTV).
+  A row whose Device Name or Serial cell is just that column's header
+  label ("Device Name", "Serial Number", ... - a repeated header row or a
+  template's sample row) is skipped, not imported as a device
+  (`importer._is_repeated_header_row`), and counted separately on the
+  Cleaning Report.
 - `IDFromAither/*.xlsx` — two files: a branch master list (`Branch No`,
   `Local/Eng Branch Name`) and a user/banker list (`Branch ID`, `User No`,
   `User Name`...). Import Data has a dedicated upload for each
@@ -309,10 +351,18 @@ Tables (see `app/db.py` for the full schema):
 - `import_batches` — one row per import. Carries `period` ("YYYY-MM"): the
   month the data is *about*, distinct from `imported_at` (when it was
   actually imported). Set explicitly at upload time (defaults to the current
-  month); this is what the trend charts group by.
+  month); this is what the trend charts group by. `kind` says what the
+  batch holds - e.g. `asset_report` (rows in `asset_items`) or
+  `cctv_report` (rows in `cctv_items`).
 - `asset_items` — every row from every import, ever (nothing is deleted).
   `device_name` is the normalized/canonical name; `device_name_raw` keeps
   what the source file actually said.
+- `cctv_items` — the CCTV equivalent of `asset_items`, one row per
+  DVR/recorder/monitor from a CCTV sheet. No user fields (CCTV gear isn't
+  assigned to a person); instead `manufacturer`, `camera_count`,
+  `hdd_count`, `hdd_capacity`, `location` - all stored as the file's own
+  free text (see §4 CCTV for how they're totalled). `asset_item_id` points
+  at the linked `asset_items` row, so edits can sync between the two.
 - `handover_records` — one row per generated hand-over form, written only
   when the user clicks **Confirm & Download** on the Review page (see §6).
 - `branch_aliases` — user-editable configuration (Settings page). Portable
@@ -793,19 +843,87 @@ one row per (period, asset) with an Added/Removed column, and the serial
 mode exports the segment table.
 
 **Trend charts and trend sheets in Excel exports**: the Dashboard, Branch
-Detail and CCTV Dashboard each show one combined stacked-column chart plus
+Detail and CCTV Dashboard each show one combined line chart plus
 one small chart per device type (`charts.per_series_trend_payloads`,
 colored by the same `_assign_colors` call as the combined chart so a
-device's small chart always matches its segment color). Their Excel
+device's small chart always matches its line color). Their Excel
 exports mirror this with an **Item Count Trend** sheet
 (`exports.write_trend_matrix_sheet` - a period × device-type count
-matrix - plus `add_stacked_total_chart` and `add_solo_item_charts`, native
-Excel charts). The CCTV versions (the CCTV Dashboard export, and Branch
+matrix - plus `add_trend_line_chart` and `add_solo_item_charts`, native
+Excel line charts). The CCTV versions (the CCTV Dashboard export, and Branch
 Detail's CCTV export, whose sheet is named "CCTV Item Count Trend") add a
 **Cameras** series,
 the same best-effort free-text camera total the on-page CCTV chart uses.
 Charts and sheets are both skipped when there are fewer than 2 periods of
 history.
+
+**CCTV** (`importer._ingest_cctv_rows`, `cctv_metrics.py`,
+`routes/cctv_dashboard.py`, `routes/cctv_edit.py`):
+
+- **Sheet detection**: `detect_equipment_sheets` keeps the best-scoring
+  sheet *per kind* - at most one regular equipment sheet and one CCTV sheet
+  per file - rather than a single global best, which used to silently drop
+  the CCTV sheet. A header row counts as CCTV when it has any of
+  `camera_count`/`hdd_count`/`hdd_capacity`/`location` on top of the
+  normal required DEVICE NAME + serial columns. Only the best sheet of each
+  kind is taken so stray copy sheets ("Sheet5", "To print") don't import
+  the same equipment twice.
+- **Where the rows stop**: CCTV sheets usually end with a "NUMBER OF CAMERA
+  CONNECTED / Qty" summary table down to a "Grand Total" row. It's a
+  legend, not equipment, and it isn't always separated by a blank row.
+  Import stops at the first row whose row-number (`NO` / `NO.` / `STT`)
+  column is blank, or at the first fully blank row if the sheet has no
+  such column.
+- **Normalization**: device/status/model go through the same alias tables
+  as `asset_items`, so Settings' existing mapping pools cover CCTV values
+  too, and renaming/merging a standard name updates both tables. Branch
+  resolution works the same way (including the retroactive
+  `reresolve_unresolved_assets` fix). Identity is `_cctv_asset_key`: the
+  serial if there is one, otherwise branch + device + model (no user
+  component, unlike `_asset_key`).
+- **Mirroring into `asset_items`**: every CCTV row is also inserted into the
+  same file's `asset_report` batch with just the plain equipment fields,
+  so Manage Assets, the Asset Dashboard and Branch Detail count recording
+  gear too. It's skipped when a row with the same serial is already in
+  that batch (the same DVR listed on both the OA sheet and the CCTV
+  sheet). A file with *only* a CCTV sheet gets an `asset_report` batch
+  created just to hold the mirrored rows. The asset sheet is always
+  processed first so the serials to dedupe against are known.
+- **Current state and trends**: exactly the same per-branch/latest-period
+  rules as assets (`CURRENT_CCTV_CTE` is
+  `current_assets_cte(table="cctv_items")`; the analytics functions take
+  `table="cctv_items"`), and the CCTV Dashboard's year selector only
+  offers years that have `cctv_report` batches.
+- **Camera / HDD totals are best-effort**: `camera_count`, `hdd_count` and
+  `hdd_capacity` are free text in the source files ("24TB", "16TB (2X8TB)
+  Total", "7452.04 GB", "21.86T", ...). `cctv_metrics` takes the first
+  integer for counts and the first `<number> TB/GB/T` for capacity (GB is
+  divided by 1024 to get TB) and sums whatever parses. A total shows as
+  "-" only when *no* row parsed - a partial parse still sums what it
+  could, so one typo doesn't blank out a whole branch. The **Cameras**
+  trend series is this camera total per period, not a device count.
+  Month-over-month changes here are plain number differences (vs.
+  whatever period comes before on record), not the identity-based
+  added/removed used for assets, since individual cameras/HDDs have no
+  identity to track.
+- **Manage CCTV edits**: everything in `EDITABLE_FIELDS` is uppercased on
+  save, and each changed field gets its own Activity Log entry (category
+  `cctv`) with old/new value, same as Manage Assets.
+- **Edits stay in sync between Manage CCTV and Manage Assets**
+  (`cctv_items.asset_item_id`, `db.sync_cctv_asset_link`): each CCTV row
+  records the `asset_items` row it was mirrored into at import - or, for a
+  DVR also listed on the OA sheet, that OA row (same serial). Editing
+  Device, Model, Serial, Status, Branch/Dept, IP or Remark on either side
+  copies just the fields that changed to the other side, with its own
+  Activity Log entry ("... (synced from CCTV #n)" / "(synced from Asset
+  #n)"). User/handover fields and camera/HDD fields exist on only one side
+  and are never copied. Deletes are *not* synced - deleting on one side
+  leaves the other row in place. Databases from before this column
+  existed are linked once on startup (`db._backfill_cctv_asset_links`):
+  by serial within the same import's asset batch, and for rows with no
+  serial, by walking the mirrored rows from the end and matching the raw
+  device/model/status text. A row it can't match safely is left unlinked
+  (edits there just don't sync).
 
 **Device Name Mapping UI** (Settings → Device Name Mapping): the standard
 list is fully editable (add/rename/delete). Unmapped names appear as small
