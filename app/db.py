@@ -119,6 +119,11 @@ CREATE TABLE IF NOT EXISTS cctv_items (
     location TEXT,
     remark TEXT,
     source_file TEXT,
+    -- The asset_items row this CCTV row was mirrored into at import (or the
+    -- OA-sheet row with the same serial it was deduped against) - see
+    -- importer._ingest_cctv_rows. Lets an edit on either side be copied to
+    -- the other (sync_cctv_asset_link). NULL when there's no such row.
+    asset_item_id INTEGER,
     FOREIGN KEY (batch_id) REFERENCES import_batches (id)
 );
 
@@ -678,6 +683,7 @@ def init_db() -> None:
                                "model_unmapped", "raw_model")
         prune_stale_unmapped(conn)
         _backfill_user_no_norm(conn)
+        _backfill_cctv_asset_links(conn)
         _seed_permissions_and_roles(conn)
         conn.commit()
     finally:
@@ -729,6 +735,12 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
     if "created_by" not in existing_handover_cols:
         conn.execute("ALTER TABLE handover_records ADD COLUMN created_by TEXT")
 
+    existing_cctv_cols = {row["name"] for row in conn.execute("PRAGMA table_info(cctv_items)").fetchall()}
+    if "asset_item_id" not in existing_cctv_cols:
+        conn.execute("ALTER TABLE cctv_items ADD COLUMN asset_item_id INTEGER")
+    # Same reason as idx_users_no_norm above - must run after the ALTER.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_cctv_items_asset_item ON cctv_items (asset_item_id)")
+
 
 def _backfill_user_no_norm(conn: sqlite3.Connection) -> None:
     """Populate `users.user_no_norm` for rows imported before that column
@@ -742,6 +754,132 @@ def _backfill_user_no_norm(conn: sqlite3.Connection) -> None:
     for row in rows:
         _, norm = normalize_user_id(row["user_no"])
         conn.execute("UPDATE users SET user_no_norm = ? WHERE user_no = ?", (norm, row["user_no"]))
+
+
+def _backfill_cctv_asset_links(conn: sqlite3.Connection) -> None:
+    """Set cctv_items.asset_item_id for rows imported before that column
+    existed. The mirror batch is the asset_report batch created by the
+    same import (same imported_at + source_files_json - see
+    importer.import_asset_report). Within it:
+
+    - a CCTV row with a serial links to the batch's one asset row with
+      that serial (its mirror, or the OA-sheet row it was deduped against);
+      skipped if there's no such row or more than one (e.g. a serial edited
+      since import) rather than guessing.
+    - a CCTV row with no serial was always mirrored, and mirrored rows are
+      the last ones inserted into the batch, in the same order as the CCTV
+      rows - so walk both from the end, pairing on the raw device/model/
+      status text (never edited after import).
+
+    Only looks at batches that still have unlinked rows, so it's close to
+    a no-op on every startup after the first."""
+    cctv_batches = conn.execute(
+        """
+        SELECT DISTINCT ib.id, ib.imported_at, ib.source_files_json
+        FROM cctv_items ci JOIN import_batches ib ON ib.id = ci.batch_id
+        WHERE ci.asset_item_id IS NULL AND ib.kind = 'cctv_report'
+        """
+    ).fetchall()
+    if not cctv_batches:
+        return
+    claimed = {
+        r["asset_item_id"] for r in conn.execute(
+            "SELECT asset_item_id FROM cctv_items WHERE asset_item_id IS NOT NULL"
+        ).fetchall()
+    }
+
+    def raw_key(r):
+        return (r["device_name_raw"] or "", r["model_device_raw"] or "", r["status_raw"] or "")
+
+    for batch in cctv_batches:
+        mirror = conn.execute(
+            "SELECT id FROM import_batches WHERE kind = 'asset_report' AND imported_at = ? "
+            "AND source_files_json = ? ORDER BY id LIMIT 1",
+            (batch["imported_at"], batch["source_files_json"]),
+        ).fetchone()
+        if mirror is None:
+            continue
+        asset_rows = conn.execute(
+            "SELECT id, serial_tag, device_name_raw, model_device_raw, status_raw "
+            "FROM asset_items WHERE batch_id = ? ORDER BY id",
+            (mirror["id"],),
+        ).fetchall()
+        cctv_rows = conn.execute(
+            "SELECT id, serial_tag, device_name_raw, model_device_raw, status_raw "
+            "FROM cctv_items WHERE batch_id = ? AND asset_item_id IS NULL ORDER BY id",
+            (batch["id"],),
+        ).fetchall()
+
+        by_serial: dict[str, list[int]] = {}
+        for r in asset_rows:
+            serial = (r["serial_tag"] or "").strip().upper()
+            if serial:
+                by_serial.setdefault(serial, []).append(r["id"])
+        for c in cctv_rows:
+            serial = (c["serial_tag"] or "").strip().upper()
+            matches = by_serial.get(serial, []) if serial else []
+            if len(matches) == 1:
+                conn.execute("UPDATE cctv_items SET asset_item_id = ? WHERE id = ?", (matches[0], c["id"]))
+                claimed.add(matches[0])
+
+        candidates = [r for r in asset_rows if not (r["serial_tag"] or "").strip() and r["id"] not in claimed]
+        for c in reversed([c for c in cctv_rows if not (c["serial_tag"] or "").strip()]):
+            for i in range(len(candidates) - 1, -1, -1):
+                if raw_key(candidates[i]) == raw_key(c):
+                    conn.execute(
+                        "UPDATE cctv_items SET asset_item_id = ? WHERE id = ?", (candidates[i]["id"], c["id"])
+                    )
+                    claimed.add(candidates[i]["id"])
+                    del candidates[i]
+                    break
+
+
+# Fields both Manage Assets and Manage CCTV can edit, and that mean the same
+# thing on both sides - an edit to one of these on a linked row is copied
+# across (see cctv_items.asset_item_id).
+CCTV_ASSET_SYNCED_FIELDS = (
+    "device_name", "model_device", "serial_tag", "status", "branch_dept", "ip", "remark",
+)
+
+
+def sync_cctv_asset_link(conn, source_table: str, row_id: int, changed: dict, performed_by: str = "") -> None:
+    """Copy `changed` ({field: new value}, only fields that actually
+    changed) from one side of a CCTV <-> asset link to the other, logging
+    each copied field to the Activity Log under the other side's category.
+    `source_table` is the table that was just edited. Fields outside
+    CCTV_ASSET_SYNCED_FIELDS (user/handover fields, camera/HDD fields) are
+    ignored. Doesn't commit."""
+    fields = {f: v for f, v in changed.items() if f in CCTV_ASSET_SYNCED_FIELDS}
+    if not fields:
+        return
+    if source_table == "cctv_items":
+        link = conn.execute("SELECT asset_item_id FROM cctv_items WHERE id = ?", (row_id,)).fetchone()
+        target_table, category, label, source_label = "asset_items", "asset", "Asset", "CCTV"
+        action = "Edited asset"  # same action names Manage Assets/CCTV log themselves
+        target_ids = [link["asset_item_id"]] if link and link["asset_item_id"] else []
+    else:
+        target_table, category, label, source_label = "cctv_items", "cctv", "CCTV", "Asset"
+        action = "Edited CCTV item"
+        target_ids = [
+            r["id"] for r in conn.execute("SELECT id FROM cctv_items WHERE asset_item_id = ?", (row_id,)).fetchall()
+        ]
+
+    columns = ", ".join(fields)
+    for target_id in target_ids:
+        target = conn.execute(f"SELECT {columns} FROM {target_table} WHERE id = ?", (target_id,)).fetchone()
+        if target is None:
+            continue
+        diff = {f: v for f, v in fields.items() if (target[f] or "") != v}
+        if not diff:
+            continue
+        set_clause = ", ".join(f"{f} = ?" for f in diff)
+        conn.execute(f"UPDATE {target_table} SET {set_clause} WHERE id = ?", [*diff.values(), target_id])
+        for f, v in diff.items():
+            log_activity(
+                conn, category, f"{action} (synced from {source_label} #{row_id})",
+                performed_by=performed_by, target=f"{label} #{target_id}",
+                field=f, old_value=target[f] or "", new_value=v,
+            )
 
 
 def backfill_unmapped(

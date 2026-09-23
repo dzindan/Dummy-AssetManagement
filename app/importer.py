@@ -733,7 +733,7 @@ def _ingest_cctv_rows(
     report: CleaningReport,
     fixed_branch_no: str | None = None,
     mirror_batch_id: int | None = None,
-    mirrored_serials: set[str] | None = None,
+    mirrored_serials: dict[str, int] | None = None,
     no_col_idx: int | None = None,
 ) -> None:
     """Same idea as _ingest_asset_rows, for a CCTV-report sheet's rows -
@@ -753,8 +753,10 @@ def _ingest_cctv_rows(
     a row with the same serial is already sitting in that batch (the same
     physical DVR listed on both the file's OA sheet and its CCTV sheet),
     in which case it's skipped rather than double-counted. `mirrored_serials`
-    is the (upper-cased) set of serials already in that batch, seeded by
-    the caller and grown here as rows get mirrored."""
+    maps each (upper-cased) serial already in that batch to its asset_items
+    id, seeded by the caller and grown here as rows get mirrored. Every
+    CCTV row gets its cctv_items.asset_item_id set to the mirror row it
+    created, or to the existing row it was deduped against."""
     seen_keys: dict[str, int] = {}
     duplicate_ids: dict[str, list[int]] = {}
     serial_display: dict[str, str] = {}
@@ -892,9 +894,10 @@ def _ingest_cctv_rows(
 
         if mirror_batch_id is not None:
             serial_norm = serial_tag.upper() if serial_tag else ""
-            if not serial_norm or (mirrored_serials is not None and serial_norm not in mirrored_serials):
+            linked_asset_id = mirrored_serials.get(serial_norm) if serial_norm and mirrored_serials else None
+            if linked_asset_id is None:
                 asset_asset_key = _asset_key(branch_dept_cell, device_name, model_device, serial_tag, "")
-                conn.execute(
+                linked_asset_id = conn.execute(
                     """
                     INSERT INTO asset_items (
                         batch_id, asset_key, branch_dept, branch_no, device_name, device_name_raw,
@@ -907,9 +910,13 @@ def _ingest_cctv_rows(
                         "", "", "", "", model_device, model_device_raw,
                         serial_tag, status, status_raw, _clean_str(get(row, "remark")), "", "", ip, None, source_label,
                     ),
-                )
+                ).lastrowid
                 if serial_norm and mirrored_serials is not None:
-                    mirrored_serials.add(serial_norm)
+                    mirrored_serials[serial_norm] = linked_asset_id
+            # Linked either way - to the new mirror row, or to the row already
+            # in the batch with this serial - so an edit on one side can be
+            # copied to the other (db.sync_cctv_asset_link).
+            conn.execute("UPDATE cctv_items SET asset_item_id = ? WHERE id = ?", (linked_asset_id, new_id))
 
         if serial_tag:
             if asset_key in seen_keys:
@@ -1069,7 +1076,7 @@ def import_asset_report(
     # mirror into it below.
     matches = sorted(matches, key=lambda m: m.kind == "cctv")
     asset_batch_id: int | None = None
-    asset_batch_serials: set[str] = set()
+    asset_batch_serials: dict[str, int] = {}
 
     for match in matches:
         is_cctv = match.kind == "cctv"
@@ -1167,11 +1174,13 @@ def import_asset_report(
                     fixed_branch_no=branch_no,
                 )
                 asset_batch_id = batch_id
-                asset_batch_serials = {
-                    r["serial_tag"].upper() for r in conn.execute(
-                        "SELECT serial_tag FROM asset_items WHERE batch_id = ? AND serial_tag != ''", (batch_id,)
-                    ).fetchall()
-                }
+                # First row per serial wins if the OA sheet itself repeats one.
+                asset_batch_serials = {}
+                for r in conn.execute(
+                    "SELECT id, serial_tag FROM asset_items WHERE batch_id = ? AND serial_tag != '' ORDER BY id",
+                    (batch_id,),
+                ).fetchall():
+                    asset_batch_serials.setdefault(r["serial_tag"].upper(), r["id"])
         except Exception as exc:  # noqa: BLE001 - surfaced to the user, mirrors the load_workbook guard above
             conn.rollback()
             report.error = f"Import failed while processing rows: {exc}"

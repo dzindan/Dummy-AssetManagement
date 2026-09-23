@@ -3,7 +3,7 @@ from urllib.parse import urlencode
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
 from ..auth import current_username, require_permission
-from ..db import get_connection, log_activity, prune_stale_unmapped
+from ..db import get_connection, log_activity, prune_stale_unmapped, sync_cctv_asset_link
 from ..exports import ASSET_ROW_COLUMNS, build_asset_rows_workbook, build_duplicates_workbook, dated_download_name, send_workbook
 from ..queries import (
     UNRESOLVED_BRANCH_FILTER,
@@ -293,13 +293,16 @@ def edit(asset_id):
                 [*values.values(), asset_id],
             )
             performed_by = current_username()
+            changed = {}
             for field_name, new_value in values.items():
                 old_value = asset[field_name] or ""
                 if old_value != new_value:
+                    changed[field_name] = new_value
                     log_activity(
                         conn, "asset", "Edited asset", performed_by=performed_by,
                         target=f"Asset #{asset_id}", field=field_name, old_value=old_value, new_value=new_value,
                     )
+            sync_cctv_asset_link(conn, "asset_items", asset_id, changed, performed_by=performed_by)
             prune_stale_unmapped(conn)
             conn.commit()
             flash(f"Asset #{asset_id} updated.", "success")
