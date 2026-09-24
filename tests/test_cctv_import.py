@@ -155,6 +155,90 @@ class ImportAssetReportMultiSheetTests(unittest.TestCase):
         self.assertEqual(dvr_row["location"], "IT ROOM")
         self.assertEqual(dvr_row["ip"], "10.0.1.1")
 
+    def _add_branch(self, no, name):
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO branches (branch_no, local_name, eng_name, updated_at) VALUES (?, ?, ?, datetime('now'))",
+                (no, name, name),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _cctv_sheet(self, wb, label, dept_cell):
+        cctv = wb.create_sheet("CCTV REPORT")
+        cctv.append([None] * 10 + ["Branch/TO/Center Name:", label] if label else [None] * 12)
+        cctv.append(
+            ["NO", "BRANCH / DEPT", "DEVICE NAME", "IP ADDRESS", "PRODUCTION", "MODEL DEVICE", "SERIAL NO",
+             "STATUS", "NUMBER  OF CAMERA CONNECTED", "NUMBER OF HARD DISK", "CAPACITY OF ALL HARD DISK",
+             "LOCATION", "REMARK"]
+        )
+        cctv.append([1, dept_cell, "CCTV RECORDING 1", "10.95.176.3", "HIKVISION", "DS-7324", "SN-HD-DVR",
+                     "USING LOCAL", 23, "2", "8TB", "SERVER ROOM", ""])
+
+    def test_cctv_sheet_takes_the_equipment_sheets_branch(self):
+        """Ha Dong's real files: OA sheet labelled with the branch, CCTV sheet
+        labelled with the managing department ("ICT PLANNING") - which also
+        exists as a branch code. The CCTV rows (and their Manage Assets
+        mirror) must land on the file's branch, not ICT Planning."""
+        self._add_branch("8129", "ICT PLANNING DEPARTMENT")
+        wb = openpyxl.Workbook()
+        oa = wb.active
+        oa.title = "OA EQUIPMENT"
+        oa.append([None] * 7 + ["Branch/TO/Center Name:", "Test Branch"])
+        oa.append(["NO", "BRANCH / DEPT", "DEVICE NAME", "USER ID", "FULL NAME", "IP", "MODEL DEVICE",
+                   "SERIAL/ SERVICE TAG", "STATUS", "REMARK"])
+        oa.append([1, "TEST BRANCH", "PC", "1001", "NGUYEN VAN A", "10.0.0.1", "DELL 3060", "SN-PC-1", "USING LOCAL", ""])
+        self._cctv_sheet(wb, "ICT PLANNING", "ICT PLANNING")
+        path = os.path.join(self.tmpdir, "ha_dong_like.xlsx")
+        wb.save(path)
+
+        reports = {r.kind: r for r in import_asset_report(path, source_label="ha_dong_like.xlsx", period="2026-07")}
+        self.assertEqual(reports["cctv_report"].branch_no, "001")
+        conn = get_connection()
+        try:
+            self.assertEqual(
+                {r["branch_no"] for r in conn.execute("SELECT branch_no FROM cctv_items")}, {"001"})
+            self.assertEqual(
+                {r["branch_no"] for r in conn.execute("SELECT branch_no FROM asset_items")}, {"001"})
+            self.assertIsNone(conn.execute(
+                "SELECT 1 FROM branch_unresolved WHERE raw_hint = 'ICT PLANNING'").fetchone())
+        finally:
+            conn.close()
+
+    def test_cctv_sheet_with_junk_label_uses_equipment_sheets_branch(self):
+        """HNCMC's real files: no label row, and the BRANCH/DEPT column holds a
+        device name - used to land in Unresolved."""
+        wb = openpyxl.Workbook()
+        oa = wb.active
+        oa.title = "OA EQUIPMENT"
+        oa.append([None] * 7 + ["Branch/TO/Center Name:", "Test Branch"])
+        oa.append(["NO", "BRANCH / DEPT", "DEVICE NAME", "USER ID", "FULL NAME", "IP", "MODEL DEVICE",
+                   "SERIAL/ SERVICE TAG", "STATUS", "REMARK"])
+        oa.append([1, "TEST BRANCH", "PC", "1001", "NGUYEN VAN A", "10.0.0.1", "DELL 3060", "SN-PC-1", "USING LOCAL", ""])
+        self._cctv_sheet(wb, None, "Embedded Net DVR")
+        path = os.path.join(self.tmpdir, "hncmc_like.xlsx")
+        wb.save(path)
+        reports = {r.kind: r for r in import_asset_report(path, source_label="hncmc_like.xlsx", period="2026-06")}
+        self.assertEqual(reports["cctv_report"].branch_no, "001")
+        conn = get_connection()
+        try:
+            self.assertIsNone(conn.execute(
+                "SELECT 1 FROM branch_unresolved WHERE raw_hint = 'Embedded Net DVR'").fetchone())
+        finally:
+            conn.close()
+
+    def test_cctv_only_file_still_uses_its_own_label(self):
+        self._add_branch("8129", "ICT PLANNING DEPARTMENT")
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        self._cctv_sheet(wb, "ICT PLANNING", "ICT PLANNING")
+        path = os.path.join(self.tmpdir, "cctv_only.xlsx")
+        wb.save(path)
+        reports = {r.kind: r for r in import_asset_report(path, source_label="cctv_only.xlsx", period="2026-07")}
+        self.assertEqual(reports["cctv_report"].branch_no, "8129")
+
     def test_cctv_row_sharing_a_serial_with_an_oa_sheet_row_is_not_duplicated(self):
         """The same physical DVR can legitimately appear as its own row on
         both the OA sheet (someone typed it into the generic equipment

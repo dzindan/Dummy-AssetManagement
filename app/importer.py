@@ -1125,6 +1125,10 @@ def import_asset_report(
     matches = sorted(matches, key=lambda m: m.kind == "cctv")
     asset_batch_id: int | None = None
     asset_batch_serials: dict[str, int] = {}
+    # (hint, branch_no, matched_name) of this file's equipment sheet, once it
+    # resolved - a monthly report file is one branch's report, so the CCTV
+    # sheet in the same file belongs to that branch too (see below).
+    file_branch: tuple[str, str, str] | None = None
 
     for match in matches:
         is_cctv = match.kind == "cctv"
@@ -1135,26 +1139,39 @@ def import_asset_report(
 
         ws = wb[match.sheet_name]
 
-        if not report.branch_hint and "branch_dept" in match.col_map:
-            # No separate "Branch/TO/Center Name:" label row was found - some
-            # files (e.g. ones with a plain "BRANCH" column instead) only carry
-            # the branch name once per row. Fall back to the first non-empty
-            # value in that column so the file still resolves to a branch
-            # instead of every row silently landing in "unresolved".
-            idx = match.col_map["branch_dept"]
-            for row in ws.iter_rows(min_row=match.header_row_idx + 2, values_only=True):
-                if row is None or idx >= len(row):
-                    continue
-                value = _clean_str(row[idx])
-                if value:
-                    report.branch_hint = value
-                    break
+        if is_cctv and file_branch is not None:
+            # The CCTV sheet's own branch label is unreliable: real files put
+            # the managing department there ("ICT PLANNING", "ICT"), or it's
+            # missing and the BRANCH/DEPT column fallback below picks up a
+            # device name ("Embedded Net DVR") or a template placeholder
+            # ("Branch Name"). Resolving it separately sent Ha Dong's DVRs to
+            # ICT Planning Department, District 7's to District 11, and
+            # HNCMC's to Unresolved. When the file's equipment sheet
+            # resolved, the CCTV sheet uses that branch instead.
+            report.branch_hint, branch_no, branch_matched = file_branch
+        else:
+            if not report.branch_hint and "branch_dept" in match.col_map:
+                # No separate "Branch/TO/Center Name:" label row was found - some
+                # files (e.g. ones with a plain "BRANCH" column instead) only carry
+                # the branch name once per row. Fall back to the first non-empty
+                # value in that column so the file still resolves to a branch
+                # instead of every row silently landing in "unresolved".
+                idx = match.col_map["branch_dept"]
+                for row in ws.iter_rows(min_row=match.header_row_idx + 2, values_only=True):
+                    if row is None or idx >= len(row):
+                        continue
+                    value = _clean_str(row[idx])
+                    if value:
+                        report.branch_hint = value
+                        break
 
-        branch_no, branch_matched = resolve_branch(conn, report.branch_hint)
+            branch_no, branch_matched = resolve_branch(conn, report.branch_hint)
+            if not branch_no:
+                record_unresolved_branch(conn, report.branch_hint)
+            elif not is_cctv:
+                file_branch = (report.branch_hint, branch_no, branch_matched)
         report.branch_matched = branch_matched
         report.branch_no = branch_no
-        if not branch_no:
-            record_unresolved_branch(conn, report.branch_hint)
 
         header_row_values = next(
             ws.iter_rows(min_row=match.header_row_idx + 1, max_row=match.header_row_idx + 1, values_only=True)
