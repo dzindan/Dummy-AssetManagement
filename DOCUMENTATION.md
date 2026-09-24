@@ -725,7 +725,13 @@ Two different display rules sit on top of that diff, one per consumer:
   before). A `year` query param on both `/` and `/export` picks the year;
   it defaults to the most recent year with data. `get_available_report_years()`
   drives the selector by scanning `import_batches.period` for distinct
-  `YYYY` prefixes. A separate **Year Comparison** panel
+  `YYYY` prefixes. Rows default to the latest count, largest first; the
+  **Branch / Dept** header is clickable and cycles through A-Z
+  (`sort=branch`), Z-A (`sort=-branch`) and back to the default
+  (`dashboard._sort_month_table`, case-insensitive; the "Unresolved" row
+  always stays last). The sort is kept when the year changes and is
+  applied to `/export` too, so the Excel file matches the screen. A
+  separate **Year Comparison** panel
   (`analytics.get_year_comparison_table`) shows one row per year - that
   year's end-of-year snapshot count (bounded `period <= "YYYY-12"`, same
   per-branch latest-period logic as `CURRENT_ASSETS_CTE` in queries.py, just
@@ -868,6 +874,17 @@ history.
   normal required DEVICE NAME + serial columns. Only the best sheet of each
   kind is taken so stray copy sheets ("Sheet5", "To print") don't import
   the same equipment twice.
+- **Which branch a CCTV sheet belongs to**: a report file is one
+  branch's report, so when the file also has an equipment (OA) sheet whose
+  branch resolved, the CCTV sheet uses **that** branch
+  (`import_asset_report`'s `file_branch`). Only a file with no resolvable
+  equipment sheet falls back to the CCTV sheet's own label / BRANCH/DEPT
+  column. The CCTV sheet's own label proved unreliable in real files: Ha
+  Dong's said "ICT PLANNING" (the managing department, which is also branch
+  8129), so its DVR showed up as an "ICT PLANNING DEPARTMENT" row on the
+  Dashboard; District 7's said "ICT" and matched District 11. Existing data
+  was corrected on 2026-09-24 (9 CCTV rows + their Manage Assets copies,
+  logged in the Activity Log).
 - **Where the rows stop**: CCTV sheets usually end with a "NUMBER OF CAMERA
   CONNECTED / Qty" summary table down to a "Grand Total" row. It's a
   legend, not equipment, and it isn't always separated by a blank row.
@@ -909,6 +926,19 @@ history.
 - **Manage CCTV edits**: everything in `EDITABLE_FIELDS` is uppercased on
   save, and each changed field gets its own Activity Log entry (category
   `cctv`) with old/new value, same as Manage Assets.
+- **Editing Branch/Dept moves the row** (`importer.branch_for_edited_dept`,
+  both Manage Assets and Manage CCTV): the Dashboard, Branch Detail and the
+  Branch filter group by `branch_no`, which the import sets once. When the
+  Branch/Dept text is changed by hand, `branch_no` is re-resolved from the
+  new text exactly like an import (aliases, then name matching) and the row
+  moves to that branch ("Moved to branch ..." message, Activity Log entry
+  for `branch_no`); the new `branch_no` is also copied to the linked
+  CCTV/Asset row (it's in `CCTV_ASSET_SYNCED_FIELDS`). Text that doesn't
+  match any branch keeps the old `branch_no` and shows a warning. Before
+  this, a hand-corrected Branch/Dept changed only the displayed text. Note
+  that "current state" is per branch by latest period, so moving a device
+  off a branch for good means fixing every month's row, not just the
+  latest one.
 - **Edits stay in sync between Manage CCTV and Manage Assets**
   (`cctv_items.asset_item_id`, `db.sync_cctv_asset_link`): each CCTV row
   records the `asset_items` row it was mirrored into at import - or, for a
