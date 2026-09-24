@@ -431,6 +431,32 @@ def reresolve_unresolved_assets(conn, raw_hint: str, branch_no: str) -> int:
     return total_fixed
 
 
+def branch_for_edited_dept(conn, old_branch_no, old_dept: str, new_dept: str) -> tuple[str, str, str | None]:
+    """Branch/Dept text edited by hand in Manage Assets / Manage CCTV -> the
+    branch_no the row should now have, resolved exactly like an import
+    (aliases first, then name matching - see resolve_branch). Before this,
+    editing the text changed only what the row displayed: branch_no (what
+    the Dashboard, Branch Detail and filters group by) stayed where the
+    import put it, so a hand-corrected branch looked like it did nothing.
+
+    Returns (branch_no, matched_name, warning):
+    - text unchanged: the old branch_no, no warning;
+    - text resolves: the resolved branch_no (may equal the old one);
+    - text doesn't resolve: the old branch_no is kept and a warning says so
+      (rather than silently dropping the row into "Unresolved")."""
+    old_branch_no = old_branch_no or ""
+    if _clean_str(new_dept).upper() == _clean_str(old_dept).upper():
+        return old_branch_no, "", None
+    branch_no, matched = resolve_branch(conn, new_dept)
+    if branch_no:
+        return branch_no, matched, None
+    where = f"branch {old_branch_no}" if old_branch_no else "Unresolved"
+    return old_branch_no, "", (
+        f"Branch/Dept \"{new_dept}\" doesn't match any branch, so the row stays under {where}. "
+        "Use a branch name from the branch list, or add an alias in Settings > Branch Name Aliases."
+    )
+
+
 def record_unresolved_branch(conn, raw_hint: str) -> None:
     """Track a branch label that didn't resolve to any branch, so Settings >
     Branch Name Mapping can surface it for the user to assign - the same

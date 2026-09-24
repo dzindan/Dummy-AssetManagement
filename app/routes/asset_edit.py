@@ -4,6 +4,7 @@ from flask import Blueprint, flash, redirect, render_template, request, url_for
 
 from ..auth import current_username, require_permission
 from ..db import get_connection, log_activity, prune_stale_unmapped, sync_cctv_asset_link
+from ..importer import branch_for_edited_dept
 from ..exports import ASSET_ROW_COLUMNS, build_asset_rows_workbook, build_duplicates_workbook, dated_download_name, send_workbook
 from ..queries import (
     UNRESOLVED_BRANCH_FILTER,
@@ -302,6 +303,21 @@ def edit(asset_id):
                         conn, "asset", "Edited asset", performed_by=performed_by,
                         target=f"Asset #{asset_id}", field=field_name, old_value=old_value, new_value=new_value,
                     )
+            # Branch/Dept edited -> move the row to the branch that text
+            # resolves to, so the Dashboard/Branch Detail follow the edit.
+            new_branch_no, matched, branch_warning = branch_for_edited_dept(
+                conn, asset["branch_no"], asset["branch_dept"] or "", values["branch_dept"]
+            )
+            if new_branch_no != (asset["branch_no"] or ""):
+                conn.execute("UPDATE asset_items SET branch_no = ? WHERE id = ?", (new_branch_no, asset_id))
+                changed["branch_no"] = new_branch_no
+                log_activity(
+                    conn, "asset", "Edited asset", performed_by=performed_by, target=f"Asset #{asset_id}",
+                    field="branch_no", old_value=asset["branch_no"] or "", new_value=new_branch_no,
+                )
+                flash(f"Moved to branch {new_branch_no} {matched}.", "success")
+            if branch_warning:
+                flash(branch_warning, "error")
             sync_cctv_asset_link(conn, "asset_items", asset_id, changed, performed_by=performed_by)
             prune_stale_unmapped(conn)
             conn.commit()

@@ -177,6 +177,57 @@ class CctvAssetSyncTests(unittest.TestCase):
         # Camera/HDD fields are CCTV-only and untouched.
         self.assertEqual(updated["camera_count"], cctv["camera_count"])
 
+    def _add_other_branch(self):
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO branches (branch_no, local_name, eng_name, updated_at) "
+                "VALUES ('002', 'Other', 'OTHER TRANSACTION OFFICE', datetime('now'))"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def test_editing_branch_dept_moves_row_and_linked_row_to_that_branch(self):
+        self._add_other_branch()
+        cctv = self._cctv(serial="SN-CCTV-ONLY")
+        self.assertEqual(cctv["branch_no"], "001")
+        form = {f: cctv[f] or "" for f in CCTV_EDITABLE_FIELDS}
+        form["branch_dept"] = "Other Transaction Office"
+        resp = self.client.post(f"/cctv/{cctv['id']}/edit", data=form, follow_redirects=True)
+        self.assertIn(b"Moved to branch 002", resp.data)
+
+        moved = self._cctv(serial="SN-CCTV-ONLY")
+        self.assertEqual(moved["branch_no"], "002")
+        self.assertEqual(self._asset(moved["asset_item_id"])["branch_no"], "002")  # synced
+        conn = get_connection()
+        try:
+            fields = {r["field"] for r in conn.execute(
+                "SELECT field FROM logsdb.activity_log WHERE field = 'branch_no'")}
+        finally:
+            conn.close()
+        self.assertEqual(fields, {"branch_no"})
+
+    def test_editing_asset_branch_dept_also_moves_linked_cctv_row(self):
+        self._add_other_branch()
+        cctv = self._cctv(serial="SN-SHARED")
+        asset = self._asset(cctv["asset_item_id"])
+        form = {f: asset[f] or "" for f in ASSET_EDITABLE_FIELDS}
+        form["branch_dept"] = "OTHER"
+        self.client.post(f"/assets/{asset['id']}/edit", data=form)
+        self.assertEqual(self._asset(asset["id"])["branch_no"], "002")
+        self.assertEqual(self._cctv(serial="SN-SHARED")["branch_no"], "002")
+
+    def test_unknown_branch_dept_keeps_branch_and_warns(self):
+        cctv = self._cctv(serial="SN-CCTV-ONLY")
+        form = {f: cctv[f] or "" for f in CCTV_EDITABLE_FIELDS}
+        form["branch_dept"] = "NO SUCH PLACE XYZ"
+        resp = self.client.post(f"/cctv/{cctv['id']}/edit", data=form, follow_redirects=True)
+        self.assertIn(b"doesn&#39;t match any branch", resp.data)
+        after = self._cctv(serial="SN-CCTV-ONLY")
+        self.assertEqual(after["branch_no"], "001")
+        self.assertEqual(after["branch_dept"], "NO SUCH PLACE XYZ")  # the text edit itself is kept
+
     def test_edit_on_unlinked_row_still_works(self):
         cctv = self._cctv(serial="SN-CCTV-ONLY")
         conn = get_connection()

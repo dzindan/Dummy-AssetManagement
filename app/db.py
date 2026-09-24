@@ -839,6 +839,9 @@ def _backfill_cctv_asset_links(conn: sqlite3.Connection) -> None:
 # across (see cctv_items.asset_item_id).
 CCTV_ASSET_SYNCED_FIELDS = (
     "device_name", "model_device", "serial_tag", "status", "branch_dept", "ip", "remark",
+    # Not a form field - recomputed from branch_dept on edit
+    # (importer.branch_for_edited_dept) and carried across with it.
+    "branch_no",
 )
 
 
