@@ -20,6 +20,28 @@ from ..queries import get_current_asset_count, get_current_branch_breakdown, get
 
 bp = Blueprint("dashboard", __name__)
 
+# "Assets by Branch (by month)" sort, from the ?sort= query param. Missing /
+# unknown = the default order get_branch_month_change_table already returns
+# (current count, largest first). Clicking the Branch / Dept header cycles
+# default -> A-Z -> Z-A -> default (see NEXT_BRANCH_SORT).
+BRANCH_SORTS = {"branch": False, "-branch": True}  # value = descending
+NEXT_BRANCH_SORT = {"": "branch", "branch": "-branch", "-branch": ""}
+
+
+def _branch_sort_param() -> str:
+    sort = request.args.get("sort", "")
+    return sort if sort in BRANCH_SORTS else ""
+
+
+def _sort_month_table(rows: list[dict], sort: str) -> list[dict]:
+    """Sort by branch name; the "Unresolved" row (no branch_no) always stays
+    last whichever direction, since it isn't a branch name at all."""
+    if not sort:
+        return rows
+    named = sorted((r for r in rows if r["branch_no"]), key=lambda r: r["label"].upper(),
+                   reverse=BRANCH_SORTS[sort])
+    return named + [r for r in rows if not r["branch_no"]]
+
 
 @bp.route("/")
 def index():
@@ -44,6 +66,8 @@ def index():
         month_periods, month_table, month_column_totals, month_column_added, month_column_removed = (
             get_branch_month_change_table(conn, selected_year)
         )
+        branch_sort = _branch_sort_param()
+        month_table = _sort_month_table(month_table, branch_sort)
 
         year_comparison = get_year_comparison_table(conn)
 
@@ -71,6 +95,8 @@ def index():
         selected_year=selected_year,
         month_periods=month_periods,
         month_table=month_table,
+        branch_sort=branch_sort,
+        next_branch_sort=NEXT_BRANCH_SORT[branch_sort],
         month_column_totals=month_column_totals,
         month_column_added=month_column_added,
         month_column_removed=month_column_removed,
@@ -89,6 +115,7 @@ def export():
         available_years = get_available_report_years(conn)
         selected_year = resolve_report_year(request.args.get("year"), available_years)
         month_periods, month_table, _totals, _added, _removed = get_branch_month_change_table(conn, selected_year)
+        month_table = _sort_month_table(month_table, _branch_sort_param())  # same order as on screen
         all_periods, _all_items, all_matrix = get_all_branches_item_trend(conn)
     finally:
         conn.close()

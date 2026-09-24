@@ -28,11 +28,12 @@
 
 <div class="panel" style="margin-top: 1.25rem;">
   <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
-    <h2 style="margin:0;">Assets by Branch (by month)</h2>
+    <h2 style="margin:0;" id="branch-month-table">Assets by Branch (by month)</h2>
     <div style="display:flex; align-items:center; gap:0.5rem;">
       {% if available_years %}
       <form method="get" action="{{ url_for('dashboard.index') }}" style="display:flex; align-items:center; gap:0.35rem;">
         <label for="dash-year" class="muted" style="font-size:0.85rem;">Report year</label>
+        {% if branch_sort %}<input type="hidden" name="sort" value="{{ branch_sort }}">{% endif %}
         <select id="dash-year" name="year" onchange="this.form.submit()">
           {% for y in available_years %}
           <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
@@ -40,7 +41,7 @@
         </select>
       </form>
       {% endif %}
-      <a class="btn secondary" href="{{ url_for('dashboard.export', year=selected_year) }}">Export to Excel</a>
+      <a class="btn secondary" href="{{ url_for('dashboard.export', year=selected_year, sort=branch_sort or None) }}">Export to Excel</a>
     </div>
   </div>
   {% if month_table %}
@@ -55,7 +56,13 @@
     <table>
       <thead>
         <tr>
-          <th>Branch / Dept</th>
+          <th>
+            <a class="sort-header" href="{{ url_for('dashboard.index', year=selected_year, sort=next_branch_sort or None, _anchor='branch-month-table') }}"
+               title="{{ {'': 'Sort by Branch / Dept A-Z', 'branch': 'Sort by Branch / Dept Z-A', '-branch': 'Back to the default order (most assets first)'}[branch_sort] }}">
+              Branch / Dept
+              <span class="sort-arrow">{{ {'': '&#8645;', 'branch': '&#9650;', '-branch': '&#9660;'}[branch_sort] | safe }}</span>
+            </a>
+          </th>
           {% for p in month_periods %}<th>{{ p }}</th>{% endfor %}
         </tr>
       </thead>
