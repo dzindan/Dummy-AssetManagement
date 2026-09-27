@@ -72,7 +72,14 @@ computers on the same office network.
     Network Check, CUCM Phone Scan) and **Hand-Over** (Lookup & Hand-Over,
     History) — alongside standalone Asset Dashboard, CCTV Dashboard, Import
     Data, and Settings links, so related functionality
-    lives in one place instead of a long flat list.
+    lives in one place instead of a long flat list. The **Settings** page itself is split into
+    tabs (My Account, General, Branch Aliases, Device / Status / Model
+    Mapping, CUCM, Data & System) showing one group at a time. Each panel
+    in `settings.html` carries `data-settings-tab`. The mapping tabs show
+    their unmapped counts as badges. The open tab is remembered in
+    sessionStorage, so a Save (POST-redirect-GET) lands back on it, and a
+    redirect with a panel's `#id` (e.g. `#device-mapping`) opens that
+    panel's tab. A tab with nothing the account may see isn't offered.
 13. **Network Check** (Assets → Network Check): either picks a branch and
     pings every IP address recorded against that branch's current assets
     ("By branch"), or pings every address in a free-typed IP range/CIDR

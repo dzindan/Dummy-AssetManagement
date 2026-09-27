@@ -3,7 +3,21 @@
 {% block content %}
 <h1>Settings</h1>
 
-<div class="panel" id="my-account">
+{# Tabs: one group of panels at a time instead of one very long page. Which
+   tab is open survives a Save (the POST-redirect-GET lands back on it), and a
+   redirect that carries a panel's #id opens that panel's tab. #}
+<nav class="settings-tabs" data-settings-tabs role="tablist">
+  <button type="button" data-tab="account">My Account</button>
+  <button type="button" data-tab="general">General</button>
+  <button type="button" data-tab="branches">Branch Aliases{% if unresolved_branches %} <span class="badge badge-changed">{{ unresolved_branches | length }}</span>{% endif %}</button>
+  <button type="button" data-tab="devices">Device Mapping{% if unmapped_devices %} <span class="badge badge-changed">{{ unmapped_devices | length }}</span>{% endif %}</button>
+  <button type="button" data-tab="statuses">Status Mapping{% if unmapped_statuses %} <span class="badge badge-changed">{{ unmapped_statuses | length }}</span>{% endif %}</button>
+  <button type="button" data-tab="models">Model Mapping{% if unmapped_models %} <span class="badge badge-changed">{{ unmapped_models | length }}</span>{% endif %}</button>
+  <button type="button" data-tab="cucm">CUCM</button>
+  <button type="button" data-tab="system">Data &amp; System</button>
+</nav>
+
+<div class="panel" data-settings-tab="account" id="my-account">
   <h2>My Account</h2>
   <p class="muted">
     A security question lets you reset your own password from the "Forgot password?" link on the login page if
@@ -33,20 +47,20 @@
 </div>
 
 {% if 'manage_users' in current_permissions %}
-<div class="panel">
+<div class="panel" data-settings-tab="general">
   <h2>Users &amp; Roles</h2>
   <p class="muted">Manage who can log in and what they're allowed to do.</p>
   <a class="btn secondary" href="{{ url_for('user_admin.index') }}">Manage Users &amp; Roles</a>
 </div>
 {% endif %}
 
-<div class="panel">
+<div class="panel" data-settings-tab="general">
   <h2>Activity Log</h2>
   <p class="muted">Who changed what: Manage Assets edits/deletes, Settings/Mapping changes, and Users &amp; Roles changes.</p>
   <a class="btn secondary" href="{{ url_for('settings.activity_log') }}">View Activity Log</a>
 </div>
 
-<div class="panel">
+<div class="panel" data-settings-tab="general">
   <h2>Default ICT Representative</h2>
   <p class="muted">Pre-fills the "Representative of ICT Planning Department" section on every hand-over form. Still editable per form.</p>
   <form method="post" action="{{ url_for('settings.save_general') }}">
@@ -77,7 +91,7 @@
   </form>
 </div>
 
-<div class="panel" id="cucm-settings">
+<div class="panel" data-settings-tab="cucm" id="cucm-settings">
   <h2>CUCM Connection (IP Phone Scan)</h2>
   <p class="muted">
     Lets <a href="{{ url_for('cucm_scan.index') }}">CUCM Phone Scan</a> query your Cisco Call Manager
@@ -117,7 +131,7 @@
   </form>
 </div>
 
-<div class="panel">
+<div class="panel" data-settings-tab="branches">
   <h2>Branch Name Aliases</h2>
   <p class="muted">Asset report files often label a branch differently from the official branch master list (e.g. "South Saigon T.O" vs. "South Sai Gon Transaction Office"). Add an alias to map a free-text label straight to the correct branch.</p>
 
@@ -194,7 +208,7 @@
   {% endif %}
 </div>
 
-<div class="panel" id="mapping-check">
+<div class="panel" data-settings-tab="devices" id="mapping-check">
   <h2>Mapping Check</h2>
   <p class="muted">
     The Unmapped pools below (Device/Status/Model) normally fill up automatically at import time. If you've edited
@@ -207,7 +221,7 @@
   </form>
 </div>
 
-<div class="panel" id="device-mapping">
+<div class="panel" data-settings-tab="devices" id="device-mapping">
   <h2>Device Name Mapping</h2>
   <p class="muted">
     Standardizes device names during import (e.g. "IPPHONE" and "ID CARD READER" both map to a single standard name).
@@ -291,7 +305,7 @@
   </div>
 </div>
 
-<div class="panel" id="status-mapping">
+<div class="panel" data-settings-tab="statuses" id="status-mapping">
   <h2>Status Mapping</h2>
   <p class="muted">
     Standardizes the Status column during import, same idea as Device Name Mapping. Any status a cleaning report
@@ -375,7 +389,7 @@
   </div>
 </div>
 
-<div class="panel" id="model-mapping">
+<div class="panel" data-settings-tab="models" id="model-mapping">
   <h2>Model Mapping</h2>
   <p class="muted">
     Standardizes the Model column during import, grouped by manufacturer, same idea as Device Name Mapping. Any
@@ -459,7 +473,7 @@
   </div>
 </div>
 
-<div class="panel">
+<div class="panel" data-settings-tab="system">
   <h2>Data Storage Location</h2>
   <p class="muted">The database and every generated hand-over form are stored here, independent of where this program itself is installed:</p>
   <p><code>{{ data_dir }}</code></p>
@@ -490,7 +504,7 @@
   </form>
 </div>
 
-<div class="panel">
+<div class="panel" data-settings-tab="system">
   <h2>Reset Imported Data</h2>
   <p class="muted">
     Permanently delete specific categories of imported data, without touching Mappings, Settings,
@@ -508,7 +522,7 @@
   </form>
 </div>
 
-<div class="panel">
+<div class="panel" data-settings-tab="system">
   <h2>Share With Other Computers</h2>
   {% if lan_url %}
   <p class="muted">This computer is acting as the server. Everyone else on the same office/home network can use this tool - with the same shared data - just by opening this address in their own browser (no install needed):</p>
@@ -518,4 +532,53 @@
   <p class="muted">Not running as a shared server right now.</p>
   {% endif %}
 </div>
+<script>
+// Settings tabs. Runs before app.js, so the right tab is already showing
+// when app.js restores the scroll position after a Save.
+(function () {
+  var bar = document.querySelector("[data-settings-tabs]");
+  if (!bar) { return; }
+  var panels = Array.prototype.slice.call(document.querySelectorAll("[data-settings-tab]"));
+  var buttons = Array.prototype.slice.call(bar.querySelectorAll("[data-tab]"));
+  var KEY = "settings:tab";
+  // A tab with nothing this account may see (e.g. no Users & Roles
+  // permission and nothing else in it) isn't offered at all.
+  buttons.forEach(function (b) {
+    b.hidden = !panels.some(function (p) { return p.getAttribute("data-settings-tab") === b.getAttribute("data-tab"); });
+  });
+  var available = buttons.filter(function (b) { return !b.hidden; }).map(function (b) { return b.getAttribute("data-tab"); });
+
+  function show(key) {
+    panels.forEach(function (p) { p.hidden = p.getAttribute("data-settings-tab") !== key; });
+    buttons.forEach(function (b) {
+      var on = b.getAttribute("data-tab") === key;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    try { sessionStorage.setItem(KEY, key); } catch (e) {}
+  }
+
+  var start = null;
+  if (location.hash) {
+    // e.g. a Save that redirects to #device-mapping opens Device Mapping.
+    try {
+      var target = document.querySelector(location.hash);
+      var panel = target && target.closest("[data-settings-tab]");
+      if (panel) { start = panel.getAttribute("data-settings-tab"); }
+    } catch (e) {}
+  }
+  if (!start) {
+    try { start = sessionStorage.getItem(KEY); } catch (e) {}
+  }
+  if (available.indexOf(start) === -1) { start = available[0]; }
+  show(start);
+
+  buttons.forEach(function (b) {
+    b.addEventListener("click", function () {
+      show(b.getAttribute("data-tab"));
+      window.scrollTo(0, 0);
+    });
+  });
+})();
+</script>
 {% endblock %}
