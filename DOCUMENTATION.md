@@ -56,8 +56,12 @@ computers on the same office network.
     already has an import recorded for the Reporting Month you're about to
     use (most often from forgetting to change that field away from today's
     pre-filled default), a warning shows the existing import's date and row
-    count before anything happens - **Import Anyway** proceeds (adds a new
-    import on top, nothing overwritten), or go back and fix the month. This
+    count before anything happens. Each such file has an **Import** tickbox
+    (unticked = **skipped**), and the files with no conflict are listed
+    separately and always imported - so a bulk import with a few
+    already-imported branches can skip those and still bring in the rest.
+    **Import All Anyway** imports every file (adds a new import on top,
+    nothing overwritten), or go back and fix the month. This
     only catches "same branch, same period" - it can't tell whether the
     *content* actually changed, so an intentional corrected re-upload for
     the same month still shows this warning; that's expected.
@@ -692,8 +696,19 @@ deliberately duplicating rather than sharing code with the real
 affect what actually gets imported. If that branch already has a batch
 stamped with the period about to be used, `import_period_warning.html`
 shows the existing import's date/label/row count before anything is
-written, with **Import Anyway** (posts to `confirm_period_import`, which
-skips the check and imports straight away) or **Cancel**. This check runs
+written. Every conflicting file gets an **Import** tickbox, unticked by
+default, plus a tick-all box; the files without a conflict are listed under
+"Not imported for this period yet" and are always imported. Both buttons
+post to `confirm_period_import`, which runs no more checks: **Import (N new
++ ticked)** (`mode=selected`) imports the non-conflicting files plus the
+ticked ones (`import_conflict`; the page also sends every conflicting path
+as `conflict_files` so the route knows which unticked files to drop), and
+**Import All Anyway** (`mode=all`) imports everything. Skipped files are
+listed in a flash message and their temp upload copies removed (folder
+files are never touched); if every file was skipped nothing is imported
+and it goes back to Import Data with "Nothing imported". **Cancel** imports
+nothing (user's request 2026-10-01: skip the duplicates in a bulk import
+and keep the rest). This check runs
 *after* the duplicate-content-file check (a different question - "are two
 of these files byte-identical" vs. "does this branch already have this
 period") - both can fire in the same upload, one after the other. All

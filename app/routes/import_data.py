@@ -375,6 +375,7 @@ def _check_period_conflicts(file_entries: list[dict], period: str) -> list[dict]
             if existing:
                 conflicts.append(
                     {
+                        "path": item["path"],
                         "filename": item["filename"],
                         "branch_matched": peek["branch_matched"],
                         "period": resolved_period,
@@ -519,18 +520,41 @@ def confirm_asset_reports():
 @bp.route("/asset-reports/confirm-period", methods=["POST"])
 @require_permission("import_data")
 def confirm_period_import():
-    """User clicked "Import Anyway" on the period-conflict warning (see
-    _check_period_conflicts) - just import the same file list, no more
-    checks. Also reachable if the warning was skipped over (no conflicts),
-    since import_period_warning.html's own "Import Anyway" is the only
-    thing that ever posts here."""
+    """The period-conflict warning (see _check_period_conflicts) was
+    answered - no more checks, just import. Files without a conflict are
+    always imported; each conflicting file only when its "Import" box was
+    ticked (`import_conflict`), or all of them with "Import All Anyway"
+    (`mode=all`). Skipped files are left out - and their temp upload copies
+    removed - so a bulk import with a few already-imported branches can
+    still bring in the rest."""
     period = request.form.get("period", "").strip()
     source = request.form.get("source", "upload")
-    files = []
+    conflict_paths = set(request.form.getlist("conflict_files"))
+    chosen = set(request.form.getlist("import_conflict"))
+    import_all = request.form.get("mode") == "all"
+    files, skipped = [], []
     for value in request.form.getlist("files"):
         if "::" in value:
             path, filename = value.split("::", 1)
-            files.append({"path": path, "filename": filename})
+            item = {"path": path, "filename": filename}
+            if path in conflict_paths and not import_all and path not in chosen:
+                skipped.append(item)
+            else:
+                files.append(item)
+
+    if source == "upload":
+        for item in skipped:
+            if os.path.exists(item["path"]):
+                try:
+                    os.remove(item["path"])
+                except OSError:
+                    pass
+    if skipped:
+        flash(f"Skipped {len(skipped)} file(s) already imported for this period: "
+              + ", ".join(i["filename"] for i in skipped), "info")
+    if not files:
+        flash("Nothing imported - every file was skipped.", "info")
+        return redirect(url_for("import_data.index"))
 
     batch_ids = _run_asset_report_imports(files, period, source)
     return _result_redirect(batch_ids)

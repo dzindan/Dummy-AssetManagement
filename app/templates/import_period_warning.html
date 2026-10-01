@@ -5,20 +5,27 @@
 <p class="muted">
   The branch(es) below already have an import recorded for the period shown - most often because the Reporting
   Month field got left at today's date instead of being changed to match the report. If that's what happened, go
-  back and set the correct month. If this is intentional (e.g. a corrected re-upload for the same month), you can
-  import anyway - it adds a new import on top of the existing one; nothing already in the database gets overwritten
-  or deleted.
+  back and set the correct month. Otherwise, leave those files unticked to <strong>skip</strong> them and import the
+  rest, or tick the ones to import again (e.g. a corrected re-upload) - that adds a new import on top of the existing
+  one; nothing already in the database gets overwritten or deleted.
 </p>
 
+<form method="post" action="{{ url_for('import_data.confirm_period_import') }}">
 <div class="panel">
+  <h2>Already imported for this period <span class="badge badge-changed">{{ conflicts | length }}</span></h2>
+  <p class="muted">Ticked files are imported again; unticked files are <strong>skipped</strong>. Nothing is ticked to
+    start with.</p>
   <div class="table-scroll">
   <table>
     <thead>
-      <tr><th>File</th><th>Branch</th><th>Period</th><th>Already Imported</th><th>Existing Rows</th></tr>
+      <tr><th><input type="checkbox" data-select-all="conflict-cb" title="Tick all"> Import</th>
+        <th>File</th><th>Branch</th><th>Period</th><th>Already Imported</th><th>Existing Rows</th></tr>
     </thead>
     <tbody>
       {% for c in conflicts %}
       <tr>
+        <td><input type="checkbox" class="conflict-cb" name="import_conflict" value="{{ c.path }}">
+          <input type="hidden" name="conflict_files" value="{{ c.path }}"></td>
         <td>{{ c.filename }}</td>
         <td>{{ c.branch_matched }}</td>
         <td>{{ c.period }}</td>
@@ -31,13 +38,25 @@
   </div>
 </div>
 
-<form method="post" action="{{ url_for('import_data.confirm_period_import') }}">
+{% set conflict_paths = conflicts | map(attribute='path') | list %}
+{% set others = files | rejectattr('path', 'in', conflict_paths) | list %}
+{% if others %}
+<div class="panel">
+  <h2>Not imported for this period yet <span class="badge">{{ others | length }}</span></h2>
+  <p class="muted">These are always imported.</p>
+  <ul>
+    {% for item in others %}<li>{{ item.filename }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
   <input type="hidden" name="period" value="{{ period }}">
   <input type="hidden" name="source" value="{{ source }}">
   {% for item in files %}
   <input type="hidden" name="files" value="{{ item.path }}::{{ item.filename }}">
   {% endfor %}
-  <button type="submit">Import Anyway</button>
+  <button type="submit" name="mode" value="selected">{% if others %}Import ({{ others | length }} new + ticked){% else %}Import Ticked{% endif %}</button>
+  <button type="submit" name="mode" value="all" class="secondary">Import All Anyway</button>
   <a class="btn secondary" href="{{ url_for('import_data.index') }}">Cancel</a>
 </form>
 {% endblock %}
