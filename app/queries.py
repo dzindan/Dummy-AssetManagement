@@ -519,6 +519,19 @@ def find_current_duplicate_serials(conn):
     return results
 
 
+def inline_edit_suggestions(conn) -> dict:
+    """Standard names offered as suggestions while editing a Device / Model /
+    Status cell inline in Manage Assets / Manage CCTV (free text is still
+    accepted - these just make the usual value one click away)."""
+    def names(table):
+        return [r["name"] for r in conn.execute(f"SELECT name FROM {table} ORDER BY name").fetchall()]
+    return {
+        "device_name": names("device_standard_names"),
+        "model_device": names("model_standard_names"),
+        "status": names("status_standard_names"),
+    }
+
+
 def find_existing_batch_for_branch_period(conn, branch_no: str, period: str):
     """Most recent existing import batch for this branch already stamped
     with this period, if any - used to warn before importing a file that

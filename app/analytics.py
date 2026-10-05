@@ -16,7 +16,9 @@ from .queries import current_assets_cte
 
 # Caps distinct item series per chart; the rest fold into "OTHER" - 7 real
 # series + OTHER = 8, matching the categorical palette's full slot count
-# (see app/charts.py) so a chart never needs a 9th generated hue.
+# (see app/charts.py). The asset (IT device) charts on the Dashboard and
+# Branch Detail opt out (max_series=None) and show every device type; colors
+# past the palette come from charts._extra_color(). The CCTV charts keep it.
 MAX_SERIES = 7
 
 def _branch_trend_sql(table: str) -> str:
@@ -57,7 +59,7 @@ ORDER BY r.period, r.item
 """
 
 
-def _build_trend(rows) -> tuple[list[str], list[str], dict[str, dict[str, int]]]:
+def _build_trend(rows, max_series: int | None = MAX_SERIES) -> tuple[list[str], list[str], dict[str, dict[str, int]]]:
     periods: list[str] = []
     totals: dict[str, int] = {}
     raw: dict[str, dict[str, int]] = {}  # item -> period -> count
@@ -71,7 +73,7 @@ def _build_trend(rows) -> tuple[list[str], list[str], dict[str, dict[str, int]]]
 
     periods.sort()
 
-    top_items = sorted(totals, key=lambda k: totals[k], reverse=True)[:MAX_SERIES]
+    top_items = sorted(totals, key=lambda k: totals[k], reverse=True)[:max_series]
     other_items = [i for i in totals if i not in top_items]
 
     matrix: dict[str, dict[str, int]] = {item: raw[item] for item in top_items}
@@ -86,18 +88,18 @@ def _build_trend(rows) -> tuple[list[str], list[str], dict[str, dict[str, int]]]
     return periods, items, matrix
 
 
-def get_branch_item_trend(conn, branch_no: str, table: str = "asset_items"):
+def get_branch_item_trend(conn, branch_no: str, table: str = "asset_items", max_series: int | None = MAX_SERIES):
     rows = conn.execute(_branch_trend_sql(table), (branch_no,)).fetchall()
-    return _build_trend(rows)
+    return _build_trend(rows, max_series)
 
 
-def get_all_branches_item_trend(conn, table: str = "asset_items"):
+def get_all_branches_item_trend(conn, table: str = "asset_items", max_series: int | None = MAX_SERIES):
     """`table="cctv_items"` backs the CCTV Dashboard's equivalent trend
     chart - same per-(branch, period) latest-batch logic, just over CCTV
     gear (DVR/recorder/monitor `device_name`) instead of person-assigned
     equipment."""
     rows = conn.execute(_all_branches_trend_sql(table)).fetchall()
-    return _build_trend(rows)
+    return _build_trend(rows, max_series)
 
 
 def _walk_period_changes(rows: list[tuple[str, str, str]]) -> dict[str, dict]:

@@ -1,9 +1,9 @@
 from urllib.parse import urlencode
 
-from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 
 from ..auth import current_username, require_permission
-from ..db import get_connection, log_activity, prune_stale_unmapped, sync_cctv_asset_link
+from ..db import apply_hand_fix, get_connection, log_activity, prune_stale_unmapped, sync_cctv_asset_link
 from ..importer import branch_for_edited_dept
 from ..exports import ASSET_ROW_COLUMNS, build_asset_rows_workbook, build_duplicates_workbook, dated_download_name, send_workbook
 from ..queries import (
@@ -12,9 +12,10 @@ from ..queries import (
     get_branch,
     get_branches_with_current_assets,
     has_unresolved_current_assets,
+    inline_edit_suggestions,
     search_assets,
 )
-from ..text_utils import normalize_handover_date
+from ..text_utils import normalize_handover_date, usage_duration_years
 
 bp = Blueprint("asset_edit", __name__, url_prefix="/assets")
 
@@ -145,11 +146,13 @@ def index():
                 selected_branch = {"branch_no": "", "eng_name": "Unresolved / unmatched branch"}
             else:
                 selected_branch = get_branch(conn, only_branch)
+        suggestions = inline_edit_suggestions(conn)
     finally:
         conn.close()
 
     return render_template(
         "asset_management.html",
+        suggestions=suggestions,
         active_page="assets",
         rows=rows,
         total=total,
@@ -268,6 +271,89 @@ def delete(asset_id):
     return redirect(next_url)
 
 
+def _normalize_field(field_name: str, value: str) -> str:
+    value = (value or "").strip()
+    if field_name == "handover_date":
+        return normalize_handover_date(value)
+    return value.upper() if field_name in UPPERCASE_FIELDS else value
+
+
+def _apply_edit(conn, asset, values: dict, performed_by: str) -> list[tuple[str, str]]:
+    """Save `values` (every EDITABLE_FIELDS key) onto `asset` (the row as it
+    was) - shared by the Edit page and the inline cell save, so both log,
+    move branch, sync the CCTV side and apply hand fixes the same way.
+    Returns (message, category) pairs for the caller to show. Doesn't commit."""
+    asset_id = asset["id"]
+    messages = []
+    set_clause = ", ".join(f"{f} = ?" for f in EDITABLE_FIELDS)
+    conn.execute(f"UPDATE asset_items SET {set_clause} WHERE id = ?", [*(values[f] for f in EDITABLE_FIELDS), asset_id])
+    changed = {}
+    for field_name in EDITABLE_FIELDS:
+        old_value, new_value = asset[field_name] or "", values[field_name]
+        if old_value != new_value:
+            changed[field_name] = new_value
+            log_activity(
+                conn, "asset", "Edited asset", performed_by=performed_by,
+                target=f"Asset #{asset_id}", field=field_name, old_value=old_value, new_value=new_value,
+            )
+    # Branch/Dept edited -> move the row to the branch that text
+    # resolves to, so the Dashboard/Branch Detail follow the edit.
+    new_branch_no, matched, branch_warning = branch_for_edited_dept(
+        conn, asset["branch_no"], asset["branch_dept"] or "", values["branch_dept"]
+    )
+    if new_branch_no != (asset["branch_no"] or ""):
+        conn.execute("UPDATE asset_items SET branch_no = ? WHERE id = ?", (new_branch_no, asset_id))
+        changed["branch_no"] = new_branch_no
+        log_activity(
+            conn, "asset", "Edited asset", performed_by=performed_by, target=f"Asset #{asset_id}",
+            field="branch_no", old_value=asset["branch_no"] or "", new_value=new_branch_no,
+        )
+        messages.append((f"Moved to branch {new_branch_no} {matched}.", "success"))
+    if branch_warning:
+        messages.append((branch_warning, "error"))
+    sync_cctv_asset_link(conn, "asset_items", asset_id, changed, performed_by=performed_by)
+    fixed = apply_hand_fix(conn, "asset_items", asset_id, asset, changed, performed_by=performed_by)
+    if fixed:
+        messages.append((f"Same fix applied to this asset's {fixed} other row(s) (other months / CCTV) and "
+                         "remembered for future imports.", "success"))
+    prune_stale_unmapped(conn)
+    return messages
+
+
+@bp.route("/<int:asset_id>/cell", methods=["POST"])
+@require_permission("edit_assets")
+def edit_cell(asset_id):
+    """Inline (Excel-style) edit of one cell in Manage Assets - JSON in
+    {"field", "value"}, JSON out with the saved value and what to redraw.
+    Same rules as the Edit page (_apply_edit); only that one field changes."""
+    data = request.get_json(silent=True) or {}
+    field_name = data.get("field", "")
+    if field_name not in EDITABLE_FIELDS:
+        return jsonify({"ok": False, "error": f"{field_name or 'That column'} can't be edited here."}), 400
+    conn = get_connection()
+    try:
+        asset = conn.execute("SELECT * FROM asset_items WHERE id = ?", (asset_id,)).fetchone()
+        if not asset:
+            return jsonify({"ok": False, "error": "Asset not found - it may have been deleted."}), 404
+        values = {f: asset[f] or "" for f in EDITABLE_FIELDS}
+        values[field_name] = _normalize_field(field_name, str(data.get("value", "")))
+        messages = _apply_edit(conn, asset, values, current_username())
+        conn.commit()
+        row = conn.execute(
+            "SELECT ai.*, b.eng_name AS branch_eng_name FROM asset_items ai "
+            "LEFT JOIN branches b ON b.branch_no = ai.branch_no WHERE ai.id = ?", (asset_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return jsonify({
+        "ok": True,
+        "value": row[field_name] or "",
+        "branch_label": row["branch_eng_name"] or row["branch_dept"] or "",
+        "usage_duration": usage_duration_years(row["handover_date"]),
+        "messages": [{"text": t, "category": c} for t, c in messages],
+    })
+
+
 @bp.route("/<int:asset_id>/edit", methods=["GET", "POST"])
 @require_permission("edit_assets")
 def edit(asset_id):
@@ -281,45 +367,9 @@ def edit(asset_id):
 
             values = {}
             for field_name in EDITABLE_FIELDS:
-                value = request.form.get(field_name, "").strip()
-                if field_name == "handover_date":
-                    value = normalize_handover_date(value)
-                elif field_name in UPPERCASE_FIELDS:
-                    value = value.upper()
-                values[field_name] = value
-
-            set_clause = ", ".join(f"{f} = ?" for f in EDITABLE_FIELDS)
-            conn.execute(
-                f"UPDATE asset_items SET {set_clause} WHERE id = ?",
-                [*values.values(), asset_id],
-            )
-            performed_by = current_username()
-            changed = {}
-            for field_name, new_value in values.items():
-                old_value = asset[field_name] or ""
-                if old_value != new_value:
-                    changed[field_name] = new_value
-                    log_activity(
-                        conn, "asset", "Edited asset", performed_by=performed_by,
-                        target=f"Asset #{asset_id}", field=field_name, old_value=old_value, new_value=new_value,
-                    )
-            # Branch/Dept edited -> move the row to the branch that text
-            # resolves to, so the Dashboard/Branch Detail follow the edit.
-            new_branch_no, matched, branch_warning = branch_for_edited_dept(
-                conn, asset["branch_no"], asset["branch_dept"] or "", values["branch_dept"]
-            )
-            if new_branch_no != (asset["branch_no"] or ""):
-                conn.execute("UPDATE asset_items SET branch_no = ? WHERE id = ?", (new_branch_no, asset_id))
-                changed["branch_no"] = new_branch_no
-                log_activity(
-                    conn, "asset", "Edited asset", performed_by=performed_by, target=f"Asset #{asset_id}",
-                    field="branch_no", old_value=asset["branch_no"] or "", new_value=new_branch_no,
-                )
-                flash(f"Moved to branch {new_branch_no} {matched}.", "success")
-            if branch_warning:
-                flash(branch_warning, "error")
-            sync_cctv_asset_link(conn, "asset_items", asset_id, changed, performed_by=performed_by)
-            prune_stale_unmapped(conn)
+                values[field_name] = _normalize_field(field_name, request.form.get(field_name, ""))
+            for message, category in _apply_edit(conn, asset, values, current_username()):
+                flash(message, category)
             conn.commit()
             flash(f"Asset #{asset_id} updated.", "success")
             next_url = request.form.get("next") or url_for("dashboard.index")

@@ -21,7 +21,7 @@ import openpyxl
 import xlrd
 from unidecode import unidecode
 
-from .db import get_connection, log_import
+from .db import apply_hand_fixes_to_batch, get_connection, log_import
 from .queries import get_branch
 from .text_utils import clean_ip, normalize_handover_date, normalize_user_id, strip_bank_prefix
 
@@ -431,6 +431,42 @@ def reresolve_unresolved_assets(conn, raw_hint: str, branch_no: str) -> int:
     return total_fixed
 
 
+CUSTOM_BRANCH_PREFIX = "C"
+
+
+def is_custom_branch(branch_no: str) -> bool:
+    """Units added by hand in Settings (C001, C002...) - official codes from
+    the IDFromAither branch file are always digits."""
+    return bool(re.fullmatch(CUSTOM_BRANCH_PREFIX + r"\d+", branch_no or ""))
+
+
+def create_custom_branch(conn, name: str) -> str:
+    """A unit that isn't in the official branch list (e.g. one Smart Credit
+    Marketing Center site), typed by hand when mapping a branch label in
+    Settings. Gets the next free C### code; reusing a name that already
+    exists (any branch, case-insensitive) returns that branch instead of a
+    duplicate. The branch file import only upserts official codes, so these
+    are never overwritten or removed by it."""
+    clean = " ".join((name or "").split()).upper()
+    if not clean:
+        raise ValueError("A unit name is required.")
+    existing = conn.execute(
+        "SELECT branch_no FROM branches WHERE UPPER(TRIM(eng_name)) = ? OR UPPER(TRIM(local_name)) = ?",
+        (clean, clean),
+    ).fetchone()
+    if existing:
+        return existing["branch_no"]
+    numbers = [int(r["branch_no"][len(CUSTOM_BRANCH_PREFIX):]) for r in conn.execute(
+        "SELECT branch_no FROM branches WHERE branch_no LIKE ?", (CUSTOM_BRANCH_PREFIX + "%",)
+    ).fetchall() if is_custom_branch(r["branch_no"])]
+    branch_no = f"{CUSTOM_BRANCH_PREFIX}{(max(numbers) if numbers else 0) + 1:03d}"
+    conn.execute(
+        "INSERT INTO branches (branch_no, local_name, eng_name, updated_at) VALUES (?, ?, ?, ?)",
+        (branch_no, clean, clean, _now_iso()),
+    )
+    return branch_no
+
+
 def branch_for_edited_dept(conn, old_branch_no, old_dept: str, new_dept: str) -> tuple[str, str, str | None]:
     """Branch/Dept text edited by hand in Manage Assets / Manage CCTV -> the
     branch_no the row should now have, resolved exactly like an import
@@ -749,6 +785,7 @@ def _ingest_asset_rows(
                 seen_keys[asset_key] = new_id
                 serial_display[asset_key] = serial_tag
 
+    apply_hand_fixes_to_batch(conn, "asset_items", batch_id)
     report.unrecognized_devices = sorted(unrecognized_devices)
     report.unrecognized_statuses = sorted(unrecognized_statuses)
     report.unrecognized_models = sorted(unrecognized_models)
@@ -974,6 +1011,9 @@ def _ingest_cctv_rows(
                 seen_keys[asset_key] = new_id
                 serial_display[asset_key] = serial_tag
 
+    apply_hand_fixes_to_batch(conn, "cctv_items", batch_id)
+    if mirror_batch_id is not None:
+        apply_hand_fixes_to_batch(conn, "asset_items", mirror_batch_id)
     report.unrecognized_devices = sorted(unrecognized_devices)
     report.unrecognized_statuses = sorted(unrecognized_statuses)
     report.unrecognized_models = sorted(unrecognized_models)

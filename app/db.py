@@ -212,6 +212,23 @@ CREATE TABLE IF NOT EXISTS device_unmapped (
     occurrences INTEGER DEFAULT 1
 );
 
+-- A device/model/status value fixed by hand in Manage Assets / Manage CCTV
+-- while it was still unmapped (e.g. a device named "KHONG SU DUNG" that is
+-- really a DVR): remembered per physical asset (branch + asset_key) so the
+-- same wrong value in that asset's next monthly file is corrected on import
+-- instead of coming back to Unmapped. See db.apply_hand_fix.
+CREATE TABLE IF NOT EXISTS hand_fixes (
+    source_table TEXT NOT NULL,
+    branch_no TEXT NOT NULL,
+    asset_key TEXT NOT NULL,
+    field TEXT NOT NULL,
+    from_value TEXT NOT NULL,
+    to_value TEXT NOT NULL,
+    created_at TEXT,
+    created_by TEXT,
+    PRIMARY KEY (source_table, branch_no, asset_key, field, from_value)
+);
+
 CREATE TABLE IF NOT EXISTS branch_unresolved (
     raw_hint TEXT PRIMARY KEY,
     first_seen_at TEXT,
@@ -595,6 +612,16 @@ def _migrate_legacy_single_file_db(data_dir: str) -> None:
         raise
 
 
+def _unicode_upper(value):
+    """Drop-in for SQLite's UPPER(): NULL stays NULL, anything else becomes
+    uppercase text (like the built-in, which also returns numbers as text)."""
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", "replace")
+    return str(value).upper()
+
+
 def get_connection() -> sqlite3.Connection:
     data_dir = get_app_data_dir()
     # timeout: wait for a lock instead of failing immediately - matters once
@@ -603,6 +630,13 @@ def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(get_data_db_path(), timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # SQLite's built-in UPPER() only knows ASCII, so UPPER('Không sử dụng')
+    # gave 'KHôNG Sử DụNG' - never equal to the Python-uppercased text the
+    # importer stores. Mapping a Vietnamese device/model/status name in
+    # Settings then left existing rows unchanged, and searches for
+    # Vietnamese text missed lowercase rows. Python's str.upper() handles
+    # every Unicode letter; overriding the built-in keeps every query as is.
+    conn.create_function("UPPER", 1, _unicode_upper, deterministic=True)
     # Audit-trail tables (import_log/activity_log/network_check_log) live in
     # their own physical file so they can be copied to a new machine
     # independently of the business data - see LOGS_SCHEMA's docstring. They
@@ -883,6 +917,93 @@ def sync_cctv_asset_link(conn, source_table: str, row_id: int, changed: dict, pe
                 performed_by=performed_by, target=f"{label} #{target_id}",
                 field=f, old_value=target[f] or "", new_value=v,
             )
+
+
+HAND_FIX_FIELDS = {
+    # field -> (unmapped queue table, its column)
+    "device_name": ("device_unmapped", "raw_name"),
+    "model_device": ("model_unmapped", "raw_model"),
+    "status": ("status_unmapped", "raw_status"),
+}
+
+
+def apply_hand_fix(conn, source_table: str, row_id: int, before, changed: dict, performed_by: str = "") -> int:
+    """A Device/Model/Status edited by hand while its old value was still in
+    the Unmapped queue is a correction of bad source text, not a real-world
+    change - so it's applied to the same physical asset everywhere:
+
+    - the asset's rows in other months (same branch_no + asset_key, still
+      carrying the old value) - Manage Assets/CCTV only show the latest
+      month, so those older rows can't be edited by hand and would keep the
+      value in Unmapped forever;
+    - the linked rows on the other side (CCTV <-> asset mirror), every month;
+    - and it's remembered in hand_fixes so the asset's next monthly file is
+      corrected on import (apply_hand_fixes_to_batch) instead of bringing
+      the value back to Unmapped.
+
+    An edit whose old value was a mapped/standard value (e.g. a status going
+    USING LOCAL -> BROKEN) is a real change for that month only and is left
+    alone. `before` is the row as it was before the edit. Call before
+    prune_stale_unmapped. Returns how many other rows were updated."""
+    other = "cctv_items" if source_table == "asset_items" else "asset_items"
+    total = 0
+    for field, (queue, queue_col) in HAND_FIX_FIELDS.items():
+        if field not in changed:
+            continue
+        old, new = before[field] or "", changed[field] or ""
+        if not old or not new or old == new:
+            continue
+        if not conn.execute(f"SELECT 1 FROM {queue} WHERE {queue_col} = ?", (old,)).fetchone():
+            continue
+        branch_no, asset_key = before["branch_no"] or "", before["asset_key"] or ""
+        same = [r["id"] for r in conn.execute(
+            f"SELECT id FROM {source_table} WHERE branch_no = ? AND asset_key = ? AND {field} = ? AND id != ?",
+            (branch_no, asset_key, old, row_id),
+        ).fetchall()]
+        ids = same + [row_id]
+        marks = ",".join("?" * len(ids))
+        if source_table == "asset_items":
+            linked = conn.execute(f"SELECT id, branch_no, asset_key, {field} FROM cctv_items "
+                                  f"WHERE asset_item_id IN ({marks})", ids).fetchall()
+        else:
+            linked = conn.execute(f"SELECT id, branch_no, asset_key, {field} FROM asset_items WHERE id IN "
+                                  f"(SELECT asset_item_id FROM cctv_items WHERE id IN ({marks}))", ids).fetchall()
+        for rid in same:
+            conn.execute(f"UPDATE {source_table} SET {field} = ? WHERE id = ?", (new, rid))
+        linked_fixed = [r["id"] for r in linked if (r[field] or "") == old]
+        for rid in linked_fixed:
+            conn.execute(f"UPDATE {other} SET {field} = ? WHERE id = ?", (new, rid))
+        keys = {(source_table, branch_no, asset_key)} | {(other, r["branch_no"] or "", r["asset_key"] or "")
+                                                         for r in linked}
+        for table, b, k in keys:
+            conn.execute(
+                "INSERT OR REPLACE INTO hand_fixes (source_table, branch_no, asset_key, field, from_value, to_value,"
+                " created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)",
+                (table, b, k, field, old, new, performed_by),
+            )
+        total += len(same) + len(linked_fixed)
+        log_activity(conn, "mapping", "Fixed by hand (this asset, all months + future imports)",
+                     performed_by=performed_by, target=f"{source_table}#{row_id}", field=field,
+                     old_value=old, new_value=f"{new} ({len(same) + len(linked_fixed)} other row(s))")
+    return total
+
+
+def apply_hand_fixes_to_batch(conn, source_table: str, batch_id: int) -> int:
+    """Re-apply remembered hand fixes (see apply_hand_fix) to a just-imported
+    batch: a row of the same asset (branch_no + asset_key) still carrying
+    the old value gets the corrected one. Runs after the rows are inserted,
+    so asset_key is computed from the file's own text exactly as in earlier
+    months. Prunes the Unmapped queue if anything changed. Doesn't commit."""
+    fixed = 0
+    for fix in conn.execute("SELECT * FROM hand_fixes WHERE source_table = ?", (source_table,)).fetchall():
+        fixed += conn.execute(
+            f"UPDATE {source_table} SET {fix['field']} = ? "
+            f"WHERE batch_id = ? AND branch_no = ? AND asset_key = ? AND {fix['field']} = ?",
+            (fix["to_value"], batch_id, fix["branch_no"], fix["asset_key"], fix["from_value"]),
+        ).rowcount
+    if fixed:
+        prune_stale_unmapped(conn)
+    return fixed
 
 
 def backfill_unmapped(

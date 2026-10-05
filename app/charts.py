@@ -60,6 +60,19 @@ def stable_color_for(name: str) -> str:
     return PALETTE[_hash(name) % len(PALETTE)]
 
 
+def _extra_color(i: int) -> str:
+    """Color for the i-th series past the palette (charts that opt out of
+    MAX_SERIES, like the Dashboard's full device list): golden-angle hues
+    with alternating lightness, so neighbours in rank order stay apart.
+    Deterministic by rank - these are the long tail, where a color that
+    shifts when the mix changes matters far less than for the top series."""
+    import colorsys
+    hue = (0.08 + i * 0.381966) % 1.0
+    light = (0.40, 0.55, 0.32)[i % 3]
+    r, g, b = colorsys.hls_to_rgb(hue, light, 0.62)
+    return "#{:02x}{:02x}{:02x}".format(round(r * 255), round(g * 255), round(b * 255))
+
+
 def _assign_colors(names: list[str]) -> dict[str, str]:
     """Collision-free color per name for a single chart's shown series.
     "OTHER" (the fold-of-remainder bucket) is pinned to the reserved last
@@ -78,8 +91,14 @@ def _assign_colors(names: list[str]) -> dict[str, str]:
     used = {other_slot}
     if "OTHER" in names:
         assigned["OTHER"] = PALETTE[other_slot]
+    extra = 0
     for name in names:
         if name == "OTHER":
+            continue
+        if len(used) > other_slot:
+            # Every palette slot is taken (more series than MAX_SERIES).
+            assigned[name] = _extra_color(extra)
+            extra += 1
             continue
         slot = _hash(name) % other_slot
         while slot in used:

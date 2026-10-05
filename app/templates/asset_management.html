@@ -16,6 +16,7 @@
 {% endmacro %}
 
 {% block content %}
+{% set can_edit = 'edit_assets' in current_permissions %}
 <h1>Manage Assets</h1>
 <p class="muted">
   Every currently-assigned asset across all branches, in one filterable, editable list.
@@ -151,9 +152,17 @@
       data-bulk-delete-next="{{ request.full_path }}">Delete Selected</button>
   </div>
   {% endif %}
+{% if can_edit %}
+<datalist id="dl-device_name">{% for v in suggestions.device_name %}<option value="{{ v }}">{% endfor %}</datalist>
+<datalist id="dl-model_device">{% for v in suggestions.model_device %}<option value="{{ v }}">{% endfor %}</datalist>
+<datalist id="dl-status">{% for v in suggestions.status %}<option value="{{ v }}">{% endfor %}</datalist>
+<p class="muted inline-edit-hint">Click a cell to select it, then type, press Enter / F2 or double-click to edit
+  - Enter saves (and moves down), Tab moves right, Esc cancels. Each cell is saved straight away.
+  Branch edits the row's Branch/Dept text (the row moves to the branch it matches).</p>
+{% endif %}
   {{ pager() }}
   <div class="table-scroll">
-  <table data-resizable-table="manage-assets">
+  <table data-resizable-table="manage-assets"{% if can_edit %} data-inline-edit{% endif %}>
     <thead>
       <tr>
         <th><input type="checkbox" data-select-all="asset-row-checkbox"></th>
@@ -162,19 +171,19 @@
     </thead>
     <tbody>
       {% for a in rows %}
-      <tr>
+      <tr data-cell-url="{{ url_for('asset_edit.edit_cell', asset_id=a['id']) }}">
         <td><input type="checkbox" class="asset-row-checkbox" value="{{ a['id'] }}"></td>
-        <td>{{ a['branch_eng_name'] or a['branch_dept'] }}</td>
-        <td>{{ a['device_name'] }}</td>
-        <td>{{ a['user_id_raw'] }}</td>
-        <td>{{ a['full_name'] }}</td>
-        <td>{{ a['model_device'] }}</td>
-        <td>{{ a['serial_tag'] }}</td>
-        <td>{{ a['status'] }}</td>
-        <td>{{ a['remark'] }}</td>
-        <td>{{ a['position'] }}</td>
-        <td>{{ a['handover_date'] }}</td>
-        <td>{{ a['handover_date'] | usage_duration }}</td>
+        <td data-field="branch_dept" data-value="{{ a['branch_dept'] or '' }}">{{ a['branch_eng_name'] or a['branch_dept'] }}</td>
+        <td data-field="device_name" data-value="{{ a['device_name'] or '' }}">{{ a['device_name'] }}</td>
+        <td data-field="user_id_raw" data-value="{{ a['user_id_raw'] or '' }}">{{ a['user_id_raw'] }}</td>
+        <td data-field="full_name" data-value="{{ a['full_name'] or '' }}">{{ a['full_name'] }}</td>
+        <td data-field="model_device" data-value="{{ a['model_device'] or '' }}">{{ a['model_device'] }}</td>
+        <td data-field="serial_tag" data-value="{{ a['serial_tag'] or '' }}">{{ a['serial_tag'] }}</td>
+        <td data-field="status" data-value="{{ a['status'] or '' }}">{{ a['status'] }}</td>
+        <td data-field="remark" data-value="{{ a['remark'] or '' }}">{{ a['remark'] }}</td>
+        <td data-field="position" data-value="{{ a['position'] or '' }}">{{ a['position'] }}</td>
+        <td data-field="handover_date" data-value="{{ a['handover_date'] or '' }}">{{ a['handover_date'] }}</td>
+        <td data-derived="usage_duration">{{ a['handover_date'] | usage_duration }}</td>
         <td>{{ a['period'] }}</td>
         <td><a class="btn secondary" href="{{ url_for('asset_edit.edit', asset_id=a['id'], next=request.full_path) }}">Edit</a></td>
       </tr>

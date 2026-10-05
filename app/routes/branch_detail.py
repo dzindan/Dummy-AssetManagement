@@ -74,7 +74,9 @@ def detail(branch_no):
         # a month can be compared against the same month in a different
         # year, not just against whichever month happened to precede it -
         # see get_branch_device_year_table.
-        periods, items, matrix = get_branch_item_trend(conn, branch_no)
+        # Every device type, no OTHER bucket (see analytics.MAX_SERIES) -
+        # the device table below follows the same list.
+        periods, items, matrix = get_branch_item_trend(conn, branch_no, max_series=None)
         available_years = get_available_report_years(conn)
         selected_year = resolve_report_year(request.args.get("year"), available_years)
         trend_periods, trend_rows, trend_column_totals, trend_column_added, trend_column_removed = (
@@ -158,7 +160,7 @@ def export(branch_no):
         if not branch:
             abort(404, description="Branch not found.")
         assets = get_current_assets(conn, branch_no=branch_no)
-        periods, _items, matrix = get_branch_item_trend(conn, branch_no)
+        periods, _items, matrix = get_branch_item_trend(conn, branch_no, max_series=None)
     finally:
         conn.close()
 

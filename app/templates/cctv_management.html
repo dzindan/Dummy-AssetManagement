@@ -16,6 +16,7 @@
 {% endmacro %}
 
 {% block content %}
+{% set can_edit = 'edit_assets' in current_permissions %}
 <h1>Manage CCTV</h1>
 <p class="muted">
   Every currently-imported CCTV item (DVRs/recorders + attached cameras/monitors) across all branches -
@@ -116,9 +117,17 @@
       data-bulk-delete-next="{{ request.full_path }}">Delete Selected</button>
   </div>
   {% endif %}
+{% if can_edit %}
+<datalist id="dl-device_name">{% for v in suggestions.device_name %}<option value="{{ v }}">{% endfor %}</datalist>
+<datalist id="dl-model_device">{% for v in suggestions.model_device %}<option value="{{ v }}">{% endfor %}</datalist>
+<datalist id="dl-status">{% for v in suggestions.status %}<option value="{{ v }}">{% endfor %}</datalist>
+<p class="muted inline-edit-hint">Click a cell to select it, then type, press Enter / F2 or double-click to edit
+  - Enter saves (and moves down), Tab moves right, Esc cancels. Each cell is saved straight away.
+  Branch edits the row's Branch/Dept text (the row moves to the branch it matches).</p>
+{% endif %}
   {{ pager() }}
   <div class="table-scroll">
-  <table data-resizable-table="manage-cctv">
+  <table data-resizable-table="manage-cctv"{% if can_edit %} data-inline-edit{% endif %}>
     <thead>
       <tr>
         <th><input type="checkbox" data-select-all="cctv-row-checkbox"></th>
@@ -127,20 +136,20 @@
     </thead>
     <tbody>
       {% for a in rows %}
-      <tr>
+      <tr data-cell-url="{{ url_for('cctv_edit.edit_cell', asset_id=a['id']) }}">
         <td><input type="checkbox" class="cctv-row-checkbox" value="{{ a['id'] }}"></td>
-        <td>{{ a['branch_eng_name'] or a['branch_dept'] }}</td>
-        <td>{{ a['device_name'] }}</td>
-        <td>{{ a['ip'] }}</td>
-        <td>{{ a['manufacturer'] }}</td>
-        <td>{{ a['model_device'] }}</td>
-        <td>{{ a['serial_tag'] }}</td>
-        <td>{{ a['status'] }}</td>
-        <td>{{ a['camera_count'] }}</td>
-        <td>{{ a['hdd_count'] }}</td>
-        <td>{{ a['hdd_capacity'] }}</td>
-        <td>{{ a['location'] }}</td>
-        <td>{{ a['remark'] }}</td>
+        <td data-field="branch_dept" data-value="{{ a['branch_dept'] or '' }}">{{ a['branch_eng_name'] or a['branch_dept'] }}</td>
+        <td data-field="device_name" data-value="{{ a['device_name'] or '' }}">{{ a['device_name'] }}</td>
+        <td data-field="ip" data-value="{{ a['ip'] or '' }}">{{ a['ip'] }}</td>
+        <td data-field="manufacturer" data-value="{{ a['manufacturer'] or '' }}">{{ a['manufacturer'] }}</td>
+        <td data-field="model_device" data-value="{{ a['model_device'] or '' }}">{{ a['model_device'] }}</td>
+        <td data-field="serial_tag" data-value="{{ a['serial_tag'] or '' }}">{{ a['serial_tag'] }}</td>
+        <td data-field="status" data-value="{{ a['status'] or '' }}">{{ a['status'] }}</td>
+        <td data-field="camera_count" data-value="{{ a['camera_count'] or '' }}">{{ a['camera_count'] }}</td>
+        <td data-field="hdd_count" data-value="{{ a['hdd_count'] or '' }}">{{ a['hdd_count'] }}</td>
+        <td data-field="hdd_capacity" data-value="{{ a['hdd_capacity'] or '' }}">{{ a['hdd_capacity'] }}</td>
+        <td data-field="location" data-value="{{ a['location'] or '' }}">{{ a['location'] }}</td>
+        <td data-field="remark" data-value="{{ a['remark'] or '' }}">{{ a['remark'] }}</td>
         <td><a class="btn secondary" href="{{ url_for('cctv_edit.edit', asset_id=a['id'], next=request.full_path) }}">Edit</a></td>
       </tr>
       {% else %}

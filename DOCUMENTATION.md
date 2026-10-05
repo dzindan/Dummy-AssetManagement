@@ -402,9 +402,9 @@ Tables (see `app/db.py` for the full schema):
   labels: a free-text branch hint from an import that didn't match any
   branch (even a renamed copy of the same file, or a genuinely new label),
   with an occurrence count. Surfaces in Settings → Branch Name Aliases →
-  "Unresolved Branch Labels" until assigned; unlike devices, branches are a
-  closed set from the official master list, so assigning only offers
-  existing branches, not "create a new one."
+  "Unresolved Branch Labels" until assigned. Branches normally come from the
+  official master list; when a label is a real unit that list doesn't have,
+  a new **custom unit** can be typed instead (see "Custom units" below).
 - `diff_reports` — one row per auto-saved `asset_diff_report.xlsx` (see §1
   #11): `period`, the `batch_ids` it was built from, the branches it covers,
   and the `file_path` on disk under `exports/diff_reports/`. Written by
@@ -485,6 +485,93 @@ function Settings' **Check All for Unmapped Values** button
 (`routes/settings.py` `rescan_unmapped`) calls again on demand, for values
 that bypass import entirely (e.g. a Device/Status/Model hand-edited in
 Manage Assets).
+
+**Excel-style inline editing** (Manage Assets and Manage CCTV, user's request
+2026-10-02): for accounts with `edit_assets`, the table is marked
+`data-inline-edit` and each editable cell carries `data-field` + its raw
+`data-value`. Click selects a cell; typing, Enter, F2 or double-click edits
+it; Enter saves and moves down, Tab / Shift+Tab save and move right/left,
+arrows move, Esc cancels, leaving the cell saves; Delete/Backspace opens it
+empty (nothing is saved until Enter/Tab/leaving). Each cell is saved on its
+own straight away: `POST /assets/<id>/cell` / `POST /cctv/<id>/cell` with
+JSON `{field, value}` (`asset_edit.edit_cell` / `cctv_edit.edit_cell`), which
+run the very same `_apply_edit` as the Edit page - so uppercasing, the
+Activity Log, Branch/Dept re-resolving the branch, the CCTV <-> asset sync
+and hand fixes (above/below) all behave identically; only that one field
+changes. The reply carries the saved value, the branch label (the Branch
+column edits the row's Branch/Dept text and shows the branch it now
+resolves to) and, for Manage Assets, the recomputed Usage Duration; the
+cell flashes green, or turns red with the reason on failure, and any
+messages (e.g. "Moved to branch 002 ...") pop up bottom-right. Device /
+Model / Status cells suggest the standard names (`<datalist>` from
+`queries.inline_edit_suggestions`) but accept free text. Columns that
+aren't shown in the table (e.g. an asset's IP) still go through the Edit
+button. Only each branch's current month is listed, so only those rows can
+be edited inline. Not done yet: pasting a block copied from Excel, Ctrl+Z.
+JS in `app/static/app.js`, styles in `style.css`. Tests:
+`tests/test_inline_edit.py`.
+
+**Table zoom** (Manage Assets / Manage CCTV, user's request 2026-10-02 - wide
+tables meant scrolling left and right all the time): a "Table zoom" bar
+above the table with - / + (10% steps, 40-150%), the current level (click
+= back to 100%) and **Fit width** (shrinks the table until every column fits
+the screen - table width at 100% vs. the scroll box). Ctrl + mouse wheel
+over the table zooms just the table instead of the whole page. Uses CSS
+`zoom` on the `<table>`, so clicks, column resizing and inline editing work
+at any level; page text, filters and menus keep their size. The bottom
+"shadow" scrollbar sizes itself from the table's rendered width so it
+follows the zoom. Remembered per page + table in localStorage
+(`tablezoom:<path>:<table id>`). Applies to every `table[data-resizable-table]`.
+
+**Column widths** (same tables, user's request 2026-10-02): drag the divider
+on a header cell's right edge (now drawn as a visible line, with a 9px grab
+area that highlights on hover); **double-click the divider** to fit that
+column to its widest content, Excel-style (the column is narrowed first and
+measured with each cell's `scrollWidth`, so it can shrink as well as grow;
+capped at 600px). The bar above the table adds **Auto-fit columns** (every
+column at once) and **Reset columns** (forget the saved widths, back to the
+default auto layout). Dragging converts mouse movement into the table's own
+CSS pixels using the current table zoom, so the edge follows the mouse at
+any zoom level. Widths are still saved per page + table
+(`colwidths:<path>:<table id>`).
+
+**Fixing an unmapped value by hand** (`db.apply_hand_fix`, user's request
+2026-10-02): some unmapped values aren't a name to map globally - e.g. one
+HCMC DVR whose DEVICE NAME cell says "Không sử dụng" ("not in use"); mapping
+that text to DVR everywhere would be wrong for any other file. Before,
+editing the row in Manage Assets/CCTV didn't make it leave Unmapped:
+`prune_stale_unmapped` only drops a value once *no* row carries it, and the
+same device's older months (which those pages never show - they list the
+latest month only) still did; the next month's file brought it back too.
+Now, when a Device / Model / Status is edited by hand **and its old value is
+still in that field's Unmapped queue**, the edit is treated as a correction
+of bad source text for that physical asset:
+- it's copied to the asset's rows in the other months (same `branch_no` +
+  `asset_key`, still carrying the old value) and to the linked rows on the
+  other side (CCTV <-> asset mirror), every month - then the value leaves
+  Unmapped;
+- it's remembered in `hand_fixes` (per table, branch, asset_key, field,
+  old -> new); after each sheet is imported,
+  `db.apply_hand_fixes_to_batch` corrects that asset's new row (the
+  asset_key is still computed from the file's own text, so month-to-month
+  tracking keeps matching) and prunes Unmapped.
+No alias is created. Editing a value that was already mapped/standard (e.g.
+status USING LOCAL -> BROKEN) is a real change for that month and stays
+one-row, as before. Logged as "Fixed by hand (this asset, all months +
+future imports)". Tests: `tests/test_hand_fix.py`.
+
+**Unicode `UPPER()`**: mapping/unmapping in Settings re-points existing rows
+with SQL like `WHERE device_name = UPPER(device_name_raw)`, and the Manage
+Assets / Manage CCTV search compares `UPPER(column) LIKE ?`. SQLite's
+built-in `UPPER()` only uppercases ASCII, so for Vietnamese text
+(`Máy cuốn thếp`) it never matched what the importer stored (Python's
+`str.upper()` -> `MÁY CUỐN THẾP`): a mapped Vietnamese name changed only
+future imports, and searches missed lowercase Vietnamese rows. Fixed
+2026-10-02 by overriding `UPPER` on every connection with Python's
+(`db.get_connection` / `db._unicode_upper`), so every existing query works
+unchanged; NULL stays NULL. Cost: a full-table search takes ~0.6 s instead
+of ~0.35 s on ~140k rows. No index uses `UPPER()`, so nothing depends on the
+built-in. Tests: `tests/test_unicode_upper.py`.
 
 The **Cleaning Report's unrecognized-device/status/model badges are
 re-derived live** from `asset_items` (`queries.find_unrecognized_in_batch`)
@@ -885,6 +972,16 @@ the same best-effort free-text camera total the on-page CCTV chart uses.
 Charts and sheets are both skipped when there are fewer than 2 periods of
 history.
 
+The CCTV charts (CCTV Dashboard, Branch Detail's CCTV section) keep the 7
+busiest device types and fold the rest into **OTHER**
+(`analytics.MAX_SERIES`, matching the 8-slot palette). The asset charts on
+the **Dashboard** and **Branch Detail** pass `max_series=None` (page, Branch
+Detail's device-by-month table and both Excel exports) and show **every** IT
+device type - ~43 across all branches on real data. Colors past
+the palette's 7 free slots come from `charts._extra_color` (golden-angle
+hues, deterministic by rank). With more than 8 series the chip bar gets
+**Show all / Hide all**, and the hover tooltip flows into 2-3 columns.
+
 **CCTV** (`importer._ingest_cctv_rows`, `cctv_metrics.py`,
 `routes/cctv_dashboard.py`, `routes/cctv_edit.py`):
 
@@ -996,7 +1093,26 @@ to begin with - it's recorded with an occurrence count instead of silently
 producing an "Unresolved" bucket on the Dashboard with no way back. Each
 entry has a dropdown of existing branches and an **Assign** button (no
 drag-and-drop here - the branch list is ~140 entries long, too many for a
-bucket grid to make sense) which creates the alias and clears the entry;
+bucket grid to make sense) which creates the alias and clears the entry.
+
+**Custom units** (user's request 2026-10-02, e.g. Smart Credit Marketing
+Center has several sites - SCMC PICO, SCMC GOLDEN PALACE... - that the
+official list only knows as one code, 8160, but which should be counted
+separately by the name in the file): next to each unresolved label's
+dropdown is a name box pre-filled with the label. Leaving the dropdown
+empty and pressing Assign creates that name as a new unit
+(`importer.create_custom_branch`: code `C001`, `C002`... - official codes
+are always digits, `importer.is_custom_branch`) and maps the label to it.
+"Add Alias Manually" has the same "...or a new unit" box. Picking a branch
+in the dropdown always wins over the name box. Typing a name that already
+exists (any branch, ignoring case/spacing) reuses that branch instead of
+making a duplicate. Custom units live in `branches` like any other, so the
+Dashboard, filters and Branch Detail treat them the same; the branch file
+import only upserts official codes, so it never overwrites or removes
+them. The alias table marks them "(C001, custom unit)". Logged as "Added
+custom unit".
+
+After either kind of assign,
 future imports using that same label resolve automatically from then on -
 and, importantly, `importer.reresolve_unresolved_assets` also retroactively
 fixes every already-imported row for that label immediately, rather than

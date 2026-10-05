@@ -74,10 +74,27 @@
     chartWrap.appendChild(tip);
 
     if (!hideLegend) {
+      // Many series (the Dashboard's full device list): Show all / Hide all
+      // so one or two types can be isolated without 40 clicks.
+      if (allSeries.length > 8) {
+        [["Show all", true], ["Hide all", false]].forEach(function (pair) {
+          var b = document.createElement("button");
+          b.type = "button";
+          b.className = "pill pill-bulk";
+          b.textContent = pair[0];
+          b.addEventListener("click", function () {
+            allSeries.forEach(function (s) { active[s.name] = pair[1]; });
+            pillsEl.querySelectorAll(".pill[data-series]").forEach(function (p) { p.classList.toggle("active", pair[1]); });
+            render();
+          });
+          pillsEl.appendChild(b);
+        });
+      }
       allSeries.forEach(function (s) {
         var pill = document.createElement("button");
         pill.type = "button";
         pill.className = "pill active";
+        pill.setAttribute("data-series", s.name);
         pill.style.setProperty("--pill-border", s.color);
         pill.style.setProperty("--pill-tint", s.color + "1f");
         pill.innerHTML = '<span class="dot" style="background:' + s.color + '"></span>' + escapeHtml(s.name);
@@ -226,18 +243,23 @@
           return { name: s.name, color: s.color, value: s.values[i] };
         }).sort(function (a, b) { return b.value - a.value; });
 
-        var html = '<div class="tip-month">' + escapeHtml(periods[i]) + "</div>" + rows.map(function (r) {
+        var html = '<div class="tip-month">' + escapeHtml(periods[i]) + '</div><div class="tip-rows">' + rows.map(function (r) {
           return '<div class="tip-row"><span class="dot" style="background:' + r.color + '"></span>' + escapeHtml(r.name) +
             '<span class="v">' + formatNumber(r.value) + "</span></div>";
-        }).join("") + (rows.length > 1
+        }).join("") + "</div>" + (rows.length > 1
           ? '<div class="tip-row tip-total">Total<span class="v">' + formatNumber(total) + "</span></div>"
           : "");
         tip.innerHTML = html;
+        // Long lists (every device type shown) flow into columns instead of
+        // running off the bottom of the chart.
+        tip.classList.toggle("tip-cols2", rows.length > 14 && rows.length <= 28);
+        tip.classList.toggle("tip-cols3", rows.length > 28);
         tip.classList.add("visible");
 
         var wrapRect = chartWrap.getBoundingClientRect();
+        var tipW = tip.offsetWidth || 170;
         var tipX = ((x / W) * wrapRect.width) + 14;
-        if (tipX + 170 > wrapRect.width) { tipX = ((x / W) * wrapRect.width) - 170; }
+        if (tipX + tipW > wrapRect.width) { tipX = ((x / W) * wrapRect.width) - tipW - 14; }
         tipX = Math.max(0, tipX);
         tip.style.left = tipX + "px";
       });

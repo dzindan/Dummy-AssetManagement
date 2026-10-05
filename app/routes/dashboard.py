@@ -59,7 +59,8 @@ def index():
             "SELECT * FROM handover_records ORDER BY id DESC LIMIT 5"
         ).fetchall()
 
-        all_periods, all_items, all_matrix = get_all_branches_item_trend(conn)
+        # Every device type, no OTHER bucket (see analytics.MAX_SERIES).
+        all_periods, all_items, all_matrix = get_all_branches_item_trend(conn, max_series=None)
 
         available_years = get_available_report_years(conn)
         selected_year = resolve_report_year(request.args.get("year"), available_years)
@@ -116,7 +117,7 @@ def export():
         selected_year = resolve_report_year(request.args.get("year"), available_years)
         month_periods, month_table, _totals, _added, _removed = get_branch_month_change_table(conn, selected_year)
         month_table = _sort_month_table(month_table, _branch_sort_param())  # same order as on screen
-        all_periods, _all_items, all_matrix = get_all_branches_item_trend(conn)
+        all_periods, _all_items, all_matrix = get_all_branches_item_trend(conn, max_series=None)
     finally:
         conn.close()
 

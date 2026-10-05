@@ -94,8 +94,12 @@ document.addEventListener("DOMContentLoaded", function () {
         const startWidth = th.getBoundingClientRect().width;
         handle.classList.add("resizing");
 
+        // Screen pixels -> the table's own CSS pixels, so a drag follows
+        // the mouse at any table-zoom level (see the zoom block below).
+        const zoom = parseFloat(table.style.zoom) || 1;
+        const startCss = parseFloat(th.style.width) || startWidth / zoom;
         function onMove(moveEvent) {
-          th.style.width = Math.max(40, startWidth + (moveEvent.clientX - startX)) + "px";
+          th.style.width = Math.max(40, startCss + (moveEvent.clientX - startX) / zoom) + "px";
         }
         function onUp() {
           document.removeEventListener("mousemove", onMove);
@@ -107,7 +111,42 @@ document.addEventListener("DOMContentLoaded", function () {
         document.addEventListener("mousemove", onMove);
         document.addEventListener("mouseup", onUp);
       });
+
+      // Double-click the divider = fit this column to its widest content.
+      handle.addEventListener("dblclick", function (e) {
+        e.preventDefault();
+        autofit(i);
+        localStorage.setItem(storageKey, JSON.stringify(saved));
+      });
     });
+
+    // Widest content in column i (header + every cell), in the table's own
+    // CSS pixels. Cells clip with an ellipsis, but scrollWidth still reports
+    // the full content width.
+    function autofit(i) {
+      // Narrow it first: scrollWidth can only report content wider than
+      // the cell, so measuring at the current width could never shrink it.
+      ths[i].style.width = "40px";
+      let widest = 40;
+      table.querySelectorAll("tr").forEach(function (tr) {
+        const cell = tr.children[i];
+        if (!cell || cell.colSpan > 1) return;
+        const pad = cell.querySelector("input") ? 0 : 2;
+        widest = Math.max(widest, cell.scrollWidth + pad);
+      });
+      widest = Math.min(widest, 600);
+      ths[i].style.width = widest + "px";
+      saved[i] = widest;
+    }
+    // Used by the table-zoom bar's "Auto-fit columns" / "Reset columns".
+    table.autofitColumns = function () {
+      ths.forEach(function (th, i) { autofit(i); });
+      localStorage.setItem(storageKey, JSON.stringify(saved));
+    };
+    table.resetColumns = function () {
+      localStorage.removeItem(storageKey);
+      location.reload();
+    };
   });
 });
 
@@ -143,8 +182,11 @@ document.addEventListener("DOMContentLoaded", function () {
     wrap.appendChild(shadow);
 
     function syncWidth() {
-      shadowInner.style.width = inner.scrollWidth + "px";
-      shadow.style.display = inner.scrollWidth > scrollBox.clientWidth ? "" : "none";
+      // Rendered width, so a table zoomed with the table-zoom control
+      // below (CSS zoom) sizes the shadow bar by what's actually on screen.
+      const width = Math.ceil(inner.getBoundingClientRect().width);
+      shadowInner.style.width = width + "px";
+      shadow.style.display = width > scrollBox.clientWidth ? "" : "none";
     }
     // Runs after the resizable-table block above (registered earlier on
     // this same DOMContentLoaded event, so it always finishes first),
@@ -345,4 +387,237 @@ document.addEventListener("click", function (e) {
 
   document.body.appendChild(form);
   form.submit();
+});
+
+// Excel-style inline editing - Manage Assets / Manage CCTV tables marked
+// data-inline-edit (only rendered for accounts with edit permission). Each
+// <td data-field> is a cell: click selects it, typing / Enter / F2 /
+// double-click edits it, Enter saves and moves down, Tab saves and moves
+// right (Shift+Tab left), arrows move, Esc cancels, leaving the cell saves.
+// Every cell is saved on its own straight away (POST JSON {field, value} to
+// the row's data-cell-url - same rules as the Edit page server-side).
+(function () {
+  const table = document.querySelector("table[data-inline-edit]");
+  if (!table) return;
+  const body = table.tBodies[0];
+  let editing = null;
+
+  body.querySelectorAll("td[data-field]").forEach(function (td) {
+    td.tabIndex = 0;
+  });
+
+  let toastWrap = null;
+  function toast(text, category) {
+    if (!toastWrap) {
+      toastWrap = document.createElement("div");
+      toastWrap.className = "inline-toast-wrap";
+      document.body.appendChild(toastWrap);
+    }
+    const t = document.createElement("div");
+    t.className = "inline-toast flash-" + (category === "error" ? "error" : "success");
+    t.textContent = text;
+    toastWrap.appendChild(t);
+    setTimeout(function () { t.remove(); }, category === "error" ? 8000 : 4000);
+  }
+
+  function editableRows() {
+    return Array.from(body.rows).filter(function (r) { return r.dataset.cellUrl; });
+  }
+
+  function move(td, dRow, dCol) {
+    const tr = td.parentElement;
+    const cells = Array.from(tr.querySelectorAll("td[data-field]"));
+    const idx = cells.indexOf(td);
+    let target = null;
+    if (dCol) {
+      target = cells[idx + dCol];
+    } else if (dRow) {
+      const rows = editableRows();
+      const other = rows[rows.indexOf(tr) + dRow];
+      target = other ? other.querySelectorAll("td[data-field]")[idx] : null;
+    }
+    if (target) target.focus();
+    return target;
+  }
+
+  function save(td, value) {
+    const tr = td.parentElement;
+    const field = td.dataset.field;
+    const shownBefore = td.dataset.display;
+    td.textContent = value;
+    td.classList.remove("cell-error", "cell-saved");
+    td.removeAttribute("title");
+    td.classList.add("cell-saving");
+    fetch(tr.dataset.cellUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Requested-With": "fetch" },
+      body: JSON.stringify({ field: field, value: value }),
+    })
+      .then(function (r) {
+        return r.json().then(function (j) { return { ok: r.ok, j: j }; });
+      })
+      .then(function (res) {
+        if (!res.ok || !res.j.ok) throw new Error(res.j.error || "Save failed.");
+        td.dataset.value = res.j.value;
+        td.textContent = field === "branch_dept" ? res.j.branch_label : res.j.value;
+        const usage = tr.querySelector('[data-derived="usage_duration"]');
+        if (usage && res.j.usage_duration !== undefined) usage.textContent = res.j.usage_duration || "";
+        td.classList.remove("cell-saving");
+        void td.offsetWidth; // restart the highlight animation
+        td.classList.add("cell-saved");
+        (res.j.messages || []).forEach(function (m) { toast(m.text, m.category); });
+      })
+      .catch(function (err) {
+        td.innerHTML = shownBefore;
+        td.classList.remove("cell-saving");
+        td.classList.add("cell-error");
+        td.title = err.message;
+        toast(err.message, "error");
+      });
+  }
+
+  function finish(td, keep, then) {
+    if (editing !== td) return;
+    editing = null;
+    const input = td.querySelector("input");
+    const value = input ? input.value.trim() : "";
+    td.classList.remove("cell-editing");
+    const changed = keep && value !== (td.dataset.value || "").trim();
+    if (changed) {
+      save(td, value);
+    } else {
+      td.innerHTML = td.dataset.display;
+    }
+    if (then) then();
+    else if (!changed) td.focus();
+  }
+
+  function startEdit(td, initial) {
+    if (editing) return;
+    editing = td;
+    td.dataset.display = td.innerHTML;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = initial !== undefined ? initial : (td.dataset.value || "");
+    if (document.getElementById("dl-" + td.dataset.field)) input.setAttribute("list", "dl-" + td.dataset.field);
+    td.classList.add("cell-editing");
+    td.textContent = "";
+    td.appendChild(input);
+    input.focus();
+    if (initial === undefined) input.select();
+    else input.setSelectionRange(input.value.length, input.value.length);
+
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        finish(td, true, function () { move(td, 1, 0) || td.focus(); });
+      } else if (e.key === "Tab") {
+        e.preventDefault();
+        finish(td, true, function () { move(td, 0, e.shiftKey ? -1 : 1) || td.focus(); });
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        finish(td, false);
+      }
+      e.stopPropagation();
+    });
+    input.addEventListener("blur", function () { finish(td, true, function () {}); });
+  }
+
+  body.addEventListener("keydown", function (e) {
+    const td = e.target.closest && e.target.closest("td[data-field]");
+    if (!td || editing) return;
+    const arrows = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
+    if (arrows[e.key]) {
+      e.preventDefault();
+      move(td, arrows[e.key][0], arrows[e.key][1]);
+    } else if (e.key === "Tab") {
+      if (move(td, 0, e.shiftKey ? -1 : 1)) e.preventDefault();
+    } else if (e.key === "Enter" || e.key === "F2") {
+      e.preventDefault();
+      startEdit(td);
+    } else if (e.key === "Delete" || e.key === "Backspace") {
+      e.preventDefault();
+      startEdit(td, "");
+    } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      startEdit(td, e.key);
+    }
+  });
+
+  body.addEventListener("dblclick", function (e) {
+    const td = e.target.closest("td[data-field]");
+    if (td && editing !== td) startEdit(td);
+  });
+})();
+
+// Zoom for one table only, plus the column-width buttons (Manage Assets /
+// Manage CCTV - wide tables you'd
+// otherwise scroll left and right through): - / + buttons, "Fit width"
+// (shrink until every column fits the screen), 100% to reset, and
+// Ctrl + mouse wheel over the table. Page text, filters and menus keep
+// their size. Remembered per page + table in localStorage. Uses CSS zoom,
+// so clicks, column resizing and inline editing keep working at any level.
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll("table[data-resizable-table]").forEach(function (table) {
+    const scrollBox = table.closest(".table-scroll");
+    if (!scrollBox) return;
+    const anchor = scrollBox.closest(".table-scroll-wrap") || scrollBox;
+    const key = "tablezoom:" + location.pathname + ":" + table.dataset.resizableTable;
+    const MIN = 40, MAX = 150, STEP = 10;
+
+    const bar = document.createElement("div");
+    bar.className = "table-zoom";
+    bar.innerHTML =
+      '<span class="muted">Table zoom</span>' +
+      '<button type="button" class="secondary" data-zoom="-" title="Smaller (Ctrl + wheel down)">&minus;</button>' +
+      '<button type="button" class="secondary table-zoom-level" data-zoom="reset" title="Back to 100%">100%</button>' +
+      '<button type="button" class="secondary" data-zoom="+" title="Bigger (Ctrl + wheel up)">+</button>' +
+      '<button type="button" class="secondary" data-zoom="fit" title="Shrink so every column fits the screen">Fit width</button>' +
+      '<span class="muted table-zoom-sep">Columns</span>' +
+      '<button type="button" class="secondary" data-cols="autofit" title="Size every column to its content (double-click a column divider to do just one)">Auto-fit columns</button>' +
+      '<button type="button" class="secondary" data-cols="reset" title="Forget the widths you set and go back to the default">Reset columns</button>';
+    anchor.parentNode.insertBefore(bar, anchor);
+    const level = bar.querySelector(".table-zoom-level");
+
+    let zoom = 100;
+    function apply(value) {
+      zoom = Math.max(MIN, Math.min(MAX, Math.round(value)));
+      table.style.zoom = zoom === 100 ? "" : zoom / 100;
+      level.textContent = zoom + "%";
+      try { localStorage.setItem(key, String(zoom)); } catch (e) { /* private mode */ }
+      window.dispatchEvent(new Event("resize")); // re-size the bottom shadow scrollbar
+    }
+    function fit() {
+      table.style.zoom = "";
+      const natural = table.getBoundingClientRect().width;
+      apply(natural > scrollBox.clientWidth ? Math.floor((scrollBox.clientWidth / natural) * 100) : 100);
+    }
+
+    bar.addEventListener("click", function (e) {
+      const colBtn = e.target.closest("[data-cols]");
+      if (colBtn) {
+        if (colBtn.dataset.cols === "autofit" && table.autofitColumns) table.autofitColumns();
+        if (colBtn.dataset.cols === "reset" && table.resetColumns) table.resetColumns();
+        window.dispatchEvent(new Event("resize"));
+        return;
+      }
+      const btn = e.target.closest("[data-zoom]");
+      if (!btn) return;
+      const action = btn.dataset.zoom;
+      if (action === "+") apply(Math.floor(zoom / STEP) * STEP + STEP);
+      else if (action === "-") apply(Math.ceil(zoom / STEP) * STEP - STEP);
+      else if (action === "reset") apply(100);
+      else fit();
+    });
+
+    scrollBox.addEventListener("wheel", function (e) {
+      if (!e.ctrlKey) return;
+      e.preventDefault(); // zoom just the table, not the whole page
+      apply(zoom + (e.deltaY < 0 ? STEP : -STEP));
+    }, { passive: false });
+
+    let saved = NaN;
+    try { saved = parseInt(localStorage.getItem(key), 10); } catch (e) { /* ignore */ }
+    if (saved && saved !== 100) apply(saved);
+  });
 });

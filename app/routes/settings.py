@@ -26,6 +26,7 @@ from ..db import (
 )
 from ..exports import build_workbook, dated_download_name, send_workbook
 from ..importer import (
+    create_custom_branch,
     normalize_branch_text,
     record_unmapped_device,
     record_unmapped_model,
@@ -217,12 +218,14 @@ def save_cucm():
 def add_branch_alias():
     alias_text = request.form.get("alias_text", "").strip()
     branch_no = request.form.get("branch_no", "").strip()
-    if not alias_text or not branch_no:
-        flash("Both an alias text and a target branch are required.", "error")
+    new_name = request.form.get("new_branch_name", "").strip()
+    if not alias_text or not (branch_no or new_name):
+        flash("Enter the label, then pick a branch or type a new unit name.", "error")
         return redirect(url_for("settings.index"))
 
     conn = get_connection()
     try:
+        branch_no = branch_no or _new_unit(conn, new_name, alias_text)
         conn.execute(
             "INSERT OR REPLACE INTO branch_aliases (alias, branch_no) VALUES (?, ?)",
             (normalize_branch_text(alias_text), branch_no),
@@ -255,23 +258,32 @@ def delete_branch_alias():
     return redirect(url_for("settings.index"))
 
 
-# --- Branch mapping (unresolved raw hint -> existing branch) ----------------
-# Same idea as device mapping, but branches are a closed set from the
-# official master list (IDFromAither) rather than something new that can be
-# "created" here - only assigning an unresolved hint to one of the existing
-# branches makes sense.
+# --- Branch mapping (unresolved raw hint -> branch) -------------------------
+# Same idea as device mapping. Branches normally come from the official
+# master list (IDFromAither); when a label is a real unit that list doesn't
+# have (e.g. one of several Smart Credit Marketing Center sites), a new unit
+# name can be typed instead - see importer.create_custom_branch.
+
+def _new_unit(conn, name: str, label: str) -> str:
+    branch_no = create_custom_branch(conn, name)
+    log_activity(conn, "mapping", "Added custom unit", performed_by=current_username(),
+                 target=label, new_value=f"{branch_no} {name.upper()}")
+    return branch_no
+
 
 @bp.route("/branch-hint/map", methods=["POST"])
 @require_permission("manage_mappings")
 def map_branch_hint():
     raw_hint = request.form.get("raw_hint", "").strip()
     branch_no = request.form.get("branch_no", "").strip()
-    if not raw_hint or not branch_no:
-        flash("Both a branch label and a target branch are required.", "error")
+    new_name = request.form.get("new_branch_name", "").strip()
+    if not raw_hint or not (branch_no or new_name):
+        flash("Pick a branch, or type a new unit name if it isn't in the list.", "error")
         return redirect(url_for("settings.index"))
 
     conn = get_connection()
     try:
+        branch_no = branch_no or _new_unit(conn, new_name, raw_hint)
         conn.execute(
             "INSERT OR REPLACE INTO branch_aliases (alias, branch_no) VALUES (?, ?)",
             (normalize_branch_text(raw_hint), branch_no),

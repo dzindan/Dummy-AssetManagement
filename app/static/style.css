@@ -276,8 +276,9 @@ table[data-resizable-table] th { position: relative; }
 .col-resize-handle {
   position: absolute;
   top: 0;
-  right: 0;
-  width: 6px;
+  right: -4px;
+  width: 9px;
+  z-index: 2;
   height: 100%;
   cursor: col-resize;
   user-select: none;
@@ -529,6 +530,7 @@ button.danger, .btn.danger { background: var(--danger); }
 .pill .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .pill.active { border-color: var(--pill-border, var(--border)); background: var(--pill-tint, var(--panel)); }
 .pill:not(.active) { opacity: 0.48; }
+.pill.pill-bulk { padding-left: 0.65rem; border-style: dashed; opacity: 1; }
 .pill:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 
 .chart-wrap { position: relative; }
@@ -575,6 +577,10 @@ button.danger, .btn.danger { background: var(--danger); }
   font-variant-numeric: tabular-nums;
   font-weight: 600;
 }
+.crosshair-tip.tip-cols2 .tip-rows { column-count: 2; column-gap: 1.1rem; }
+.crosshair-tip.tip-cols3 .tip-rows { column-count: 3; column-gap: 1.1rem; }
+.crosshair-tip .tip-rows .tip-row { break-inside: avoid; }
+.crosshair-tip .tip-row .v { padding-left: 0.6rem; }
 .crosshair-tip .tip-row.tip-total {
   margin-top: 0.3rem;
   padding-top: 0.3rem;
@@ -802,3 +808,30 @@ th a.sort-header .sort-arrow { font-size: 0.8em; opacity: 0.7; }
 .settings-tabs button.active { background: var(--brand); border-color: var(--brand); color: #fff; }
 .settings-tabs button.active .badge { background: #fff; }
 .panel[hidden], .settings-tabs button[hidden] { display: none !important; }
+
+/* Excel-style inline editing (Manage Assets / Manage CCTV, app.js). */
+table[data-inline-edit] td[data-field] { cursor: cell; }
+table[data-inline-edit] td[data-field]:focus { outline: 2px solid var(--brand); outline-offset: -2px; }
+table[data-inline-edit] td.cell-editing { padding: 0; }
+table[data-inline-edit] td.cell-editing input {
+  width: 100%; min-width: 8em; box-sizing: border-box; margin: 0;
+  border: 2px solid var(--brand); padding: 4px 6px; font: inherit; text-transform: uppercase;
+}
+table[data-inline-edit] td.cell-saving { opacity: 0.55; }
+table[data-inline-edit] td.cell-saved { animation: cell-saved 1.4s ease-out; }
+@keyframes cell-saved { from { background: var(--ok-bg); } to { background: transparent; } }
+table[data-inline-edit] td.cell-error { background: var(--danger-bg); }
+.inline-edit-hint { margin: 0.2rem 0 0.6rem; }
+.inline-toast-wrap { position: fixed; right: 16px; bottom: 16px; z-index: 1000; display: flex; flex-direction: column; gap: 6px; max-width: 420px; }
+.inline-toast { padding: 8px 12px; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+
+/* Table-only zoom control (app.js) above Manage Assets / Manage CCTV. */
+.table-zoom { display: flex; align-items: center; gap: 0.35rem; margin: 0.4rem 0; flex-wrap: wrap; }
+.table-zoom button { padding: 0.2rem 0.6rem; min-width: 2.2rem; }
+.table-zoom .table-zoom-level { min-width: 3.6rem; font-variant-numeric: tabular-nums; }
+
+/* Always-visible column divider in the header so it's obvious where to
+   drag (the handle itself only highlights on hover). */
+table[data-resizable-table] thead th + th { border-left: 1px solid #b6bfcc; }
+table[data-resizable-table] thead th:hover .col-resize-handle { background: rgba(29, 78, 216, 0.18); }
+.table-zoom .table-zoom-sep { margin-left: 0.8rem; }

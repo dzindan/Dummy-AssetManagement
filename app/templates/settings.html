@@ -136,7 +136,7 @@
   <p class="muted">Asset report files often label a branch differently from the official branch master list (e.g. "South Saigon T.O" vs. "South Sai Gon Transaction Office"). Add an alias to map a free-text label straight to the correct branch.</p>
 
   <h3>Unresolved Branch Labels {% if unresolved_branches %}<span class="badge badge-changed">{{ unresolved_branches | length }}</span>{% endif %}</h3>
-  <p class="muted">Branch labels seen during import that didn't match anything (only the file's name changed since the last try, or a new one). Assign each to the correct branch below - no need to retype it.</p>
+  <p class="muted">Branch labels seen during import that didn't match anything (only the file's name changed since the last try, or a new one). Assign each to the correct branch below - no need to retype it. <strong>Not in the list?</strong> Leave the branch empty: the name box (pre-filled with the label, editable) becomes a new unit with its own code (C001, C002...).</p>
   {% if unresolved_branches %}
   <div class="device-pool" style="max-height:360px;">
     {% for u in unresolved_branches %}
@@ -144,12 +144,15 @@
       <div class="device-chip-label">{{ u['raw_hint'] }} <span class="muted">&times;{{ u['occurrences'] }}</span></div>
       <form method="post" action="{{ url_for('settings.map_branch_hint') }}" class="device-chip-form">
         <input type="hidden" name="raw_hint" value="{{ u['raw_hint'] }}">
-        <select name="branch_no" required>
+        <select name="branch_no">
           <option value="">Select a branch...</option>
           {% for b in branches %}
           <option value="{{ b['branch_no'] }}">{{ b['eng_name'] }}</option>
           {% endfor %}
         </select>
+        <input type="text" name="new_branch_name" value="{{ u['raw_hint'] }}"
+               title="Not in the list? Leave the branch empty and this becomes a new unit"
+               placeholder="or a new unit name">
         <button type="submit">Assign</button>
       </form>
       <form method="post" action="{{ url_for('settings.dismiss_branch_hint') }}" class="inline-form" style="margin-top:0.35rem;">
@@ -172,12 +175,16 @@
       </div>
       <div>
         <label for="branch_no">Maps to branch</label>
-        <select id="branch_no" name="branch_no" required>
+        <select id="branch_no" name="branch_no">
           <option value="">Select a branch...</option>
           {% for b in branches %}
           <option value="{{ b['branch_no'] }}">{{ b['eng_name'] }}</option>
           {% endfor %}
         </select>
+      </div>
+      <div>
+        <label for="new_branch_name">...or a new unit (not in the list)</label>
+        <input type="text" id="new_branch_name" name="new_branch_name" placeholder="e.g. SCMC PICO">
       </div>
     </div>
     <button type="submit">Add Alias</button>
@@ -191,7 +198,7 @@
       {% for a in branch_aliases %}
       <tr>
         <td>{{ a['alias'] }}</td>
-        <td>{{ a['eng_name'] or a['branch_no'] }}</td>
+        <td>{{ a['eng_name'] or a['branch_no'] }}{% if a['branch_no'] and a['branch_no'][:1] == 'C' %} <span class="muted">({{ a['branch_no'] }}, custom unit)</span>{% endif %}</td>
         <td>
           <form method="post" action="{{ url_for('settings.delete_branch_alias') }}" style="margin:0;">
             <input type="hidden" name="alias" value="{{ a['alias'] }}">
