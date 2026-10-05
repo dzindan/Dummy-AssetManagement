@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from .queries import current_assets_cte
+from .queries import cctv_gear_sql, current_assets_cte
 
 # Caps distinct item series per chart; the rest fold into "OTHER" - 7 real
 # series + OTHER = 8, matching the categorical palette's full slot count
@@ -20,6 +20,17 @@ from .queries import current_assets_cte
 # Branch Detail opt out (max_series=None) and show every device type; colors
 # past the palette come from charts._extra_color(). The CCTV charts keep it.
 MAX_SERIES = 7
+
+
+def _not_cctv_gear(table: str, device_col: str, keyword: str = "WHERE") -> str:
+    """`<keyword> NOT <CCTV/DVR>` for asset_items, empty for any other table
+    - the asset counts/charts leave CCTV/DVR devices out (see
+    queries.CCTV_ASSET_DEVICE_NAMES). Always applied to the final SELECT,
+    after the latest batch per (branch, period) has been picked from every
+    row."""
+    if table != "asset_items":
+        return ""
+    return f" {keyword} NOT {cctv_gear_sql(device_col)}"
 
 def _branch_trend_sql(table: str) -> str:
     return f"""
@@ -35,6 +46,7 @@ latest AS (
 SELECT r.period, r.item, COUNT(*) AS cnt
 FROM rows r
 JOIN latest l ON r.period = l.period AND r.batch_id = l.batch_id
+{_not_cctv_gear(table, "r.item")}
 GROUP BY r.period, r.item
 ORDER BY r.period, r.item
 """
@@ -54,6 +66,7 @@ latest AS (
 SELECT r.period, r.item, COUNT(*) AS cnt
 FROM rows r
 JOIN latest l ON r.branch_no = l.branch_no AND r.period = l.period AND r.batch_id = l.batch_id
+{_not_cctv_gear(table, "r.item")}
 GROUP BY r.period, r.item
 ORDER BY r.period, r.item
 """
@@ -245,7 +258,8 @@ def _column_totals_and_deltas(visible_periods: list[str], table: list[dict]) -> 
 def _branch_month_changes_sql(table: str) -> str:
     return f"""
 WITH rows AS (
-    SELECT ai.batch_id, ai.branch_no AS branch_no, ib.period AS period, ai.asset_key AS asset_key
+    SELECT ai.batch_id, ai.branch_no AS branch_no, ib.period AS period, ai.asset_key AS asset_key,
+           ai.device_name AS device_name
     FROM {table} ai
     JOIN import_batches ib ON ai.batch_id = ib.id
     WHERE ib.period IS NOT NULL AND ib.period != ''
@@ -256,6 +270,7 @@ latest AS (
 SELECT r.branch_no AS grp, r.period AS period, r.asset_key AS asset_key
 FROM rows r
 JOIN latest l ON r.branch_no = l.branch_no AND r.period = l.period AND r.batch_id = l.batch_id
+{_not_cctv_gear(table, "r.device_name")}
 """
 
 
@@ -302,6 +317,7 @@ def _year_snapshot_sql(table: str) -> str:
     return (
         "SELECT COUNT(*) AS c FROM ("
         + current_assets_cte("WHERE ib.period IS NOT NULL AND ib.period != '' AND ib.period <= ?", table=table)
+        + _not_cctv_gear(table, "bk.device_name")
         + ")"
     )
 
@@ -355,7 +371,7 @@ def get_branch_device_year_table(conn, branch_no: str, year: str, top_items: lis
     SELECT r.device_name AS device_name, r.period AS period, r.asset_key AS asset_key
     FROM rows r
     JOIN latest l ON r.period = l.period AND r.batch_id = l.batch_id
-    """
+    """ + _not_cctv_gear("asset_items", "r.device_name")
     raw = conn.execute(sql, (branch_no,)).fetchall()
     top_set = set(top_items)
     folded = (

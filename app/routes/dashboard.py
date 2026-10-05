@@ -51,7 +51,11 @@ def index():
         user_count = conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
 
         latest_asset_batch = get_latest_batch(conn)
+        # CCTV/DVR devices aren't part of the asset total, charts or tables
+        # below - shown on their own tile instead (see
+        # queries.CCTV_ASSET_DEVICE_NAMES).
         asset_count = get_current_asset_count(conn)
+        cctv_gear_count = get_current_asset_count(conn, cctv_gear=True)
         branch_breakdown = get_current_branch_breakdown(conn)
 
         handover_count = conn.execute("SELECT COUNT(*) c FROM handover_records").fetchone()["c"]
@@ -85,6 +89,7 @@ def index():
         branch_count=branch_count,
         user_count=user_count,
         asset_count=asset_count,
+        cctv_gear_count=cctv_gear_count,
         handover_count=handover_count,
         latest_asset_batch=latest_asset_batch,
         branch_breakdown=branch_breakdown,

@@ -3,7 +3,7 @@
 {% block content %}
 <h1>Asset Dashboard</h1>
 
-<div class="grid grid-3">
+<div class="grid grid-4">
   <div class="stat-tile">
     <div class="value">{{ branch_count }}</div>
     <div class="label">Branches</div>
@@ -14,8 +14,13 @@
   </div>
   <div class="stat-tile">
     <div class="value">{{ asset_count }}</div>
-    <div class="label">Assets (current)</div>
+    <div class="label">Assets (current, excl. CCTV)</div>
   </div>
+  <a class="stat-tile" href="{{ url_for('cctv_dashboard.index') }}" style="text-decoration:none; color:inherit;"
+     title="DVR/CCTV recorders and CCTV devices - not counted in Assets or the charts below">
+    <div class="value">{{ cctv_gear_count }}</div>
+    <div class="label">CCTV / DVR (counted separately)</div>
+  </a>
 </div>
 
 {% if unmapped_device_count %}

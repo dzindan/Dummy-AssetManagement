@@ -189,9 +189,10 @@ h3 { font-size: 1.02rem; }
 
 .grid-3 { grid-template-columns: repeat(3, 1fr); }
 .grid-2 { grid-template-columns: repeat(2, 1fr); }
+.grid-4 { grid-template-columns: repeat(4, 1fr); }
 
 @media (max-width: 900px) {
-  .grid-3, .grid-2 { grid-template-columns: 1fr; }
+  .grid-4, .grid-3, .grid-2 { grid-template-columns: 1fr; }
   .topbar { padding: 0.75rem 1rem; }
   .content { padding: 1.25rem 1rem 2rem; }
 }

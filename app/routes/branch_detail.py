@@ -70,6 +70,10 @@ def detail(branch_no):
         if not branch:
             abort(404, description="Branch not found.")
         assets = get_current_assets(conn, branch_no=branch_no)
+        # Counts/breakdown leave CCTV/DVR devices out (see
+        # queries.CCTV_ASSET_DEVICE_NAMES); the Current Assets table still
+        # lists every row.
+        counted_assets = get_current_assets(conn, branch_no=branch_no, exclude_cctv=True)
         # Chart: full history. Table: full Jan-Dec of the selected year, so
         # a month can be compared against the same month in a different
         # year, not just against whichever month happened to precede it -
@@ -110,7 +114,7 @@ def detail(branch_no):
     }
     cctv_chart_data = trend_chart_payload(cctv_periods, cctv_matrix)
     cctv_device_trend_charts = per_series_trend_payloads(cctv_periods, cctv_matrix)
-    device_status_breakdown = _device_status_breakdown(assets)
+    device_status_breakdown = _device_status_breakdown(counted_assets)
     # Same shape, same helper - a cctv_items row also has device_name/status.
     cctv_status_breakdown = _device_status_breakdown(cctv_items)
 
@@ -119,6 +123,7 @@ def detail(branch_no):
         active_page="assets",
         branch=branch,
         assets=assets,
+        counted_asset_count=len(counted_assets),
         device_status_breakdown=device_status_breakdown,
         cctv_status_breakdown=cctv_status_breakdown,
         chart_data=chart_data,

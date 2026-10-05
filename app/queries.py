@@ -98,11 +98,31 @@ JOIN latest_batch lb ON bk.bkey = lb.bkey AND bk.batch_id = lb.batch_id
 CURRENT_ASSETS_CTE = current_assets_cte()
 CURRENT_CCTV_CTE = current_assets_cte(table="cctv_items")
 
+# CCTV and DVR devices inside asset_items (user's request 2026-10-05): the
+# Asset Dashboard / Branch Detail counts and charts leave them out - they're
+# counted separately - while listings (Manage Assets, Branch Detail's Current
+# Assets table, row exports, Lookup) still show every row. Only these device
+# types: everything else, including a CCTV sheet's monitor (an LCD), stays
+# an asset. Applied *after* picking each branch's latest batch, never
+# before, so leaving these rows out can't make an older batch look
+# "current".
+CCTV_ASSET_DEVICE_NAMES = ("DVR/CCTV RECORDER", "CCTV")
 
-def get_current_assets(conn, branch_no: str | None = None, user_id_norm: str | None = None):
+
+def cctv_gear_sql(device_col: str) -> str:
+    """SQL condition: true when this device_name is CCTV/DVR (see
+    CCTV_ASSET_DEVICE_NAMES). NULL device_name counts as not-CCTV, so
+    `NOT (...)` never drops such a row by NULL logic."""
+    names = ", ".join(f"'{n}'" for n in CCTV_ASSET_DEVICE_NAMES)
+    return f"(COALESCE({device_col}, '') IN ({names}))"
+
+
+def get_current_assets(conn, branch_no: str | None = None, user_id_norm: str | None = None, exclude_cctv: bool = False):
     sql = CURRENT_ASSETS_CTE
     conditions = []
     params: list = []
+    if exclude_cctv:
+        conditions.append("NOT " + cctv_gear_sql("bk.device_name"))
     if branch_no:
         conditions.append("bk.branch_no = ?")
         params.append(branch_no)
@@ -128,8 +148,11 @@ def search_current_assets_by_serial(conn, serial_query: str):
     return conn.execute(sql, [like]).fetchall()
 
 
-def get_current_asset_count(conn) -> int:
-    sql = f"SELECT COUNT(*) AS c FROM ({CURRENT_ASSETS_CTE})"
+def get_current_asset_count(conn, cctv_gear: bool = False) -> int:
+    """Current assets excluding CCTV/DVR (the Dashboard's "Assets" total),
+    or with `cctv_gear=True` only the CCTV/DVR rows left out of it."""
+    cond = cctv_gear_sql("bk.device_name")
+    sql = f"SELECT COUNT(*) AS c FROM ({CURRENT_ASSETS_CTE} WHERE {'' if cctv_gear else 'NOT '}{cond})"
     return conn.execute(sql).fetchone()["c"]
 
 

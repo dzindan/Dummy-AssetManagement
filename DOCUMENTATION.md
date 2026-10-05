@@ -228,6 +228,17 @@ computers on the same office network.
     status, ...) in either Manage CCTV or Manage Assets updates the other
     one too.
 
+    **CCTV and DVR devices are counted separately from assets** (user's
+    request 2026-10-05): the Asset Dashboard's Assets total, its trend
+    charts, Assets by Branch table, Year Comparison and Excel export, and
+    Branch Detail's asset count, trend chart, month table and Device Type
+    Breakdown all leave devices named `DVR/CCTV RECORDER` or `CCTV` out.
+    Everything else stays an asset - including a CCTV sheet's monitor. The Dashboard shows it on its own
+    "CCTV / DVR (counted separately)" tile (links to the CCTV Dashboard);
+    Branch Detail's header says "(+ N CCTV/DVR counted separately)".
+    Listings are unchanged - Manage Assets, Branch Detail's Current Assets
+    table, row exports and Lookup still show every row. See §4 CCTV.
+
 ---
 
 ## 2. Architecture
@@ -1019,12 +1030,26 @@ hues, deterministic by rank). With more than 8 series the chip bar gets
   component, unlike `_asset_key`).
 - **Mirroring into `asset_items`**: every CCTV row is also inserted into the
   same file's `asset_report` batch with just the plain equipment fields,
-  so Manage Assets, the Asset Dashboard and Branch Detail count recording
-  gear too. It's skipped when a row with the same serial is already in
+  so Manage Assets, the Asset Dashboard and Branch Detail list recording
+  gear (the asset *counts/charts* leave the DVR/CCTV devices out again -
+  see "CCTV/DVR vs. asset counts" below). It's skipped when a row with the same serial is already in
   that batch (the same DVR listed on both the OA sheet and the CCTV
   sheet). A file with *only* a CCTV sheet gets an `asset_report` batch
   created just to hold the mirrored rows. The asset sheet is always
   processed first so the serials to dedupe against are known.
+- **CCTV/DVR vs. asset counts** (2026-10-05): an `asset_items` row is left
+  out of the asset counts when its device is one of
+  `queries.CCTV_ASSET_DEVICE_NAMES` (`DVR/CCTV RECORDER`, `CCTV`) - only
+  those device types, by the user's rule; everything else, including the
+  LCD monitors mirrored from CCTV sheets, stays an asset.
+  `queries.cctv_gear_sql` builds the condition; `analytics._not_cctv_gear`
+  applies it to every count over `asset_items`
+  (`get_current_asset_count(cctv_gear=True)` gives the separate tile's
+  number). It's always applied to the *final* SELECT, after each branch's
+  latest batch per period has been picked from all rows - filtering first
+  would let an older batch look "current" for a branch whose newest file
+  had only a CCTV sheet. Renaming either standard device name in Settings
+  means updating that tuple too. Tests: `tests/test_cctv_gear_split.py`.
 - **Current state and trends**: exactly the same per-branch/latest-period
   rules as assets (`CURRENT_CCTV_CTE` is
   `current_assets_cte(table="cctv_items")`; the analytics functions take

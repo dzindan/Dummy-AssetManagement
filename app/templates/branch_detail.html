@@ -3,7 +3,8 @@
 {% block title %}{{ branch['eng_name'] }} - Asset Management Tool{% endblock %}
 {% block content %}
 <h1>{{ branch['eng_name'] }}</h1>
-<p class="muted">Branch No: {{ branch['branch_no'] }} &middot; {{ assets | length }} assets currently on record
+<p class="muted">Branch No: {{ branch['branch_no'] }} &middot; {{ counted_asset_count }} assets currently on record
+  {% if assets | length > counted_asset_count %}(+ {{ assets | length - counted_asset_count }} CCTV/DVR counted separately){% endif %}
   &middot; {{ cctv_items | length }} CCTV item(s) currently on record</p>
 
 <div class="actions" style="margin-top:0;">
@@ -14,7 +15,8 @@
 <div class="panel" style="margin-top: 1.25rem;">
   <h2>Item Count Trend (by month)</h2>
   <p class="muted">Each line is a device type; counts come from this branch's most recent import for each month.
-    Every device type is shown (none folded into OTHER). Click a chip to isolate or hide a series; hover the chart for exact monthly counts.</p>
+    Every device type is shown (none folded into OTHER); CCTV/DVR devices are left out - see the CCTV section
+    below. Click a chip to isolate or hide a series; hover the chart for exact monthly counts.</p>
   <div id="itemTrendChart"></div>
 
   <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-top:1.25rem;">
