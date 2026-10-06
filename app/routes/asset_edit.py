@@ -5,8 +5,10 @@ from flask import Blueprint, flash, jsonify, redirect, render_template, request,
 from ..auth import current_username, require_permission
 from ..db import apply_hand_fix, get_connection, log_activity, prune_stale_unmapped, sync_cctv_asset_link
 from ..importer import branch_for_edited_dept
+from ..sorting import current_sort
 from ..exports import ASSET_ROW_COLUMNS, build_asset_rows_workbook, build_duplicates_workbook, dated_download_name, send_workbook
 from ..queries import (
+    ASSET_SORTS,
     UNRESOLVED_BRANCH_FILTER,
     find_current_duplicate_serials,
     get_branch,
@@ -92,17 +94,18 @@ def index():
     filters = _filters_from_args()
     per_page = _parse_per_page()
     page = _parse_page()
+    sort = current_sort(ASSET_SORTS)
 
     conn = get_connection()
     try:
-        rows, total = search_assets(conn, filters, page=page, per_page=per_page)
+        rows, total = search_assets(conn, filters, page=page, per_page=per_page, sort=sort)
         total_pages = (total + per_page - 1) // per_page if total else 1
         if page > total_pages:
             # Stale page number (filters changed, or rows were deleted out
             # from under it) - fall back to the last real page instead of
             # rendering an empty table.
             page = total_pages
-            rows, total = search_assets(conn, filters, page=page, per_page=per_page)
+            rows, total = search_assets(conn, filters, page=page, per_page=per_page, sort=sort)
         branches = get_branches_with_current_assets(conn)
         show_unresolved_option = has_unresolved_current_assets(conn)
         device_names = [
@@ -170,6 +173,7 @@ def index():
         per_page_options=PER_PAGE_OPTIONS,
         total_pages=total_pages,
         pagination_qs=_pagination_qs(),
+        sort=sort,
     )
 
 
@@ -182,7 +186,7 @@ def export():
     filters = _filters_from_args()
     conn = get_connection()
     try:
-        rows, _total = search_assets(conn, filters)
+        rows, _total = search_assets(conn, filters, sort=current_sort(ASSET_SORTS))
     finally:
         conn.close()
 

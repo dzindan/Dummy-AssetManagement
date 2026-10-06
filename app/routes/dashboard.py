@@ -1,9 +1,11 @@
 from flask import Blueprint, render_template, request
 
 from ..analytics import (
+    fetch_month_change_rows,
     get_all_branches_item_trend,
     get_available_report_years,
     get_branch_month_change_table,
+    get_device_month_change_table,
     get_year_comparison_table,
     resolve_report_year,
 )
@@ -14,9 +16,10 @@ from ..exports import (
     add_trend_line_chart,
     build_workbook,
     send_workbook,
+    write_sheet,
     write_trend_matrix_sheet,
 )
-from ..queries import get_current_asset_count, get_current_branch_breakdown, get_latest_batch
+from ..queries import get_current_asset_count, get_latest_batch
 
 bp = Blueprint("dashboard", __name__)
 
@@ -56,7 +59,6 @@ def index():
         # queries.CCTV_ASSET_DEVICE_NAMES).
         asset_count = get_current_asset_count(conn)
         cctv_gear_count = get_current_asset_count(conn, cctv_gear=True)
-        branch_breakdown = get_current_branch_breakdown(conn)
 
         handover_count = conn.execute("SELECT COUNT(*) c FROM handover_records").fetchone()["c"]
         recent_handovers = conn.execute(
@@ -68,11 +70,15 @@ def index():
 
         available_years = get_available_report_years(conn)
         selected_year = resolve_report_year(request.args.get("year"), available_years)
+        change_rows = fetch_month_change_rows(conn)  # shared by both month tables
         month_periods, month_table, month_column_totals, month_column_added, month_column_removed = (
-            get_branch_month_change_table(conn, selected_year)
+            get_branch_month_change_table(conn, selected_year, rows=change_rows)
         )
         branch_sort = _branch_sort_param()
         month_table = _sort_month_table(month_table, branch_sort)
+        _p, device_table, device_column_totals, device_column_added, device_column_removed = (
+            get_device_month_change_table(conn, selected_year, rows=change_rows)
+        )
 
         year_comparison = get_year_comparison_table(conn)
 
@@ -92,7 +98,6 @@ def index():
         cctv_gear_count=cctv_gear_count,
         handover_count=handover_count,
         latest_asset_batch=latest_asset_batch,
-        branch_breakdown=branch_breakdown,
         recent_handovers=recent_handovers,
         all_branches_chart_data=all_branches_chart_data,
         device_trend_charts=device_trend_charts,
@@ -106,22 +111,31 @@ def index():
         month_column_totals=month_column_totals,
         month_column_added=month_column_added,
         month_column_removed=month_column_removed,
+        device_table=device_table,
+        device_column_totals=device_column_totals,
+        device_column_added=device_column_added,
+        device_column_removed=device_column_removed,
         year_comparison=year_comparison,
     )
 
 
 @bp.route("/export")
 def export():
-    """Branch x month asset-count table for the selected year, re-computed
-    the same way as the Dashboard itself (see get_branch_month_change_table)
+    """Branch x month and device type x month asset-count tables for the
+    selected year (one sheet each), re-computed the same way as the
+    Dashboard itself (see get_branch_month_change_table)
     rather than reusing state passed from index() - matches how every other
     export route in this app re-queries instead of caching across requests."""
     conn = get_connection()
     try:
         available_years = get_available_report_years(conn)
         selected_year = resolve_report_year(request.args.get("year"), available_years)
-        month_periods, month_table, _totals, _added, _removed = get_branch_month_change_table(conn, selected_year)
+        change_rows = fetch_month_change_rows(conn)
+        month_periods, month_table, _totals, _added, _removed = get_branch_month_change_table(
+            conn, selected_year, rows=change_rows)
         month_table = _sort_month_table(month_table, _branch_sort_param())  # same order as on screen
+        _p, device_table, _totals, _added, _removed = get_device_month_change_table(
+            conn, selected_year, rows=change_rows)
         all_periods, _all_items, all_matrix = get_all_branches_item_trend(conn, max_series=None)
     finally:
         conn.close()
@@ -131,6 +145,7 @@ def export():
         columns.append((period, lambda r, i=i: (r["cells"][i]["count"] if r["cells"][i] else 0)))
 
     wb = build_workbook(f"Assets by Branch by Month {selected_year}", columns, month_table)
+    write_sheet(wb.create_sheet(f"By Device Type {selected_year}"), [("Device", "item")] + columns[1:], device_table)
 
     items = list(all_matrix.keys())
     if len(all_periods) >= 2 and items:

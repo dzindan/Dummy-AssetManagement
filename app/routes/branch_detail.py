@@ -19,7 +19,7 @@ from ..exports import (
     write_trend_matrix_sheet,
 )
 from ..paths import safe_filename
-from ..queries import get_branch, get_cctv_items_by_branch_period, get_current_assets, search_cctv
+from ..queries import get_branch, get_cctv_items_by_branch_period, get_current_assets, is_cctv_device, search_cctv
 
 bp = Blueprint("branch_detail", __name__, url_prefix="/branch")
 
@@ -73,7 +73,7 @@ def detail(branch_no):
         # Counts/breakdown leave CCTV/DVR devices out (see
         # queries.CCTV_ASSET_DEVICE_NAMES); the Current Assets table still
         # lists every row.
-        counted_assets = get_current_assets(conn, branch_no=branch_no, exclude_cctv=True)
+        counted_assets = [a for a in assets if not is_cctv_device(a["device_name"])]
         # Chart: full history. Table: full Jan-Dec of the selected year, so
         # a month can be compared against the same month in a different
         # year, not just against whichever month happened to precede it -

@@ -1,4 +1,39 @@
 {% extends "base.html" %}
+
+{# One month cell of the by-branch / by-device-type tables: count, then its
+   change vs. the month before (none for the first month on record). #}
+{% macro change_cell(cell) %}
+<td>
+  {% if cell %}
+    {{ cell.count }}
+    {% if cell.added is not none %}
+    <br><span style="font-size:0.75rem;">
+      {% if cell.added %}<span style="color:var(--ok);">+{{ cell.added }}</span>{% endif %}
+      {% if cell.added and cell.removed %} / {% endif %}
+      {% if cell.removed %}<span style="color:var(--danger);">-{{ cell.removed }}</span>{% endif %}
+      {% if not cell.added and not cell.removed %}<span class="muted">no change</span>{% endif %}
+    </span>
+    {% endif %}
+  {% else %}-{% endif %}
+</td>
+{%- endmacro %}
+
+{% macro total_row(totals, added, removed) %}
+<tfoot>
+  <tr>
+    <td><strong>Total</strong></td>
+    {% for c in totals %}
+    <td>
+      <strong>{{ c }}</strong>
+      <br><span style="font-size:0.75rem;">
+        <span style="color:var(--ok);">+{{ added[loop.index0] }}</span> /
+        <span style="color:var(--danger);">-{{ removed[loop.index0] }}</span>
+      </span>
+    </td>
+    {% endfor %}
+  </tr>
+</tfoot>
+{%- endmacro %}
 {% block title %}Asset Dashboard - Asset Management Tool{% endblock %}
 {% block content %}
 <h1>Asset Dashboard</h1>
@@ -16,7 +51,7 @@
     <div class="value">{{ asset_count }}</div>
     <div class="label">Assets (current, excl. CCTV)</div>
   </div>
-  <a class="stat-tile" href="{{ url_for('cctv_dashboard.index') }}" style="text-decoration:none; color:inherit;"
+  <a class="stat-tile" href="{{ url_for('cctv_dashboard.index') }}"
      title="DVR/CCTV recorders and CCTV devices - not counted in Assets or the charts below">
     <div class="value">{{ cctv_gear_count }}</div>
     <div class="label">CCTV / DVR (counted separately)</div>
@@ -81,42 +116,52 @@
             {{ row.label }}
             {% endif %}
           </td>
-          {% for cell in row.cells %}
-          <td>
-            {% if cell %}
-              {{ cell.count }}
-              {% if cell.added is not none %}
-              <br><span style="font-size:0.75rem;">
-                {% if cell.added %}<span style="color:var(--ok);">+{{ cell.added }}</span>{% endif %}
-                {% if cell.added and cell.removed %} / {% endif %}
-                {% if cell.removed %}<span style="color:var(--danger);">-{{ cell.removed }}</span>{% endif %}
-                {% if not cell.added and not cell.removed %}<span class="muted">no change</span>{% endif %}
-              </span>
-              {% endif %}
-            {% else %}-{% endif %}
-          </td>
-          {% endfor %}
+          {% for cell in row.cells %}{{ change_cell(cell) }}{% endfor %}
         </tr>
         {% endfor %}
       </tbody>
-      <tfoot>
-        <tr>
-          <td><strong>Total</strong></td>
-          {% for c in month_column_totals %}
-          <td>
-            <strong>{{ c }}</strong>
-            <br><span style="font-size:0.75rem;">
-              <span style="color:var(--ok);">+{{ month_column_added[loop.index0] }}</span> /
-              <span style="color:var(--danger);">-{{ month_column_removed[loop.index0] }}</span>
-            </span>
-          </td>
-          {% endfor %}
-        </tr>
-      </tfoot>
+      {{ total_row(month_column_totals, month_column_added, month_column_removed) }}
     </table>
     </div>
   {% else %}
     <p class="muted">No asset reports imported for {{ selected_year }}. Go to <a href="{{ url_for('import_data.index') }}">Import Data</a> to get started.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2 id="device-month-table">Assets by Device Type (by month)</h2>
+  {% if device_table %}
+    <p class="muted">
+      Same as the table above, one row per device type instead of per branch (summed across every branch), for the
+      same report year - <span style="color:var(--ok);">+added</span> / <span style="color:var(--danger);">-removed</span>
+      matched by actual asset identity. CCTV/DVR devices are counted separately and left out. Click a device type to
+      open its current assets in Manage Assets; click a column header to sort.
+    </p>
+    <div class="table-scroll">
+    <table>
+      <thead>
+        <tr><th>Device</th>{% for p in month_periods %}<th>{{ p }}</th>{% endfor %}</tr>
+      </thead>
+      <tbody>
+        {% for row in device_table %}
+        <tr>
+          <td>
+            {% if row.item != '(UNKNOWN)' %}
+            <a class="branch-link" href="{{ url_for('asset_edit.index', device_name=row.item) }}"
+               title="Open Manage Assets filtered to {{ row.item }}">{{ row.item }}</a>
+            {% else %}
+            {{ row.item }}
+            {% endif %}
+          </td>
+          {% for cell in row.cells %}{{ change_cell(cell) }}{% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+      {{ total_row(device_column_totals, device_column_added, device_column_removed) }}
+    </table>
+    </div>
+  {% else %}
+    <p class="muted">No asset reports imported for {{ selected_year }}.</p>
   {% endif %}
 </div>
 

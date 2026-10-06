@@ -5,8 +5,10 @@ from flask import Blueprint, flash, jsonify, redirect, render_template, request,
 from ..auth import current_username, require_permission
 from ..db import apply_hand_fix, get_connection, log_activity, prune_stale_unmapped, sync_cctv_asset_link
 from ..importer import branch_for_edited_dept
+from ..sorting import current_sort
 from ..exports import CCTV_ROW_COLUMNS, build_cctv_rows_workbook, dated_download_name, send_workbook
 from ..queries import (
+    CCTV_SORTS,
     UNRESOLVED_BRANCH_FILTER,
     get_branch,
     get_branches_with_current_cctv,
@@ -77,14 +79,15 @@ def index():
     filters = _filters_from_args()
     per_page = _parse_per_page()
     page = _parse_page()
+    sort = current_sort(CCTV_SORTS)
 
     conn = get_connection()
     try:
-        rows, total = search_cctv(conn, filters, page=page, per_page=per_page)
+        rows, total = search_cctv(conn, filters, page=page, per_page=per_page, sort=sort)
         total_pages = (total + per_page - 1) // per_page if total else 1
         if page > total_pages:
             page = total_pages
-            rows, total = search_cctv(conn, filters, page=page, per_page=per_page)
+            rows, total = search_cctv(conn, filters, page=page, per_page=per_page, sort=sort)
         branches = get_branches_with_current_cctv(conn)
         device_names = [
             r["device_name"]
@@ -128,6 +131,7 @@ def index():
         per_page_options=PER_PAGE_OPTIONS,
         total_pages=total_pages,
         pagination_qs=_pagination_qs(),
+        sort=sort,
     )
 
 
@@ -136,7 +140,7 @@ def export():
     filters = _filters_from_args()
     conn = get_connection()
     try:
-        rows, _total = search_cctv(conn, filters)
+        rows, _total = search_cctv(conn, filters, sort=current_sort(CCTV_SORTS))
     finally:
         conn.close()
 

@@ -109,6 +109,11 @@ CURRENT_CCTV_CTE = current_assets_cte(table="cctv_items")
 CCTV_ASSET_DEVICE_NAMES = ("DVR/CCTV RECORDER", "CCTV")
 
 
+def is_cctv_device(device_name: str | None) -> bool:
+    """Python twin of cctv_gear_sql, for rows already fetched."""
+    return (device_name or "") in CCTV_ASSET_DEVICE_NAMES
+
+
 def cctv_gear_sql(device_col: str) -> str:
     """SQL condition: true when this device_name is CCTV/DVR (see
     CCTV_ASSET_DEVICE_NAMES). NULL device_name counts as not-CCTV, so
@@ -117,12 +122,10 @@ def cctv_gear_sql(device_col: str) -> str:
     return f"(COALESCE({device_col}, '') IN ({names}))"
 
 
-def get_current_assets(conn, branch_no: str | None = None, user_id_norm: str | None = None, exclude_cctv: bool = False):
+def get_current_assets(conn, branch_no: str | None = None, user_id_norm: str | None = None):
     sql = CURRENT_ASSETS_CTE
     conditions = []
     params: list = []
-    if exclude_cctv:
-        conditions.append("NOT " + cctv_gear_sql("bk.device_name"))
     if branch_no:
         conditions.append("bk.branch_no = ?")
         params.append(branch_no)
@@ -290,7 +293,80 @@ def has_unresolved_current_assets(conn) -> bool:
     return bool(conn.execute(sql).fetchone()["e"])
 
 
-def search_assets(conn, filters: dict, page: int = 1, per_page: int | None = None):
+_DEFAULT_LIST_ORDER = "COALESCE(b.eng_name, bk.branch_dept), bk.device_name, bk.id"
+
+
+def order_by_sql(sort: str, sorts: dict[str, tuple[str, bool]], default: str) -> str:
+    """ORDER BY body for `sort` (one of `sorts`' keys, optionally prefixed
+    with "-" for descending - see app/sorting.py), falling back to `default`
+    for a missing/unknown key. `sorts` maps key -> (SQL expression,
+    reversed) - `reversed` flips the direction, e.g. Usage Duration
+    ascending = newest handover date first. Blank values sort last either
+    way; the default order stays on as the tie-breaker."""
+    key = sort.removeprefix("-")
+    if key not in sorts:
+        return default
+    expr, flipped = sorts[key]
+    direction = "DESC" if sort.startswith("-") != flipped else "ASC"
+    return f"({expr}) IS NULL OR ({expr}) = '', ({expr}) {direction}, {default}"
+
+
+def _handover_date_key(col: str) -> str:
+    """SQL turning a dd/mm/yyyy handover_date (text_utils.normalize_handover_date's
+    form) into a sortable yyyymmdd; anything else ("NA", typos) -> NULL, so
+    it sorts with the blanks at the end."""
+    return (
+        f"CASE WHEN {col} GLOB '[0-9][0-9]/[0-9][0-9]/[0-9][0-9][0-9][0-9]'"
+        f" THEN substr({col}, 7, 4) || substr({col}, 4, 2) || substr({col}, 1, 2) END"
+    )
+
+
+def _leading_number(col: str) -> str:
+    """SQL: the number a free-text count starts with ("14", "16 (2X8)"), NULL
+    when it doesn't start with a digit - so those sort last."""
+    return f"CASE WHEN trim({col}) GLOB '[0-9]*' THEN CAST(trim({col}) AS REAL) END"
+
+
+# ?sort= keys for Manage Assets / Manage CCTV -> (SQL, reversed); see
+# order_by_sql and app/sorting.py. Keys match the table's columns left to
+# right.
+ASSET_SORTS = {
+    "branch": ("COALESCE(b.eng_name, bk.branch_dept)", False),
+    "device": ("bk.device_name", False),
+    "user_id": ("bk.user_id_raw", False),
+    "full_name": ("bk.full_name", False),
+    "model": ("bk.model_device", False),
+    "serial": ("bk.serial_tag", False),
+    "status": ("bk.status", False),
+    "remark": ("bk.remark", False),
+    "position": ("bk.position", False),
+    "handover": (_handover_date_key("bk.handover_date"), False),
+    # Shortest use first = newest handover date first.
+    "usage": (_handover_date_key("bk.handover_date"), True),
+    "period": ("ib.period", False),
+}
+
+CCTV_SORTS = {
+    "branch": ("COALESCE(b.eng_name, bk.branch_dept)", False),
+    "device": ("bk.device_name", False),
+    "ip": ("bk.ip", False),
+    "manufacturer": ("bk.manufacturer", False),
+    "model": ("bk.model_device", False),
+    "serial": ("bk.serial_tag", False),
+    "status": ("bk.status", False),
+    "cameras": (_leading_number("bk.camera_count"), False),
+    "hdd_count": (_leading_number("bk.hdd_count"), False),
+    # GB -> TB so "7452.04 GB" sorts next to "8TB", not above "24TB".
+    "hdd_capacity": (
+        f"({_leading_number('bk.hdd_capacity')}) / CASE WHEN UPPER(bk.hdd_capacity) LIKE '%G%' THEN 1024.0 ELSE 1 END",
+        False,
+    ),
+    "location": ("bk.location", False),
+    "remark": ("bk.remark", False),
+}
+
+
+def search_assets(conn, filters: dict, page: int = 1, per_page: int | None = None, sort: str = ""):
     """Filterable view over *current* assets (see CURRENT_ASSETS_CTE
     docstring) for the standalone Manage Assets page - deliberately scoped
     to current state, like the rest of the app, so nobody accidentally
@@ -305,6 +381,9 @@ def search_assets(conn, filters: dict, page: int = 1, per_page: int | None = Non
     used by the Excel export, which dumps the full filtered set rather than
     just whatever page happens to be on screen. The Manage Assets page
     itself always passes a real page/per_page.
+
+    `sort` is an ASSET_SORTS key (optionally "-" for descending); empty or
+    unknown keeps the default branch, device order.
     """
     where = []
     params: list = []
@@ -367,7 +446,7 @@ def search_assets(conn, filters: dict, page: int = 1, per_page: int | None = Non
         f"""
         SELECT bk.*, b.eng_name AS branch_eng_name, ib.period AS period
         {from_sql}
-        ORDER BY COALESCE(b.eng_name, bk.branch_dept), bk.device_name
+        ORDER BY {order_by_sql(sort, ASSET_SORTS, _DEFAULT_LIST_ORDER)}
         {limit_sql}
         """,
         query_params,
@@ -388,14 +467,15 @@ def get_branches_with_current_cctv(conn):
     return conn.execute(sql).fetchall()
 
 
-def search_cctv(conn, filters: dict, page: int = 1, per_page: int | None = None):
+def search_cctv(conn, filters: dict, page: int = 1, per_page: int | None = None, sort: str = ""):
     """CCTV counterpart of search_assets - filterable view over *current*
     cctv_items rows for the standalone Manage CCTV page. `branch_no`,
     `device_name`, and `status` are each a list (possibly empty). `q`
     searches device_name/model/serial/location/manufacturer instead of the
     person-assigned fields search_assets covers (no user_id/full_name here -
     CCTV gear isn't assigned to anyone). `per_page=None` returns every
-    matching row unpaginated, used by the Excel export."""
+    matching row unpaginated, used by the Excel export. `sort` is a
+    CCTV_SORTS key, like search_assets'."""
     where = []
     params: list = []
 
@@ -447,7 +527,7 @@ def search_cctv(conn, filters: dict, page: int = 1, per_page: int | None = None)
         f"""
         SELECT bk.*, b.eng_name AS branch_eng_name, ib.period AS period
         {from_sql}
-        ORDER BY COALESCE(b.eng_name, bk.branch_dept), bk.device_name
+        ORDER BY {order_by_sql(sort, CCTV_SORTS, _DEFAULT_LIST_ORDER)}
         {limit_sql}
         """,
         query_params,

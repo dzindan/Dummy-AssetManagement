@@ -47,9 +47,16 @@
     nothing had a value in a summable format that month, not that the count is actually zero.
   </p>
   {% if branch_tree %}
-  <div class="cctv-branch-tree">
+  <div class="tree-sort-bar" data-tree-sort-bar="cctv-branch-tree">
+    <span class="muted">Sort by</span>
+    <button type="button" class="secondary" data-tree-sort="name">Branch <span class="sort-arrow">&#8645;</span></button> <button type="button" class="secondary" data-tree-sort="dvr">DVR/Recorder <span class="sort-arrow">&#8645;</span></button> <button type="button" class="secondary" data-tree-sort="cameras">Cameras <span class="sort-arrow">&#8645;</span></button> <button type="button" class="secondary" data-tree-sort="hdd">HDD Count <span class="sort-arrow">&#8645;</span></button> <button type="button" class="secondary" data-tree-sort="capacity">HDD Capacity <span class="sort-arrow">&#8645;</span></button>
+  </div>
+  <div class="cctv-branch-tree" id="cctv-branch-tree">
     {% for b in branch_tree %}
-    <details class="cctv-branch-node">
+    <details class="cctv-branch-node" data-sort-name="{{ b.display_name }}" data-sort-dvr="{{ b.recorder_count }}"
+             data-sort-cameras="{{ b.camera_total if b.camera_total is not none else '' }}"
+             data-sort-hdd="{{ b.hdd_count_total if b.hdd_count_total is not none else '' }}"
+             data-sort-capacity="{{ b.hdd_capacity_total_tb if b.hdd_capacity_total_tb is not none else '' }}">
       <summary>
         <span class="cctv-branch-name">
           {% if b.branch_no %}

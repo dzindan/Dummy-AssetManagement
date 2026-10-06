@@ -621,3 +621,164 @@ document.addEventListener("DOMContentLoaded", function () {
     if (saved && saved !== 100) apply(saved);
   });
 });
+
+// Click-to-sort tables (user's request 2026-10-06): clicking a column
+// header sorts the table's rows by that column - ascending, descending,
+// then back to the original order. Every table on every page, except:
+// - headers that are already server-sort links (a.sort-header - Manage
+//   Assets / Manage CCTV, which are paginated and so sort on the server,
+//   see app/sorting.py; and the Dashboard's Branch / Dept header), header
+//   cells holding a checkbox/input, and blank header cells;
+// - tables marked data-no-sort, with a multi-row header, rowspan cells or
+//   fewer than 2 body rows.
+// Only <tbody> rows move, so a <tfoot> Total row stays at the bottom. A
+// column is sorted as numbers when every non-blank cell is one ("17,083",
+// "24 TB", "+3"; GB is converted to TB; a cell's first line only, so
+// "120 / +3 -1" delta cells sort by their count), as dates when every one
+// is dd/mm/yyyy, otherwise as text (Vietnamese-aware, digits compared as
+// numbers). Blank, "-" and "NA"-style cells always sort last. A cell's
+// data-sort-value wins over its text.
+(function () {
+  const collator = new Intl.Collator("vi", { numeric: true, sensitivity: "base" });
+  const NUM = /^([+-]?(?:\d{1,3}(?:,\d{3})+|\d*)(?:\.\d+)?)\s*(TB|GB|%|T)?$/i;
+  // "No value" placeholders as typed in the source files (handover dates
+  // are mostly "NA") - blank, so a date column still sorts as dates.
+  const BLANK = new Set(["-", "NA", "N/A", "#N/A"]);
+  const DATE = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
+
+  function cellAt(row, col) {
+    let i = 0;
+    for (const cell of row.cells) {
+      if (i === col) return cell;
+      i += cell.colSpan || 1;
+      if (i > col) return null;
+    }
+    return null;
+  }
+
+  function rawText(cell) {
+    if (!cell) return "";
+    if (cell.dataset.sortValue !== undefined) return cell.dataset.sortValue;
+    // Text before the first <br> (textContent has no line break for one).
+    let text = "";
+    for (const node of cell.childNodes) {
+      if (node.nodeName === "BR") break;
+      text += node.textContent;
+    }
+    const first = text.split("\n").map(function (s) { return s.trim(); }).find(Boolean) || "";
+    return BLANK.has(first.toUpperCase()) ? "" : first;
+  }
+
+  function keysFor(rows, col) {
+    const texts = rows.map(function (r) { return rawText(cellAt(r, col)); });
+    const filled = texts.filter(Boolean);
+    if (filled.length && filled.every(function (t) { return NUM.test(t) && /\d/.test(t); })) {
+      return texts.map(function (t) {
+        if (!t) return null;
+        const m = t.match(NUM);
+        const value = parseFloat(m[1].replace(/,/g, ""));
+        return m[2] && m[2].toUpperCase() === "GB" ? value / 1024 : value;
+      });
+    }
+    if (filled.length && filled.every(function (t) { return DATE.test(t); })) {
+      return texts.map(function (t) {
+        const m = t.match(DATE);
+        return m ? Number(m[3] + m[2].padStart(2, "0") + m[1].padStart(2, "0")) : null;
+      });
+    }
+    return texts.map(function (t) { return t || null; });
+  }
+
+  function sortTable(table, th, col) {
+    const body = table.tBodies[0];
+    const rows = Array.from(body.rows);
+    if (!table._origRows) table._origRows = rows.slice();
+    const state = th.dataset.sortDir === "asc" ? "desc" : th.dataset.sortDir === "desc" ? "" : "asc";
+
+    table.querySelectorAll("thead th[data-sort-dir]").forEach(function (h) {
+      h.dataset.sortDir = "";
+      const arrow = h.querySelector(".sort-arrow");
+      if (arrow) arrow.innerHTML = "&#8645;";
+    });
+    th.dataset.sortDir = state;
+    th.querySelector(".sort-arrow").innerHTML = state === "asc" ? "&#9650;" : state === "desc" ? "&#9660;" : "&#8645;";
+
+    let ordered;
+    if (!state) {
+      ordered = table._origRows;
+    } else {
+      const keys = keysFor(rows, col);
+      const idx = rows.map(function (_r, i) { return i; });
+      const dir = state === "asc" ? 1 : -1;
+      idx.sort(function (a, b) {
+        const ka = keys[a], kb = keys[b];
+        if (ka === null || kb === null) return ka === kb ? a - b : ka === null ? 1 : -1;
+        const c = typeof ka === "number" && typeof kb === "number" ? ka - kb : collator.compare(String(ka), String(kb));
+        return c ? c * dir : a - b;
+      });
+      ordered = idx.map(function (i) { return rows[i]; });
+    }
+    ordered.forEach(function (r) { body.appendChild(r); });
+  }
+
+  document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll("table").forEach(function (table) {
+      if (table.hasAttribute("data-no-sort") || !table.tHead || table.tHead.rows.length !== 1) return;
+      const body = table.tBodies[0];
+      if (!body || body.rows.length < 2 || body.querySelector("td[rowspan], th[rowspan]")) return;
+
+      let col = 0;
+      Array.from(table.tHead.rows[0].cells).forEach(function (th) {
+        const thisCol = col;
+        col += th.colSpan || 1;
+        if (th.colSpan > 1 || th.querySelector("a.sort-header, input, select, button") || !th.textContent.trim()) return;
+
+        th.dataset.sortDir = "";
+        th.classList.add("client-sortable");
+        th.title = th.title || "Click to sort";
+        const arrow = document.createElement("span");
+        arrow.className = "sort-arrow";
+        arrow.innerHTML = "&#8645;";
+        // Before the column-resize handle (if any) so it stays the last child.
+        const handle = th.querySelector(".col-resize-handle");
+        th.insertBefore(document.createTextNode(" "), handle);
+        th.insertBefore(arrow, handle);
+        th.addEventListener("click", function (e) {
+          if (e.target.closest(".col-resize-handle, a")) return;
+          sortTable(table, th, thisCol);
+        });
+      });
+    });
+  });
+
+  // CCTV Dashboard "Compare by Branch": a list of <details>, not a table,
+  // so it gets its own sort buttons (data-tree-sort on the buttons,
+  // data-sort-* on each node). Two states, toggled: first click = the
+  // column's natural order (name A-Z, numbers largest first), next click
+  // = reversed. Branches with no value always go last.
+  document.addEventListener("click", function (e) {
+    const btn = e.target.closest("[data-tree-sort]");
+    if (!btn) return;
+    const bar = btn.closest("[data-tree-sort-bar]");
+    const tree = document.getElementById(bar.dataset.treeSortBar);
+    const key = btn.dataset.treeSort;
+    const prop = "sort" + key[0].toUpperCase() + key.slice(1); // data-sort-<key>
+    const flip = btn.dataset.dir === "first";
+    bar.querySelectorAll("[data-tree-sort]").forEach(function (b) {
+      b.dataset.dir = "";
+      b.querySelector(".sort-arrow").innerHTML = "&#8645;";
+    });
+    btn.dataset.dir = flip ? "second" : "first";
+    const numeric = key !== "name";
+    const dir = (numeric ? -1 : 1) * (flip ? -1 : 1);
+    btn.querySelector(".sort-arrow").innerHTML = dir === 1 ? "&#9650;" : "&#9660;";
+    const nodes = Array.from(tree.children);
+    nodes.sort(function (a, b) {
+      const va = a.dataset[prop], vb = b.dataset[prop];
+      if (va === "" || vb === "") return va === vb ? 0 : va === "" ? 1 : -1;
+      const c = numeric ? parseFloat(va) - parseFloat(vb) : collator.compare(va, vb);
+      return c * dir;
+    });
+    nodes.forEach(function (n) { tree.appendChild(n); });
+  });
+})();

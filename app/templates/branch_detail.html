@@ -1,5 +1,19 @@
 {% extends "base.html" %}
 {% import "_cctv_month_table.html" as cctv_month_table %}
+{#
+Text linking to Manage Assets (`endpoint` asset_edit.index) or Manage CCTV
+(cctv_edit.index) filtered to this branch + `device` (+ `status`), so a row
+or count in the tables below opens exactly the rows behind it. A blank
+device/status ("(UNKNOWN)") can't be picked in those filters, so it stays
+plain text.
+#}
+{% macro filter_link(endpoint, text, device, status=None) -%}
+{%- if device == '(UNKNOWN)' or status == '(UNKNOWN)' -%}{{ text }}
+{%- else -%}
+<a class="branch-link" href="{{ url_for(endpoint, branch_no=branch['branch_no'], device_name=device, status=status) }}"
+   title="Open {{ device }}{{ ' / ' ~ status if status else '' }} for this branch">{{ text }}</a>
+{%- endif -%}
+{%- endmacro %}
 {% block title %}{{ branch['eng_name'] }} - Asset Management Tool{% endblock %}
 {% block content %}
 <h1>{{ branch['eng_name'] }}</h1>
@@ -38,7 +52,8 @@
     Each cell is that device type's count for the month, for the selected report year. Every month also shows its
     change vs. the month before it - <span style="color:var(--ok);">+added</span> /
     <span style="color:var(--danger);">-removed</span>, matched by actual asset identity (not just a count
-    difference), so the same month can be compared year to year.
+    difference), so the same month can be compared year to year. Click a device type to open this branch's current
+    assets of that type in Manage Assets.
   </p>
   <div class="table-scroll">
   <table>
@@ -51,7 +66,7 @@
     <tbody>
       {% for row in trend_rows %}
       <tr>
-        <td>{{ row.item }}</td>
+        <td>{{ filter_link('asset_edit.index', row.item, row.item) }}</td>
         {% for cell in row.cells %}
         <td>
           {% if cell %}
@@ -150,7 +165,8 @@
 <div class="grid grid-2">
   <div class="panel">
     <h2>Device Type Breakdown</h2>
-    <p class="muted">By status - e.g. how many of a device type are actually in use vs. broken or in the warehouse.</p>
+    <p class="muted">By status - e.g. how many of a device type are actually in use vs. broken or in the warehouse.
+      Click a device type or a count to open those assets in Manage Assets.</p>
     <div class="table-scroll">
     <table>
       <thead>
@@ -163,8 +179,8 @@
       <tbody>
         {% for row in device_status_breakdown.rows %}
         <tr>
-          <td>{{ row.device }}</td>
-          {% for cell in row.cells %}<td>{{ cell if cell else '-' }}</td>{% endfor %}
+          <td>{{ filter_link('asset_edit.index', row.device, row.device) }}</td>
+          {% for cell in row.cells %}<td>{{ filter_link('asset_edit.index', cell, row.device, device_status_breakdown.statuses[loop.index0]) if cell else '-' }}</td>{% endfor %}
           <td><strong>{{ row.total }}</strong></td>
         </tr>
         {% else %}
@@ -186,7 +202,8 @@
 
   <div class="panel">
     <h2>CCTV Breakdown</h2>
-    <p class="muted">By status - e.g. how many DVRs/recorders are actually in use vs. broken.</p>
+    <p class="muted">By status - e.g. how many DVRs/recorders are actually in use vs. broken.
+      Click a device type or a count to open those items in Manage CCTV.</p>
     <div class="table-scroll">
     <table>
       <thead>
@@ -199,8 +216,8 @@
       <tbody>
         {% for row in cctv_status_breakdown.rows %}
         <tr>
-          <td>{{ row.device }}</td>
-          {% for cell in row.cells %}<td>{{ cell if cell else '-' }}</td>{% endfor %}
+          <td>{{ filter_link('cctv_edit.index', row.device, row.device) }}</td>
+          {% for cell in row.cells %}<td>{{ filter_link('cctv_edit.index', cell, row.device, cctv_status_breakdown.statuses[loop.index0]) if cell else '-' }}</td>{% endfor %}
           <td><strong>{{ row.total }}</strong></td>
         </tr>
         {% else %}

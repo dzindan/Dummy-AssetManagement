@@ -1,0 +1,12 @@
+{#
+Header cell of a server-sorted table (Manage Assets / Manage CCTV - see
+app/sorting.py): a link that advances this column's sort one step (none ->
+A-Z -> Z-A -> none), keeping the filters, with the same arrows as the
+Dashboard's Branch / Dept header.
+#}
+{% macro th(label, key) %}
+{% set cur = request.args.get('sort', '') %}
+<th><a class="sort-header" href="{{ sort_url(key) }}"
+   title="{{ 'Sort descending' if cur == key else ('Back to the default order' if cur == '-' ~ key else 'Sort ascending') }}">{{ label }}
+  <span class="sort-arrow">{% if cur == key %}&#9650;{% elif cur == '-' ~ key %}&#9660;{% else %}&#8645;{% endif %}</span></a></th>
+{%- endmacro %}

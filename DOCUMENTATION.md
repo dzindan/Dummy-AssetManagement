@@ -522,6 +522,42 @@ be edited inline. Not done yet: pasting a block copied from Excel, Ctrl+Z.
 JS in `app/static/app.js`, styles in `style.css`. Tests:
 `tests/test_inline_edit.py`.
 
+**Sorting tables** (user's request 2026-10-06): every table header can be
+clicked to sort - ascending, descending, then back to the original order,
+with a ⇅ / ▲ / ▼ arrow showing which.
+- **Manage Assets / Manage CCTV sort on the server** (`app/sorting.py`):
+  they're paginated, so sorting only the rows on screen would look right
+  while being wrong. `?sort=<key>` / `?sort=-<key>` picks an ORDER BY from
+  a whitelist (`queries.ASSET_SORTS` / `CCTV_SORTS`; an unknown key keeps
+  the default branch, device order, which also stays on as the
+  tie-breaker). Blank values sort last both ways. Handover Date sorts by
+  the dd/mm/yyyy date ("NA" and typos last); Usage Duration is the same key
+  reversed (shortest use first). Cameras / HDD Count / HDD Capacity sort by
+  the number the free text starts with, capacity converted GB -> TB. The
+  header links (`templates/_sort.html`, `sort_url` Jinja global) keep every
+  filter and reset to page 1; the Filter form carries the sort in a hidden
+  field, paging keeps it, and Export to Excel exports in the same order.
+- **Every other table sorts in the browser** (app.js, "Click-to-sort
+  tables"): only `<tbody>` rows move, so a `<tfoot>` Total row stays put.
+  A column sorts as numbers when every non-blank cell is one ("17,083",
+  "24 TB", GB converted to TB; only the text before a cell's first `<br>`,
+  so a "120 / +3 -1" month cell sorts by its count), as dates when all are
+  dd/mm/yyyy, otherwise as Vietnamese-aware text with digits compared as
+  numbers (IPs, "Branch 9" < "Branch 10"). Blank, "-" and "NA" / "N/A" /
+  "#N/A" count as empty and go last - so a handover-date column, mostly
+  "NA", still sorts as dates. Skipped: headers that are
+  already server-sort links (incl. the Dashboard's Branch / Dept, whose
+  sort the export follows), header cells with a checkbox, blank headers,
+  and tables with `data-no-sort` (the CCTV per-metric month table), a
+  multi-row header, rowspan cells or under 2 rows. A client-side sort is
+  not remembered across reloads.
+- **CCTV Dashboard's Compare by Branch** is a list of `<details>`, not a
+  table: a "Sort by" bar (Branch, DVR/Recorder, Cameras, HDD Count, HDD
+  Capacity) reorders it from each node's `data-sort-*` values - names A-Z
+  first, numbers largest first, the next click reverses it; branches with
+  no parsed value go last.
+Tests: `tests/test_table_sort.py` (server side).
+
 **Table zoom** (Manage Assets / Manage CCTV, user's request 2026-10-02 - wide
 tables meant scrolling left and right all the time): a "Table zoom" bar
 above the table with - / + (10% steps, 40-150%), the current level (click
@@ -566,10 +602,30 @@ of bad source text for that physical asset:
   `db.apply_hand_fixes_to_batch` corrects that asset's new row (the
   asset_key is still computed from the file's own text, so month-to-month
   tracking keeps matching) and prunes Unmapped.
-No alias is created. Editing a value that was already mapped/standard (e.g.
-status USING LOCAL -> BROKEN) is a real change for that month and stays
-one-row, as before. Logged as "Fixed by hand (this asset, all months +
+No alias is created. Logged as "Fixed by hand (this asset, all months +
 future imports)". Tests: `tests/test_hand_fix.py`.
+
+**Device and Model edits always apply to every month** (user's rule,
+2026-10-06 - `db.ALWAYS_FIX_FIELDS`): what a physical device *is* doesn't
+change from month to month, so editing an asset's Device or Model - in
+Manage Assets / Manage CCTV, the Edit page or an inline cell - is treated
+as the correction above even when the old value was already a mapped /
+standard name (before, e.g. PORTABLE HDD -> SSD on the latest month left
+the earlier months on PORTABLE HDD). **Status** still follows the old rule:
+changing a mapped status (USING LOCAL -> BROKEN) is a real change for that
+month only. Details:
+- On import, a Device/Model fix applies to its asset (branch_no + asset_key)
+  whatever the new row says, not only when it still says `from_value` - a
+  mapping changed since the fix can make the file's text come out as a
+  different name, which would otherwise undo the fix.
+- Fixing again (A -> B, then B -> C) re-points the earlier fix to C, so
+  the next file never depends on which of two chained fixes runs first; a
+  fix that lands back on its own from_value is dropped.
+- Re-mapping an alias in Settings skips rows with a hand fix for that
+  field (`settings._resync_alias_rows`) - the hand edit wins.
+- The 3 PORTABLE HDD -> SSD edits made before this rule were re-applied on
+  2026-10-06 (19 earlier-month rows; backup
+  `data.db.bak-before-ssd-backfill-2026-10-06` in the data folder).
 
 **Unicode `UPPER()`**: mapping/unmapping in Settings re-points existing rows
 with SQL like `WHERE device_name = UPPER(device_name_raw)`, and the Manage
@@ -856,6 +912,30 @@ Two different display rules sit on top of that diff, one per consumer:
   year's end-of-year snapshot count (bounded `period <= "YYYY-12"`, same
   per-branch latest-period logic as `CURRENT_ASSETS_CTE` in queries.py, just
   time-bounded) and its change vs. the year before.
+- **Dashboard's device-type table** ("Assets by Device Type (by month)",
+  user's request 2026-10-06, `analytics.get_device_month_change_table`):
+  the branch table turned around - one row per device type summed across
+  every branch, same selected year, same identity-based +added/-removed,
+  busiest type first, CCTV/DVR left out; also a "By Device Type <year>"
+  sheet in `/export`. Clicking a device type opens Manage Assets filtered
+  to it (`/assets/?device_name=...` - current assets, since that page only
+  lists each branch's latest month). **Branch Detail** does the same for
+  that branch (`filter_link` macro in `branch_detail.html`): a device type
+  in Month by Month or Device Type Breakdown opens Manage Assets filtered to
+  branch + device, a Breakdown count adds that column's status, and the
+  CCTV Breakdown opens Manage CCTV the same way. "(UNKNOWN)" (blank in the
+  data, not selectable in those filters) stays plain text. The changes are worked out **per branch** (each
+  branch's devices vs. that branch's own previous report) and then summed
+  (`_device_changes_across_branches`) - diffing the all-branches total
+  instead would count every device of a branch that hasn't sent this
+  month's file yet as removed (2026-09 had 71 of 127 branches in). A
+  branch's first report adds to the count but not to added/removed. Totals
+  can be a few above the branch table's (9-13 a month on 2026-10-06 data):
+  a serial listed under two device types in one branch and month is one
+  asset in the branch table but counts under each type here. Both tables
+  are built from one shared query (`fetch_month_change_rows`, ~0.7 s).
+  Shared cell / Total-row markup: `change_cell` / `total_row` macros at the
+  top of `dashboard.html`. Tests: `tests/test_cctv_gear_split.py`.
 
 **The Cleaning Report is revisitable, not a one-shot response**
 (`GET /import/result?batch_ids=1,2,3`, importer's `upload_asset_reports` /
@@ -1045,7 +1125,8 @@ hues, deterministic by rank). With more than 8 series the chip bar gets
   `queries.cctv_gear_sql` builds the condition; `analytics._not_cctv_gear`
   applies it to every count over `asset_items`
   (`get_current_asset_count(cctv_gear=True)` gives the separate tile's
-  number). It's always applied to the *final* SELECT, after each branch's
+  number; `queries.is_cctv_device` is the same test for rows already
+  fetched, e.g. Branch Detail's count/breakdown). It's always applied to the *final* SELECT, after each branch's
   latest batch per period has been picked from all rows - filtering first
   would let an older batch look "current" for a branch whose newest file
   had only a CCTV sheet. Renaming either standard device name in Settings
@@ -1098,6 +1179,36 @@ hues, deterministic by rank). With more than 8 series the chip bar gets
   serial, by walking the mirrored rows from the end and matching the raw
   device/model/status text. A row it can't match safely is left unlinked
   (edits there just don't sync).
+
+**Mapping changes reach every month** (fixed 2026-10-06 - Device, Status and
+Model alike, both `asset_items` and `cctv_items`):
+- **Re-mapping an alias** (`settings._resync_alias_rows`): every row with
+  that raw text moves to the new standard name if it still shows what the
+  mapping gave it - its own raw text *or the name the alias pointed to
+  before*. The old guard only matched raw text, so after a re-map earlier
+  months kept the old name and only new imports got the new one. Rows
+  edited by hand to something else, and rows with a hand fix for that
+  field, are left alone. Raw text is compared trimmed + uppercased, same as
+  the importer.
+- **Renaming / merging a standard name** (`settings._rename_standard_rows`)
+  now also renames it on every row and in `hand_fixes` - before, only the
+  alias table changed (CARD READER -> ID CARD READER on 2026-09-22 left
+  2,624 Jan-Aug rows on CARD READER).
+- **Default standard names / aliases seed a new database only**
+  (`db.init_db`: only when that standard table is empty). They used to be
+  re-inserted on every startup, which brought renamed/merged defaults back
+  (CARD READER, SAMSUNG S22A330NHE, DELL P2212HB) as standard names that an
+  alias also pointed away from.
+- Data corrected 2026-10-06 (user-approved; Activity Log "data fix via
+  Claude"; snapshot before it: `release/AssetManagementTool_DATA_2026-10-06_0957.zip`):
+  CARD READER -> ID CARD READER (2,624 rows); Samsung models moved to
+  Samsung's own model names (the "L...XXV" retail code minus the L and the
+  region suffix): S22A330 -> **SAMSUNG S22A330NHE** (1,944), the 27"
+  LS27D300GAEXXV split out of the 22" model -> **SAMSUNG S27D300GAE** (9),
+  the 2024 22" IPS S22D300GAE split out of the 2015 TN S22D300NY ->
+  **SAMSUNG S22D300GAE** (112 + 140), LS22D300NY -> **SAMSUNG S22D300NY**
+  (58); the leftover DELL P2212HB standard name merged into DELL P2212H.
+  Tests: `tests/test_mapping_resync.py`.
 
 **Device Name Mapping UI** (Settings → Device Name Mapping): the standard
 list is fully editable (add/rename/delete). Unmapped names appear as small

@@ -6,6 +6,7 @@ from flask import Flask, Response
 from .auth import register_auth
 from .db import get_setting, init_db, set_setting
 from .paths import get_app_data_dir_status, get_bundle_dir
+from .sorting import sort_url
 from .text_utils import usage_duration_years
 from .version import APP_VERSION
 
@@ -47,6 +48,8 @@ def create_app() -> Flask:
     # directly, via exports.ASSET_ROW_COLUMNS, since a workbook cell has no
     # Jinja filter to run).
     app.jinja_env.filters["usage_duration"] = usage_duration_years
+    # Header links of the server-sorted tables (templates/_sort.html).
+    app.jinja_env.globals["sort_url"] = sort_url
 
     # get_app_data_dir_status() (used by init_db -> get_connection)
     # already falls back to the default location on its own if a configured

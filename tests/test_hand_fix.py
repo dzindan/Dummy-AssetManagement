@@ -2,7 +2,8 @@
 """Fixing an unmapped Device/Model/Status by hand (db.apply_hand_fix): the
 fix reaches the same asset's other months and its linked CCTV/asset rows,
 the value leaves Unmapped, and the asset's next monthly file is corrected
-on import (db.apply_hand_fixes_to_batch). A normal change of a mapped value
+on import (db.apply_hand_fixes_to_batch). A Device/Model edit is always
+such a fix, even of a mapped value; a normal Status change of a mapped value
 stays a one-month change. Fixture pattern from tests/test_cctv_asset_sync.py.
 """
 import os
@@ -127,6 +128,46 @@ class HandFixTests(unittest.TestCase):
                                 "ON b.id = a.batch_id WHERE a.serial_tag = 'SN-PC-1'"))
         self.assertEqual(statuses, {"2026-06": "USING LOCAL", "2026-07": "BROKEN"})
         self.assertEqual(self._q("SELECT * FROM hand_fixes"), [])
+
+    # Device/Model (db.ALWAYS_FIX_FIELDS): what a device is doesn't change by
+    # month, so any hand edit - not just of an unmapped value - is a fix for
+    # every month and for future imports (user's rule, 2026-10-06).
+
+    def _edit_pc(self, **changes):
+        pc = self._q("SELECT a.* FROM asset_items a JOIN import_batches b ON b.id = a.batch_id "
+                     "WHERE b.period = (SELECT MAX(period) FROM import_batches) AND a.serial_tag = 'SN-PC-1'")[0]
+        form = {f: (pc[f] or "") for f in ASSET_FIELDS}
+        form.update(changes)
+        return self.client.post(f"/assets/{pc['id']}/edit", data=form, follow_redirects=True)
+
+    def _pc(self, field):
+        return dict(self._q(f"SELECT b.period, a.{field} FROM asset_items a JOIN import_batches b "
+                            "ON b.id = a.batch_id WHERE a.serial_tag = 'SN-PC-1'"))
+
+    def test_model_edit_reaches_earlier_months_and_next_import(self):
+        resp = self._edit_pc(model_device="DELL OPTIPLEX 3070")
+        self.assertIn(b"other row(s)", resp.data)
+        self.assertEqual(self._pc("model_device"), {"2026-06": "DELL OPTIPLEX 3070", "2026-07": "DELL OPTIPLEX 3070"})
+        self._import("2026-08")
+        self.assertEqual(self._pc("model_device")["2026-08"], "DELL OPTIPLEX 3070")
+
+    def test_device_edit_reaches_earlier_months(self):
+        self._edit_pc(device_name="NOTEBOOK")
+        self.assertEqual(set(self._pc("device_name").values()), {"NOTEBOOK"})
+
+    def test_edited_twice_next_import_gets_the_latest(self):
+        self._edit_pc(model_device="DELL OPTIPLEX 3070")
+        self._edit_pc(model_device="DELL OPTIPLEX 5080")
+        self._import("2026-08")
+        self.assertEqual(set(self._pc("model_device").values()), {"DELL OPTIPLEX 5080"})
+
+    def test_fix_survives_a_later_mapping_change(self):
+        raw = self._pc("model_device")["2026-07"]
+        self._edit_pc(model_device="DELL OPTIPLEX 3070")
+        # The file's own text now maps to something else entirely.
+        self.client.post("/settings/model-alias/map", data={"alias": raw, "canonical_name": "SOME OTHER MODEL"})
+        self._import("2026-08")
+        self.assertEqual(self._pc("model_device")["2026-08"], "DELL OPTIPLEX 3070")
 
 
 if __name__ == "__main__":

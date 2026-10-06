@@ -679,31 +679,30 @@ def init_db() -> None:
         conn.executescript(SCHEMA)
         conn.executescript(LOGS_SCHEMA)
         _add_missing_columns(conn)
-        for name in DEFAULT_STANDARD_DEVICE_NAMES:
-            conn.execute(
-                "INSERT OR IGNORE INTO device_standard_names (name, created_at) VALUES (?, datetime('now'))",
-                (name,),
-            )
-        for alias, canonical in DEFAULT_DEVICE_ALIASES.items():
-            conn.execute(
-                "INSERT OR IGNORE INTO device_aliases (alias, canonical_name) VALUES (?, ?)",
-                (alias, canonical),
-            )
-        for name in DEFAULT_STANDARD_STATUSES:
-            conn.execute(
-                "INSERT OR IGNORE INTO status_standard_names (name, created_at) VALUES (?, datetime('now'))",
-                (name,),
-            )
-        for name in DEFAULT_STANDARD_MODELS:
-            conn.execute(
-                "INSERT OR IGNORE INTO model_standard_names (name, created_at) VALUES (?, datetime('now'))",
-                (name,),
-            )
-        for alias, canonical in DEFAULT_MODEL_ALIASES.items():
-            conn.execute(
-                "INSERT OR IGNORE INTO model_aliases (alias, canonical_name) VALUES (?, ?)",
-                (alias, canonical),
-            )
+        # Default standard names/aliases seed a *new* database only (its
+        # standard list still empty). They used to be re-inserted on every
+        # startup, which brought back any default the user had since renamed,
+        # merged or deleted in Settings - e.g. CARD READER after it was
+        # renamed to ID CARD READER, or SAMSUNG S22A330NHE after it was made
+        # an alias - leaving a standard name and an alias fighting over the
+        # same value (found 2026-10-06).
+        for standard_table, alias_table, names, aliases in (
+            ("device_standard_names", "device_aliases", DEFAULT_STANDARD_DEVICE_NAMES, DEFAULT_DEVICE_ALIASES),
+            ("status_standard_names", "status_aliases", DEFAULT_STANDARD_STATUSES, {}),
+            ("model_standard_names", "model_aliases", DEFAULT_STANDARD_MODELS, DEFAULT_MODEL_ALIASES),
+        ):
+            if conn.execute(f"SELECT 1 FROM {standard_table} LIMIT 1").fetchone():
+                continue
+            for name in names:
+                conn.execute(
+                    f"INSERT OR IGNORE INTO {standard_table} (name, created_at) VALUES (?, datetime('now'))",
+                    (name,),
+                )
+            for alias, canonical in aliases.items():
+                conn.execute(
+                    f"INSERT OR IGNORE INTO {alias_table} (alias, canonical_name) VALUES (?, ?)",
+                    (alias, canonical),
+                )
         _backfill_branch_names(conn)
         _clean_existing_ip_data(conn)
         _renormalize_model_device(conn)
@@ -926,23 +925,29 @@ HAND_FIX_FIELDS = {
     "status": ("status_unmapped", "raw_status"),
 }
 
+# What a device *is* doesn't change from one month to the next, so a hand
+# edit of these is always a correction for every month (user's rule,
+# 2026-10-06). Status does change month to month (USING LOCAL -> BROKEN), so
+# it's only treated as a correction when its old value was unmapped text.
+ALWAYS_FIX_FIELDS = {"device_name", "model_device"}
+
 
 def apply_hand_fix(conn, source_table: str, row_id: int, before, changed: dict, performed_by: str = "") -> int:
-    """A Device/Model/Status edited by hand while its old value was still in
-    the Unmapped queue is a correction of bad source text, not a real-world
-    change - so it's applied to the same physical asset everywhere:
+    """A hand edit that corrects bad data rather than recording a real-world
+    change - any Device/Model edit (ALWAYS_FIX_FIELDS), or a Status edited
+    while its old value was still in the Unmapped queue - is applied to the
+    same physical asset everywhere:
 
     - the asset's rows in other months (same branch_no + asset_key, still
       carrying the old value) - Manage Assets/CCTV only show the latest
-      month, so those older rows can't be edited by hand and would keep the
-      value in Unmapped forever;
+      month, so those older rows can't be edited by hand;
     - the linked rows on the other side (CCTV <-> asset mirror), every month;
     - and it's remembered in hand_fixes so the asset's next monthly file is
       corrected on import (apply_hand_fixes_to_batch) instead of bringing
-      the value back to Unmapped.
+      the old value back.
 
-    An edit whose old value was a mapped/standard value (e.g. a status going
-    USING LOCAL -> BROKEN) is a real change for that month only and is left
+    A Status edit whose old value was a mapped/standard value (e.g. USING
+    LOCAL -> BROKEN) is a real change for that month only and is left
     alone. `before` is the row as it was before the edit. Call before
     prune_stale_unmapped. Returns how many other rows were updated."""
     other = "cctv_items" if source_table == "asset_items" else "asset_items"
@@ -953,7 +958,9 @@ def apply_hand_fix(conn, source_table: str, row_id: int, before, changed: dict, 
         old, new = before[field] or "", changed[field] or ""
         if not old or not new or old == new:
             continue
-        if not conn.execute(f"SELECT 1 FROM {queue} WHERE {queue_col} = ?", (old,)).fetchone():
+        if field not in ALWAYS_FIX_FIELDS and not conn.execute(
+            f"SELECT 1 FROM {queue} WHERE {queue_col} = ?", (old,)
+        ).fetchone():
             continue
         branch_no, asset_key = before["branch_no"] or "", before["asset_key"] or ""
         same = [r["id"] for r in conn.execute(
@@ -976,6 +983,21 @@ def apply_hand_fix(conn, source_table: str, row_id: int, before, changed: dict, 
         keys = {(source_table, branch_no, asset_key)} | {(other, r["branch_no"] or "", r["asset_key"] or "")
                                                          for r in linked}
         for table, b, k in keys:
+            # Fixed again later (A -> B, then B -> C): earlier fixes now lead
+            # straight to C, so the next file's "A" isn't left depending on
+            # the order two chained fixes happen to be applied in. One that
+            # lands back on its own from_value (A -> B, then B -> A) is
+            # dropped.
+            conn.execute(
+                "UPDATE hand_fixes SET to_value = ? "
+                "WHERE source_table = ? AND branch_no = ? AND asset_key = ? AND field = ? AND to_value = ?",
+                (new, table, b, k, field, old),
+            )
+            conn.execute(
+                "DELETE FROM hand_fixes WHERE source_table = ? AND branch_no = ? AND asset_key = ? AND field = ? "
+                "AND from_value = to_value",
+                (table, b, k, field),
+            )
             conn.execute(
                 "INSERT OR REPLACE INTO hand_fixes (source_table, branch_no, asset_key, field, from_value, to_value,"
                 " created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)",
@@ -993,13 +1015,23 @@ def apply_hand_fixes_to_batch(conn, source_table: str, batch_id: int) -> int:
     batch: a row of the same asset (branch_no + asset_key) still carrying
     the old value gets the corrected one. Runs after the rows are inserted,
     so asset_key is computed from the file's own text exactly as in earlier
-    months. Prunes the Unmapped queue if anything changed. Doesn't commit."""
+    months. A Device/Model fix (ALWAYS_FIX_FIELDS) applies to the asset
+    whatever its new row says - the asset_key already pins down the physical
+    device, and the file's text may come out as a different name than the
+    fix's from_value once a mapping has changed since. A Status fix only
+    replaces its own from_value. Prunes the Unmapped queue if anything
+    changed. Doesn't commit."""
     fixed = 0
     for fix in conn.execute("SELECT * FROM hand_fixes WHERE source_table = ?", (source_table,)).fetchall():
+        field = fix["field"]
+        if field in ALWAYS_FIX_FIELDS:
+            match, match_value = f"{field} != ?", fix["to_value"]
+        else:
+            match, match_value = f"{field} = ?", fix["from_value"]
         fixed += conn.execute(
-            f"UPDATE {source_table} SET {fix['field']} = ? "
-            f"WHERE batch_id = ? AND branch_no = ? AND asset_key = ? AND {fix['field']} = ?",
-            (fix["to_value"], batch_id, fix["branch_no"], fix["asset_key"], fix["from_value"]),
+            f"UPDATE {source_table} SET {field} = ? "
+            f"WHERE batch_id = ? AND branch_no = ? AND asset_key = ? AND {match}",
+            (fix["to_value"], batch_id, fix["branch_no"], fix["asset_key"], match_value),
         ).rowcount
     if fixed:
         prune_stale_unmapped(conn)

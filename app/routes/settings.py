@@ -320,6 +320,48 @@ def dismiss_branch_hint():
     return redirect(url_for("settings.index"))
 
 
+# kind -> (normalized column, raw column), same names in asset_items and
+# cctv_items.
+_MAPPED_COLUMNS = {
+    "device": ("device_name", "device_name_raw"),
+    "status": ("status", "status_raw"),
+    "model": ("model_device", "model_device_raw"),
+}
+
+
+def _resync_alias_rows(conn, kind: str, alias: str, new_value: str, old_canonical: str | None = None) -> None:
+    """After `alias` is (re)mapped to `new_value`, bring every already-
+    imported row carrying that raw value along - every month, not just
+    future imports. A row moves when it still shows what the mapping gave
+    it: its own raw text (never mapped) or `old_canonical` (what the alias
+    pointed to before - a *re*-map, which the old raw-text-only guard
+    skipped, so earlier months kept the old name; found 2026-10-06). A row
+    showing anything else was edited by hand and is left alone, as is one
+    with a hand fix (db.apply_hand_fix) for this field."""
+    col, raw = _MAPPED_COLUMNS[kind]
+    current = [v for v in {alias, old_canonical} if v]
+    for table in ("asset_items", "cctv_items"):
+        conn.execute(
+            f"UPDATE {table} SET {col} = ? "
+            f"WHERE UPPER(TRIM({raw})) = ? AND {col} IN ({','.join('?' * len(current))}) "
+            f"AND NOT EXISTS (SELECT 1 FROM hand_fixes h WHERE h.source_table = '{table}' "
+            f"AND h.field = '{col}' AND h.branch_no = {table}.branch_no AND h.asset_key = {table}.asset_key)",
+            (new_value, alias, *current),
+        )
+
+
+def _rename_standard_rows(conn, kind: str, old_name: str, new_name: str) -> None:
+    """Rename/merge of a standard name: every row showing `old_name`, in
+    every month, now shows `new_name` - before 2026-10-06 only the alias
+    table changed, so rows imported earlier kept the old name while new
+    imports got the new one. Hand fixes that produced `old_name` follow too,
+    so the next import doesn't bring the old name back."""
+    col, _raw = _MAPPED_COLUMNS[kind]
+    for table in ("asset_items", "cctv_items"):
+        conn.execute(f"UPDATE {table} SET {col} = ? WHERE {col} = ?", (new_name, old_name))
+    conn.execute("UPDATE hand_fixes SET to_value = ? WHERE field = ? AND to_value = ?", (new_name, col, old_name))
+
+
 def _rename_or_merge_standard(
     standard_table: str, alias_table: str, old_name: str, new_name: str, kind: str,
 ) -> str:
@@ -349,12 +391,14 @@ def _rename_or_merge_standard(
                 (old_name, new_name),
             )
             conn.execute(f"DELETE FROM {standard_table} WHERE name = ?", (old_name,))
+            _rename_standard_rows(conn, kind, old_name, new_name)
             log_activity(conn, "mapping", f"Merged standard {kind}", performed_by=current_username(),
                          old_value=old_name, new_value=new_name)
             conn.commit()
             return f'"{new_name}" already existed - merged "{old_name}" into it instead of renaming.'
         conn.execute(f"UPDATE {standard_table} SET name = ? WHERE name = ?", (new_name, old_name))
         conn.execute(f"UPDATE {alias_table} SET canonical_name = ? WHERE canonical_name = ?", (new_name, old_name))
+        _rename_standard_rows(conn, kind, old_name, new_name)
         log_activity(conn, "mapping", f"Renamed standard {kind}", performed_by=current_username(),
                      old_value=old_name, new_value=new_name)
         conn.commit()
@@ -469,8 +513,8 @@ def delete_standard_name():
         # standard name gone) - without this, Manage Assets kept showing the
         # old canonical name on every affected row even though Settings
         # correctly moved its alias back to Unmapped.
-        conn.execute("UPDATE asset_items SET device_name = UPPER(device_name_raw) WHERE device_name = ?", (name,))
-        conn.execute("UPDATE cctv_items SET device_name = UPPER(device_name_raw) WHERE device_name = ?", (name,))
+        conn.execute("UPDATE asset_items SET device_name = UPPER(TRIM(device_name_raw)) WHERE device_name = ?", (name,))
+        conn.execute("UPDATE cctv_items SET device_name = UPPER(TRIM(device_name_raw)) WHERE device_name = ?", (name,))
         # After that resync, any row still showing `name` has it because its
         # own raw text literally IS `name` (no alias was ever involved, so
         # the alias loop above never queued it) - queue that into Unmapped
@@ -551,8 +595,8 @@ def delete_standard_status():
         conn.execute("DELETE FROM status_standard_names WHERE name = ?", (name,))
         # See delete_standard_name()'s comment - same resync for assets whose
         # displayed status pointed at this now-deleted canonical name.
-        conn.execute("UPDATE asset_items SET status = UPPER(status_raw) WHERE status = ?", (name,))
-        conn.execute("UPDATE cctv_items SET status = UPPER(status_raw) WHERE status = ?", (name,))
+        conn.execute("UPDATE asset_items SET status = UPPER(TRIM(status_raw)) WHERE status = ?", (name,))
+        conn.execute("UPDATE cctv_items SET status = UPPER(TRIM(status_raw)) WHERE status = ?", (name,))
         if conn.execute(
             "SELECT 1 FROM asset_items WHERE status = ? UNION SELECT 1 FROM cctv_items WHERE status = ?",
             (name, name),
@@ -588,22 +632,17 @@ def map_status_alias():
             "INSERT OR IGNORE INTO status_standard_names (name, created_at) VALUES (?, datetime('now'))",
             (canonical_name,),
         )
+        previous = conn.execute(
+            "SELECT canonical_name FROM status_aliases WHERE alias = ?", (alias,)
+        ).fetchone()
         conn.execute(
             "INSERT OR REPLACE INTO status_aliases (alias, canonical_name) VALUES (?, ?)",
             (alias, canonical_name),
         )
         conn.execute("DELETE FROM status_unmapped WHERE raw_status = ?", (alias,))
         # See map_device_alias()'s comment on resyncing already-imported rows.
-        conn.execute(
-            "UPDATE asset_items SET status = ? "
-            "WHERE status = UPPER(status_raw) AND UPPER(status_raw) = ?",
-            (canonical_name, alias),
-        )
-        conn.execute(
-            "UPDATE cctv_items SET status = ? "
-            "WHERE status = UPPER(status_raw) AND UPPER(status_raw) = ?",
-            (canonical_name, alias),
-        )
+        _resync_alias_rows(conn, "status", alias, canonical_name,
+                           previous["canonical_name"] if previous else None)
         log_activity(conn, "mapping", "Mapped status alias", performed_by=current_username(),
                      target=alias, new_value=canonical_name)
         conn.commit()
@@ -632,13 +671,13 @@ def unmap_status_alias():
             # that's now sitting in Settings > Unmapped, instead of a
             # stale canonical status nothing points to anymore.
             conn.execute(
-                "UPDATE asset_items SET status = UPPER(status_raw) "
-                "WHERE status = ? AND UPPER(status_raw) = ?",
+                "UPDATE asset_items SET status = UPPER(TRIM(status_raw)) "
+                "WHERE status = ? AND UPPER(TRIM(status_raw)) = ?",
                 (row["canonical_name"], alias),
             )
             conn.execute(
-                "UPDATE cctv_items SET status = UPPER(status_raw) "
-                "WHERE status = ? AND UPPER(status_raw) = ?",
+                "UPDATE cctv_items SET status = UPPER(TRIM(status_raw)) "
+                "WHERE status = ? AND UPPER(TRIM(status_raw)) = ?",
                 (row["canonical_name"], alias),
             )
         record_unmapped_status(conn, alias)
@@ -712,8 +751,8 @@ def delete_standard_model():
         conn.execute("DELETE FROM model_standard_names WHERE name = ?", (name,))
         # See delete_standard_name()'s comment - same resync for assets whose
         # displayed model pointed at this now-deleted canonical name.
-        conn.execute("UPDATE asset_items SET model_device = UPPER(model_device_raw) WHERE model_device = ?", (name,))
-        conn.execute("UPDATE cctv_items SET model_device = UPPER(model_device_raw) WHERE model_device = ?", (name,))
+        conn.execute("UPDATE asset_items SET model_device = UPPER(TRIM(model_device_raw)) WHERE model_device = ?", (name,))
+        conn.execute("UPDATE cctv_items SET model_device = UPPER(TRIM(model_device_raw)) WHERE model_device = ?", (name,))
         if conn.execute(
             "SELECT 1 FROM asset_items WHERE model_device = ? UNION SELECT 1 FROM cctv_items WHERE model_device = ?",
             (name, name),
@@ -749,22 +788,17 @@ def map_model_alias():
             "INSERT OR IGNORE INTO model_standard_names (name, created_at) VALUES (?, datetime('now'))",
             (canonical_name,),
         )
+        previous = conn.execute(
+            "SELECT canonical_name FROM model_aliases WHERE alias = ?", (alias,)
+        ).fetchone()
         conn.execute(
             "INSERT OR REPLACE INTO model_aliases (alias, canonical_name) VALUES (?, ?)",
             (alias, canonical_name),
         )
         conn.execute("DELETE FROM model_unmapped WHERE raw_model = ?", (alias,))
         # See map_device_alias()'s comment on resyncing already-imported rows.
-        conn.execute(
-            "UPDATE asset_items SET model_device = ? "
-            "WHERE model_device = UPPER(model_device_raw) AND UPPER(model_device_raw) = ?",
-            (canonical_name, alias),
-        )
-        conn.execute(
-            "UPDATE cctv_items SET model_device = ? "
-            "WHERE model_device = UPPER(model_device_raw) AND UPPER(model_device_raw) = ?",
-            (canonical_name, alias),
-        )
+        _resync_alias_rows(conn, "model", alias, canonical_name,
+                           previous["canonical_name"] if previous else None)
         log_activity(conn, "mapping", "Mapped model alias", performed_by=current_username(),
                      target=alias, new_value=canonical_name)
         conn.commit()
@@ -788,13 +822,13 @@ def unmap_model_alias():
         if row:
             # See unmap_status_alias()'s comment on resyncing affected rows.
             conn.execute(
-                "UPDATE asset_items SET model_device = UPPER(model_device_raw) "
-                "WHERE model_device = ? AND UPPER(model_device_raw) = ?",
+                "UPDATE asset_items SET model_device = UPPER(TRIM(model_device_raw)) "
+                "WHERE model_device = ? AND UPPER(TRIM(model_device_raw)) = ?",
                 (row["canonical_name"], alias),
             )
             conn.execute(
-                "UPDATE cctv_items SET model_device = UPPER(model_device_raw) "
-                "WHERE model_device = ? AND UPPER(model_device_raw) = ?",
+                "UPDATE cctv_items SET model_device = UPPER(TRIM(model_device_raw)) "
+                "WHERE model_device = ? AND UPPER(TRIM(model_device_raw)) = ?",
                 (row["canonical_name"], alias),
             )
         record_unmapped_model(conn, alias)
@@ -830,28 +864,21 @@ def map_device_alias():
             "INSERT OR IGNORE INTO device_standard_names (name, created_at) VALUES (?, datetime('now'))",
             (canonical_name,),
         )
+        previous = conn.execute(
+            "SELECT canonical_name FROM device_aliases WHERE alias = ?", (alias,)
+        ).fetchone()
         conn.execute(
             "INSERT OR REPLACE INTO device_aliases (alias, canonical_name) VALUES (?, ?)",
             (alias, canonical_name),
         )
         conn.execute("DELETE FROM device_unmapped WHERE raw_name = ?", (alias,))
-        # Mirror of the resync in delete/unmap: assets already sitting on
-        # this raw value (device_name still equals its own raw text,
-        # meaning nothing else has touched it since) now resolve through
-        # this new mapping - without this they'd keep showing the old raw
-        # text in Manage Assets until the branch happens to be re-imported.
-        # The `device_name = UPPER(device_name_raw)` guard leaves alone any
-        # row a user has since hand-edited to something else.
-        conn.execute(
-            "UPDATE asset_items SET device_name = ? "
-            "WHERE device_name = UPPER(device_name_raw) AND UPPER(device_name_raw) = ?",
-            (canonical_name, alias),
-        )
-        conn.execute(
-            "UPDATE cctv_items SET device_name = ? "
-            "WHERE device_name = UPPER(device_name_raw) AND UPPER(device_name_raw) = ?",
-            (canonical_name, alias),
-        )
+        # Mirror of the resync in delete/unmap: rows already carrying this
+        # raw value - every month, including ones the alias's *previous*
+        # mapping produced - now resolve through this mapping, instead of
+        # waiting for the branch to be re-imported. Hand-edited rows are
+        # left alone (see _resync_alias_rows).
+        _resync_alias_rows(conn, "device", alias, canonical_name,
+                           previous["canonical_name"] if previous else None)
         log_activity(conn, "mapping", "Mapped device alias", performed_by=current_username(),
                      target=alias, new_value=canonical_name)
         conn.commit()
@@ -877,13 +904,13 @@ def unmap_device_alias():
         if row:
             # See unmap_status_alias()'s comment on resyncing affected rows.
             conn.execute(
-                "UPDATE asset_items SET device_name = UPPER(device_name_raw) "
-                "WHERE device_name = ? AND UPPER(device_name_raw) = ?",
+                "UPDATE asset_items SET device_name = UPPER(TRIM(device_name_raw)) "
+                "WHERE device_name = ? AND UPPER(TRIM(device_name_raw)) = ?",
                 (row["canonical_name"], alias),
             )
             conn.execute(
-                "UPDATE cctv_items SET device_name = UPPER(device_name_raw) "
-                "WHERE device_name = ? AND UPPER(device_name_raw) = ?",
+                "UPDATE cctv_items SET device_name = UPPER(TRIM(device_name_raw)) "
+                "WHERE device_name = ? AND UPPER(TRIM(device_name_raw)) = ?",
                 (row["canonical_name"], alias),
             )
         record_unmapped_device(conn, alias)

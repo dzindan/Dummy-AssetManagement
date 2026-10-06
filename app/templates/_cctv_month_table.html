@@ -10,7 +10,8 @@ report that month) or a summarize_cctv_rows()-shaped dict with the extra
 *_delta keys build_month_metrics_by_branch adds (see app/cctv_metrics.py).
 #}
 {% macro month_table(periods, month_cells) %}
-<table>
+{# data-no-sort: one row per metric, nothing to sort by (app.js). #}
+<table data-no-sort>
   <thead>
     <tr><th>Metric</th>{% for p in periods %}<th>{{ p }}</th>{% endfor %}</tr>
   </thead>

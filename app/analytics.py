@@ -22,15 +22,16 @@ from .queries import cctv_gear_sql, current_assets_cte
 MAX_SERIES = 7
 
 
-def _not_cctv_gear(table: str, device_col: str, keyword: str = "WHERE") -> str:
-    """`<keyword> NOT <CCTV/DVR>` for asset_items, empty for any other table
+def _not_cctv_gear(table: str, device_col: str) -> str:
+    """`WHERE NOT <CCTV/DVR>` for asset_items, empty for any other table
     - the asset counts/charts leave CCTV/DVR devices out (see
     queries.CCTV_ASSET_DEVICE_NAMES). Always applied to the final SELECT,
     after the latest batch per (branch, period) has been picked from every
     row."""
     if table != "asset_items":
         return ""
-    return f" {keyword} NOT {cctv_gear_sql(device_col)}"
+    return f" WHERE NOT {cctv_gear_sql(device_col)}"
+
 
 def _branch_trend_sql(table: str) -> str:
     return f"""
@@ -256,6 +257,9 @@ def _column_totals_and_deltas(visible_periods: list[str], table: list[dict]) -> 
 
 
 def _branch_month_changes_sql(table: str) -> str:
+    """(branch_no, device_name, period, asset_key) for every row of each
+    branch's latest batch per period - the input of both month-change
+    tables (by branch, by device type)."""
     return f"""
 WITH rows AS (
     SELECT ai.batch_id, ai.branch_no AS branch_no, ib.period AS period, ai.asset_key AS asset_key,
@@ -267,14 +271,21 @@ WITH rows AS (
 latest AS (
     SELECT branch_no, period, MAX(batch_id) AS batch_id FROM rows GROUP BY branch_no, period
 )
-SELECT r.branch_no AS grp, r.period AS period, r.asset_key AS asset_key
+SELECT r.branch_no AS branch_no, r.device_name AS device_name, r.period AS period, r.asset_key AS asset_key
 FROM rows r
 JOIN latest l ON r.branch_no = l.branch_no AND r.period = l.period AND r.batch_id = l.batch_id
 {_not_cctv_gear(table, "r.device_name")}
 """
 
 
-def get_branch_month_change_table(conn, year: str, table: str = "asset_items"):
+def fetch_month_change_rows(conn, table: str = "asset_items"):
+    """The rows both month-change tables are built from - fetch once and
+    pass as `rows=` when a page shows both (the Dashboard), since this
+    query is the slow part."""
+    return conn.execute(_branch_month_changes_sql(table)).fetchall()
+
+
+def get_branch_month_change_table(conn, year: str, table: str = "asset_items", rows=None):
     """Dashboard summary table: one row per branch, showing its asset count
     for each of the 12 months of `year`, sorted by current (latest-in-year)
     count. Every column carries its own added/removed indicator (diffed
@@ -282,9 +293,10 @@ def get_branch_month_change_table(conn, year: str, table: str = "asset_items"):
     prior year for January) - see _walk_period_changes for why that's
     computed from actual asset identity rather than a naive count
     difference. `table="cctv_items"` backs the CCTV Dashboard's equivalent
-    table."""
-    rows = conn.execute(_branch_month_changes_sql(table)).fetchall()
-    by_group = _walk_period_changes((r["grp"] or "", r["period"], r["asset_key"]) for r in rows)
+    table. `rows`: see fetch_month_change_rows."""
+    if rows is None:
+        rows = fetch_month_change_rows(conn, table)
+    by_group = _walk_period_changes((r["branch_no"] or "", r["period"], r["asset_key"]) for r in rows)
     visible_periods, prepared = _prepare_year_columns(by_group, year)
 
     names = {
@@ -303,6 +315,69 @@ def get_branch_month_change_table(conn, year: str, table: str = "asset_items"):
         )
     table.sort(key=lambda r: r["current_count"], reverse=True)
 
+    column_totals, column_added, column_removed = _column_totals_and_deltas(visible_periods, table)
+    return visible_periods, table, column_totals, column_added, column_removed
+
+
+def _device_changes_across_branches(rows) -> dict[str, dict]:
+    """Per device type, per period: count / added / removed summed over the
+    branches that reported that period - each branch's devices diffed
+    against *that branch's own* previous report, exactly like the by-branch
+    table. Diffing the all-branches total instead would count every device
+    of a branch that simply hasn't sent this month's file yet as removed
+    (2026-09 had 71 of 127 branches in when this was built). A branch's
+    first report has no previous one, so it adds to the count but not to
+    added/removed; a cell's added/removed stay None only when no branch had
+    a previous report to compare with. Same shape as _walk_period_changes'
+    result, for _prepare_year_columns."""
+    by_branch: dict[str, dict[str, dict[str, set]]] = {}  # branch -> period -> device -> keys
+    for branch_no, device, period, asset_key in rows:
+        by_branch.setdefault(branch_no, {}).setdefault(period, {}).setdefault(device, set()).add(asset_key)
+
+    result: dict[str, dict] = {}
+    for periods in by_branch.values():
+        prev: dict[str, set] | None = None
+        for period in sorted(periods):
+            devices = periods[period]
+            for device in set(devices) | set(prev or {}):
+                keys, before = devices.get(device, set()), (prev or {}).get(device, set())
+                cell = result.setdefault(device, {"periods": {}})["periods"].setdefault(
+                    period, {"count": 0, "added": None, "removed": None})
+                cell["count"] += len(keys)
+                if prev is not None:
+                    cell["added"] = (cell["added"] or 0) + len(keys - before)
+                    cell["removed"] = (cell["removed"] or 0) + len(before - keys)
+            prev = devices
+    return result
+
+
+def get_device_month_change_table(conn, year: str, rows=None):
+    """Dashboard "Assets by Device Type (by month)": the by-branch table
+    above turned around - one row per device type, summed across every
+    branch, same 12 months of `year`, same identity-based +added/-removed
+    per month (see _device_changes_across_branches), busiest device type
+    (latest count in the year) first. CCTV/DVR devices are left out like
+    everywhere else on the asset side.
+
+    Column totals can be a few above the by-branch table's: an asset_key
+    listed under two device types in one branch and month (a serial typed on
+    both a PC and its monitor - Check Duplicates) is one asset per branch
+    but counts once under each type here. `rows`: see
+    fetch_month_change_rows."""
+    if rows is None:
+        rows = fetch_month_change_rows(conn)
+    by_group = _device_changes_across_branches(
+        (r["branch_no"] or "", r["device_name"] or "(UNKNOWN)", r["period"], r["asset_key"]) for r in rows
+    )
+    visible_periods, prepared = _prepare_year_columns(by_group, year)
+    # A device type a branch dropped to zero still gets a cell (count 0,
+    # -removed) - drop rows that are zero all year.
+    table = [
+        {"item": item, "cells": data["cells"], "current_count": data["current_count"]}
+        for item, data in prepared.items()
+        if any(c and c["count"] for c in data["cells"])
+    ]
+    table.sort(key=lambda r: r["current_count"], reverse=True)
     column_totals, column_added, column_removed = _column_totals_and_deltas(visible_periods, table)
     return visible_periods, table, column_totals, column_added, column_removed
 

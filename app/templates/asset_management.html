@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_sort.html" as sorthdr %}
 {% block title %}Manage Assets - Asset Management Tool{% endblock %}
 
 {% macro pager() %}
@@ -117,6 +118,7 @@
         </select>
       </div>
       <div class="filter-actions">
+        {% if sort %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
         <button type="submit">Filter</button>
         {% if filters.branch_no or filters.device_name or filters.model_device or filters.status or filters.period or filters.q %}
         <a class="btn secondary" href="{{ url_for('asset_edit.index') }}">Clear</a>
@@ -166,7 +168,7 @@
     <thead>
       <tr>
         <th><input type="checkbox" data-select-all="asset-row-checkbox"></th>
-        <th>Branch</th><th>Device</th><th>User ID</th><th>Full Name</th><th>Model</th><th>Serial/Tag</th><th>Status</th><th>Remark</th><th>Position</th><th>Handover Date</th><th>Usage Duration</th><th>Period</th><th></th>
+        {{ sorthdr.th('Branch', 'branch') }}{{ sorthdr.th('Device', 'device') }}{{ sorthdr.th('User ID', 'user_id') }}{{ sorthdr.th('Full Name', 'full_name') }}{{ sorthdr.th('Model', 'model') }}{{ sorthdr.th('Serial/Tag', 'serial') }}{{ sorthdr.th('Status', 'status') }}{{ sorthdr.th('Remark', 'remark') }}{{ sorthdr.th('Position', 'position') }}{{ sorthdr.th('Handover Date', 'handover') }}{{ sorthdr.th('Usage Duration', 'usage') }}{{ sorthdr.th('Period', 'period') }}<th></th>
       </tr>
     </thead>
     <tbody>

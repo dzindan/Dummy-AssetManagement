@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_sort.html" as sorthdr %}
 {% block title %}Manage CCTV - Asset Management Tool{% endblock %}
 
 {% macro pager() %}
@@ -84,6 +85,7 @@
         </select>
       </div>
       <div class="filter-actions">
+        {% if sort %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
         <button type="submit">Filter</button>
         {% if filters.branch_no or filters.device_name or filters.status or filters.q %}
         <a class="btn secondary" href="{{ url_for('cctv_edit.index') }}">Clear</a>
@@ -131,7 +133,7 @@
     <thead>
       <tr>
         <th><input type="checkbox" data-select-all="cctv-row-checkbox"></th>
-        <th>Branch</th><th>Device</th><th>IP</th><th>Manufacturer</th><th>Model</th><th>Serial/Tag</th><th>Status</th><th>Cameras</th><th>HDD Count</th><th>HDD Capacity</th><th>Location</th><th>Remark</th><th></th>
+        {{ sorthdr.th('Branch', 'branch') }}{{ sorthdr.th('Device', 'device') }}{{ sorthdr.th('IP', 'ip') }}{{ sorthdr.th('Manufacturer', 'manufacturer') }}{{ sorthdr.th('Model', 'model') }}{{ sorthdr.th('Serial/Tag', 'serial') }}{{ sorthdr.th('Status', 'status') }}{{ sorthdr.th('Cameras', 'cameras') }}{{ sorthdr.th('HDD Count', 'hdd_count') }}{{ sorthdr.th('HDD Capacity', 'hdd_capacity') }}{{ sorthdr.th('Location', 'location') }}{{ sorthdr.th('Remark', 'remark') }}<th></th>
       </tr>
     </thead>
     <tbody>
