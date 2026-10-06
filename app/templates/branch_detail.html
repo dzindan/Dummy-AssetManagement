@@ -244,7 +244,7 @@ plain text.
   <div class="table-scroll">
   <table>
     <thead>
-      <tr><th>Device</th><th>User ID</th><th>Full Name</th><th>Model</th><th>Serial/Tag</th><th>Status</th><th>Position</th><th>Handover Date</th><th>Usage Duration</th><th></th></tr>
+      <tr><th>Device</th><th>User ID</th><th>Full Name</th><th>IP</th><th>Model</th><th>Serial/Tag</th><th>Status</th><th>Position</th><th>Handover Date</th><th>Usage Duration</th><th></th></tr>
     </thead>
     <tbody>
       {% for a in assets %}
@@ -252,6 +252,7 @@ plain text.
         <td>{{ a['device_name'] }}</td>
         <td>{{ a['user_id_raw'] }}</td>
         <td>{{ a['full_name'] }}</td>
+        <td>{{ a['ip'] }}</td>
         <td>{{ a['model_device'] }}</td>
         <td>{{ a['serial_tag'] }}</td>
         <td>{{ a['status'] }}</td>
@@ -261,7 +262,7 @@ plain text.
         <td><a class="btn secondary" href="{{ url_for('asset_edit.edit', asset_id=a['id'], next=request.path) }}">Edit</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="10" class="muted">No assets on record for this branch.</td></tr>
+      <tr><td colspan="11" class="muted">No assets on record for this branch.</td></tr>
       {% endfor %}
     </tbody>
   </table>

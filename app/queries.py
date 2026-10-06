@@ -327,6 +327,22 @@ def _leading_number(col: str) -> str:
     return f"CASE WHEN trim({col}) GLOB '[0-9]*' THEN CAST(trim({col}) AS REAL) END"
 
 
+def _ipv4_key(col: str) -> str:
+    """SQL: a dotted IPv4 ("10.0.0.9") as a zero-padded "010.000.000.009", so
+    10.0.0.9 sorts before 10.0.0.10; anything that isn't a.b.c.d -> NULL
+    (sorts last). Only the first address of a "10.0.0.1, 10.0.0.2" cell
+    counts."""
+    rest = f"(TRIM({col}) || '.')"
+    octets = []
+    for _ in range(4):
+        octets.append(f"CAST(substr({rest}, 1, instr({rest}, '.') - 1) AS INTEGER)")
+        rest = f"substr({rest}, instr({rest}, '.') + 1)"
+    return (
+        f"CASE WHEN TRIM({col}) GLOB '[0-9]*.[0-9]*.[0-9]*.[0-9]*' "
+        f"THEN printf('%03d.%03d.%03d.%03d', {', '.join(octets)}) END"
+    )
+
+
 # ?sort= keys for Manage Assets / Manage CCTV -> (SQL, reversed); see
 # order_by_sql and app/sorting.py. Keys match the table's columns left to
 # right.
@@ -335,6 +351,7 @@ ASSET_SORTS = {
     "device": ("bk.device_name", False),
     "user_id": ("bk.user_id_raw", False),
     "full_name": ("bk.full_name", False),
+    "ip": (_ipv4_key("bk.ip"), False),
     "model": ("bk.model_device", False),
     "serial": ("bk.serial_tag", False),
     "status": ("bk.status", False),
@@ -349,7 +366,7 @@ ASSET_SORTS = {
 CCTV_SORTS = {
     "branch": ("COALESCE(b.eng_name, bk.branch_dept)", False),
     "device": ("bk.device_name", False),
-    "ip": ("bk.ip", False),
+    "ip": (_ipv4_key("bk.ip"), False),
     "manufacturer": ("bk.manufacturer", False),
     "model": ("bk.model_device", False),
     "serial": ("bk.serial_tag", False),

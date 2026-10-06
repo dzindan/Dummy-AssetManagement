@@ -515,10 +515,14 @@ resolves to) and, for Manage Assets, the recomputed Usage Duration; the
 cell flashes green, or turns red with the reason on failure, and any
 messages (e.g. "Moved to branch 002 ...") pop up bottom-right. Device /
 Model / Status cells suggest the standard names (`<datalist>` from
-`queries.inline_edit_suggestions`) but accept free text. Columns that
-aren't shown in the table (e.g. an asset's IP) still go through the Edit
-button. Only each branch's current month is listed, so only those rows can
-be edited inline. Not done yet: pasting a block copied from Excel, Ctrl+Z.
+`queries.inline_edit_suggestions`) but accept free text. Fields that
+aren't table columns still go through the Edit button. **IP** has been a
+Manage Assets column since 2026-10-06 (user's request): inline-editable,
+sortable in numeric address order (`queries._ipv4_key`, also used by
+Manage CCTV), shown in Branch Detail's Current Assets, and in every
+asset-rows export (`exports.ASSET_ROW_COLUMNS` - Manage Assets, Branch
+Detail, User History). Only each branch's current month is listed, so only
+those rows can be edited inline. Not done yet: pasting a block copied from Excel, Ctrl+Z.
 JS in `app/static/app.js`, styles in `style.css`. Tests:
 `tests/test_inline_edit.py`.
 

@@ -168,7 +168,7 @@
     <thead>
       <tr>
         <th><input type="checkbox" data-select-all="asset-row-checkbox"></th>
-        {{ sorthdr.th('Branch', 'branch') }}{{ sorthdr.th('Device', 'device') }}{{ sorthdr.th('User ID', 'user_id') }}{{ sorthdr.th('Full Name', 'full_name') }}{{ sorthdr.th('Model', 'model') }}{{ sorthdr.th('Serial/Tag', 'serial') }}{{ sorthdr.th('Status', 'status') }}{{ sorthdr.th('Remark', 'remark') }}{{ sorthdr.th('Position', 'position') }}{{ sorthdr.th('Handover Date', 'handover') }}{{ sorthdr.th('Usage Duration', 'usage') }}{{ sorthdr.th('Period', 'period') }}<th></th>
+        {{ sorthdr.th('Branch', 'branch') }}{{ sorthdr.th('Device', 'device') }}{{ sorthdr.th('User ID', 'user_id') }}{{ sorthdr.th('Full Name', 'full_name') }}{{ sorthdr.th('IP', 'ip') }}{{ sorthdr.th('Model', 'model') }}{{ sorthdr.th('Serial/Tag', 'serial') }}{{ sorthdr.th('Status', 'status') }}{{ sorthdr.th('Remark', 'remark') }}{{ sorthdr.th('Position', 'position') }}{{ sorthdr.th('Handover Date', 'handover') }}{{ sorthdr.th('Usage Duration', 'usage') }}{{ sorthdr.th('Period', 'period') }}<th></th>
       </tr>
     </thead>
     <tbody>
@@ -179,6 +179,7 @@
         <td data-field="device_name" data-value="{{ a['device_name'] or '' }}">{{ a['device_name'] }}</td>
         <td data-field="user_id_raw" data-value="{{ a['user_id_raw'] or '' }}">{{ a['user_id_raw'] }}</td>
         <td data-field="full_name" data-value="{{ a['full_name'] or '' }}">{{ a['full_name'] }}</td>
+        <td data-field="ip" data-value="{{ a['ip'] or '' }}">{{ a['ip'] }}</td>
         <td data-field="model_device" data-value="{{ a['model_device'] or '' }}">{{ a['model_device'] }}</td>
         <td data-field="serial_tag" data-value="{{ a['serial_tag'] or '' }}">{{ a['serial_tag'] }}</td>
         <td data-field="status" data-value="{{ a['status'] or '' }}">{{ a['status'] }}</td>
@@ -190,7 +191,7 @@
         <td><a class="btn secondary" href="{{ url_for('asset_edit.edit', asset_id=a['id'], next=request.full_path) }}">Edit</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="14" class="muted">No assets match these filters.</td></tr>
+      <tr><td colspan="15" class="muted">No assets match these filters.</td></tr>
       {% endfor %}
     </tbody>
   </table>

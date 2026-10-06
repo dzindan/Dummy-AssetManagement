@@ -170,6 +170,7 @@ ASSET_ROW_COLUMNS: list[ColumnSpec] = [
     ("Device", "device_name"),
     ("User ID", "user_id_raw"),
     ("Full Name", "full_name"),
+    ("IP", "ip"),
     ("Model", "model_device"),
     ("Serial/Service Tag", "serial_tag"),
     ("Status", "status"),

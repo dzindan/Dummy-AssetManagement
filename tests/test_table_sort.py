@@ -91,6 +91,20 @@ class ServerSortTests(unittest.TestCase):
         self.assertEqual(self._assets("handover"), ["SN-2", "SN-4", "SN-1", "SN-3"])  # 2016, 2019, 2020, NA
         self.assertEqual(self._assets("usage"), ["SN-1", "SN-4", "SN-2", "SN-3"])  # shortest use first
 
+    def test_ip_column_sorts_numerically_and_exports(self):
+        conn = self.conn
+        for serial, ip in (("SN-1", "10.0.0.10"), ("SN-2", "10.0.0.9"), ("SN-3", "DHCP"), ("SN-4", "9.1.1.1")):
+            conn.execute("UPDATE asset_items SET ip = ? WHERE serial_tag = ?", (ip, serial))
+        conn.commit()
+        self.assertEqual(self._assets("ip"), ["SN-4", "SN-2", "SN-1", "SN-3"])  # 9.x < 10.0.0.9 < 10.0.0.10, text last
+        html = self.client.get("/assets/?device_name=PC").get_data(as_text=True)
+        self.assertIn('data-field="ip" data-value="10.0.0.9"', html)
+        resp = self.client.get("/assets/export?device_name=PC&sort=ip")
+        ws = openpyxl.load_workbook(io.BytesIO(resp.data)).active
+        header = [c.value for c in ws[1]]
+        ips = [row[header.index("IP")] for row in ws.iter_rows(min_row=2, values_only=True)]
+        self.assertEqual(ips, ["9.1.1.1", "10.0.0.9", "10.0.0.10", "DHCP"])
+
     def test_cctv_number_sorts(self):
         def serials(sort):
             rows, _ = search_cctv(self.conn, {}, sort=sort)
