@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+from collections import Counter
+import os
 import re
 from dataclasses import dataclass, field
 
@@ -307,20 +309,21 @@ def _cctv_asset_key(branch_dept: str, device_name: str, model_device: str, seria
 
 # --- Branch resolution --------------------------------------------------
 
-def _branch_match_score(candidate_norm: str, norm: str) -> float:
-    """Higher is a better match. Asset reports are about physical branches, so
-    when a terse label (e.g. "HANOI") ambiguously substring-matches several
-    head-office departments as well as the actual branch, prefer candidates
-    that look like a physical location ("BRANCH" / "TRANSACTION OFFICE") over
-    departments/divisions/centers/teams, and prefer the closer-length (more
-    exact) match among ties."""
-    score = 0.0
-    if candidate_norm == norm:
-        score += 100
-    if "BRANCH" in candidate_norm or "TRANSACTION OFFICE" in candidate_norm:
-        score += 10
-    score -= len(candidate_norm) * 0.01
-    return score
+def _branch_compact(text: str) -> str:
+    """Normalized text with everything but letters/digits removed, so
+    spacing and punctuation differences ("SAIGON" vs "SAI GON",
+    "HA-NOI") don't matter."""
+    return re.sub(r"[^A-Z0-9]", "", normalize_branch_text(text))
+
+
+def branch_code_in_text(conn, text: str) -> str:
+    """The branch code written in a file name or label (e.g. "HCMC BRANCH
+    8009 - IT ASSET MONTHLY REPORT_08.2026.xlsx" -> "8009"): a standalone
+    4-digit number that is a code in the branch list. Exactly one distinct
+    such code, otherwise "" (years like 2026 are not branch codes)."""
+    found = {code for code in re.findall(r"(?<!\d)(\d{4})(?!\d)", text or "")
+             if get_branch(conn, code)}
+    return found.pop() if len(found) == 1 else ""
 
 
 def resolve_branch(conn, branch_text: str, cache: dict | None = None) -> tuple[str, str]:
@@ -351,30 +354,23 @@ def _resolve_branch_uncached(conn, branch_text: str) -> tuple[str, str]:
         if b:
             return b["branch_no"], b["eng_name"]
 
+    # No guessing (user rule 2026-10-07): a label maps only through the
+    # branch list itself - a branch code written in it, or a local/English
+    # name equal to it (ignoring case, accents, spaces and punctuation).
+    # Anything else stays unresolved and is mapped by hand in Settings >
+    # Branch Aliases. The earlier best-substring rule silently sent "HCMC"
+    # (HO CHI MINH BRANCH 8009) to HCM CARD CENTER 8079, "ICT" to DISTRICT 11
+    # and "HO" to CAN THO. A name two codes share (two RISK MANAGEMENT
+    # DIVISION codes) is not resolved either.
+    code = branch_code_in_text(conn, branch_text)
+    if code:
+        return code, get_branch(conn, code)["eng_name"]
+    wanted = _branch_compact(branch_text)
     rows = conn.execute("SELECT branch_no, local_name, eng_name FROM branches").fetchall()
-
-    # Compare with spaces stripped throughout in a single pass - some
-    # branches have inconsistent spacing between their own local_name and
-    # eng_name (e.g. "HA NOI ..." vs "...HANOI ..."), so a space-preserving
-    # pass can match the wrong candidate before a space-insensitive pass
-    # ever gets a chance to consider the right one. Scoring every candidate
-    # in one pass (see _branch_match_score) avoids that ordering trap.
-    norm_nospace = norm.replace(" ", "")
-    matches = []  # (score, branch_no, eng_name)
-    for r in rows:
-        for candidate in (r["local_name"], r["eng_name"]):
-            candidate_nospace = normalize_branch_text(candidate).replace(" ", "")
-            if not candidate_nospace:
-                continue
-            if (
-                candidate_nospace == norm_nospace
-                or norm_nospace in candidate_nospace
-                or candidate_nospace in norm_nospace
-            ):
-                matches.append((_branch_match_score(candidate_nospace, norm_nospace), r["branch_no"], r["eng_name"]))
-    if matches:
-        matches.sort(key=lambda m: m[0], reverse=True)
-        return matches[0][1], matches[0][2]
+    found = {r["branch_no"]: r["eng_name"] for r in rows
+             for name in (r["local_name"], r["eng_name"]) if name and _branch_compact(name) == wanted}
+    if len(found) == 1:
+        return next(iter(found.items()))
     return "", ""
 
 
@@ -611,6 +607,11 @@ class CleaningReport:
     branch_hint: str = ""
     branch_matched: str = ""
     branch_no: str = ""
+    # How the file's branch was cross-checked (see _file_branch): one
+    # "source: text -> branch" line per source, and whether two sources
+    # pointed to different branches (then branch_no stays "").
+    branch_checks: list[str] = field(default_factory=list)
+    branch_conflict: bool = False
     batch_id: int = 0
     error: str = ""
     # "asset_report" (person-assigned equipment) or "cctv_report" - lets
@@ -1078,7 +1079,7 @@ def _load_workbook(path: str, **kwargs) -> openpyxl.Workbook:
     return wb
 
 
-def peek_asset_report_branch(conn, path: str) -> dict:
+def peek_asset_report_branch(conn, path: str, source_label: str | None = None) -> dict:
     """Lightweight pre-import check: which branch a report file would
     resolve to, without creating a batch or inserting any rows. Used by
     routes/import_data.py to warn the user if that branch already has an
@@ -1096,21 +1097,53 @@ def peek_asset_report_branch(conn, path: str) -> dict:
         wb.close()
         return {"branch_no": "", "branch_matched": "", "branch_hint": ""}
 
-    branch_hint = match.branch_hint
-    if not branch_hint and "branch_dept" in match.col_map:
-        ws = wb[match.sheet_name]
-        idx = match.col_map["branch_dept"]
-        for row in ws.iter_rows(min_row=match.header_row_idx + 2, values_only=True):
-            if row is None or idx >= len(row):
-                continue
-            value = _clean_str(row[idx])
-            if value:
-                branch_hint = value
-                break
-
-    branch_no, branch_matched = resolve_branch(conn, branch_hint)
+    column_value = _branch_column_value(wb[match.sheet_name], match)
+    branch_hint = match.branch_hint or column_value
+    branch_no, branch_matched, _, _ = _file_branch(conn, source_label or path, branch_hint, column_value)
     wb.close()
     return {"branch_no": branch_no, "branch_matched": branch_matched, "branch_hint": branch_hint}
+
+
+def _branch_column_value(ws, match) -> str:
+    """The most common non-empty BRANCH / DEPT cell of an equipment sheet
+    ("" when the sheet has no such column)."""
+    if "branch_dept" not in match.col_map:
+        return ""
+    idx = match.col_map["branch_dept"]
+    counts = Counter()
+    for row in ws.iter_rows(min_row=match.header_row_idx + 2, values_only=True):
+        if row is None or idx >= len(row):
+            continue
+        value = _clean_str(row[idx])
+        if value:
+            counts[value] += 1
+    return counts.most_common(1)[0][0] if counts else ""
+
+
+def _file_branch(conn, file_name: str, label: str, column_value: str = "") -> tuple[str, str, list[str], bool]:
+    """A single-branch report file's branch, cross-checked across what the
+    file says about itself (user rule 2026-10-07): the branch code in its
+    file name (branch_code_in_text), the sheet's "Branch Name:" label and
+    the most common BRANCH / DEPT column value - each mapped through the
+    branch list only (resolve_branch, no guessing). Sources that don't map
+    are skipped; those that map must agree. Two sources pointing to
+    different branches leave the file unresolved for a person to check.
+
+    Returns (branch_no, matched_name, checks, conflict); checks are
+    "source: text -> branch" lines for the import result page."""
+    base = os.path.basename(file_name or "")
+    sources = [("File name", base, branch_code_in_text(conn, base))]
+    if label:
+        sources.append(("Branch label", label, resolve_branch(conn, label)[0]))
+    if column_value and normalize_branch_text(column_value) != normalize_branch_text(label):
+        sources.append(("BRANCH/DEPT column", column_value, resolve_branch(conn, column_value)[0]))
+    checks = [f"{name}: {text} -> {branch or ('no branch code' if name == 'File name' else 'not in branch list')}"
+              for name, text, branch in sources]
+    found = {branch for _, _, branch in sources if branch}
+    if len(found) == 1:
+        branch_no = found.pop()
+        return branch_no, get_branch(conn, branch_no)["eng_name"], checks, False
+    return "", "", checks, len(found) > 1
 
 
 def import_asset_report(
@@ -1190,22 +1223,18 @@ def import_asset_report(
             # resolved, the CCTV sheet uses that branch instead.
             report.branch_hint, branch_no, branch_matched = file_branch
         else:
-            if not report.branch_hint and "branch_dept" in match.col_map:
+            column_value = _branch_column_value(ws, match)
+            if not report.branch_hint:
                 # No separate "Branch/TO/Center Name:" label row was found - some
                 # files (e.g. ones with a plain "BRANCH" column instead) only carry
-                # the branch name once per row. Fall back to the first non-empty
-                # value in that column so the file still resolves to a branch
-                # instead of every row silently landing in "unresolved".
-                idx = match.col_map["branch_dept"]
-                for row in ws.iter_rows(min_row=match.header_row_idx + 2, values_only=True):
-                    if row is None or idx >= len(row):
-                        continue
-                    value = _clean_str(row[idx])
-                    if value:
-                        report.branch_hint = value
-                        break
-
-            branch_no, branch_matched = resolve_branch(conn, report.branch_hint)
+                # the branch name once per row; that column's most common value
+                # stands in as the file's label.
+                report.branch_hint = column_value
+            # A CCTV sheet's BRANCH/DEPT column holds device names and
+            # department text (see above), so it isn't one of the sources
+            # checked against the file name there.
+            branch_no, branch_matched, report.branch_checks, report.branch_conflict = _file_branch(
+                conn, source_file, report.branch_hint, "" if is_cctv else column_value)
             if not branch_no:
                 record_unresolved_branch(conn, report.branch_hint)
             elif not is_cctv:

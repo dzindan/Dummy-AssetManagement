@@ -368,7 +368,7 @@ def _check_period_conflicts(file_entries: list[dict], period: str) -> list[dict]
     conn = get_connection()
     try:
         for item in file_entries:
-            peek = peek_asset_report_branch(conn, item["path"])
+            peek = peek_asset_report_branch(conn, item["path"], item.get("filename"))
             if not peek["branch_no"]:
                 continue
             existing = find_existing_batch_for_branch_period(conn, peek["branch_no"], resolved_period)

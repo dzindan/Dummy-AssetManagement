@@ -468,10 +468,29 @@ or "T.O." - never inside an unrelated word like "AUTO") to its full
 Saigon T.O" resolves automatically against a branch master eng_name like
 "...TRANSACTION OFFICE" without a manual alias - the space-insensitive
 matching below absorbs remaining spelling differences ("Saigon" vs "Sai
-Gon") on top of that. Every branch-master candidate is then scored — exact
-match, "looks like a physical BRANCH/TRANSACTION OFFICE" (preferred over a
-head-office department containing the same city word), and candidate length
-— in a single space-normalized comparison pass. A single-branch report file
+Gon") on top of that. **No guessing** (user rule, 2026-10-07): a label
+maps only through the branch list - (1) the alias table (manual mappings),
+(2) a branch code from the list written in the label, (3) exactly one
+branch whose local or English name equals the label, ignoring case,
+accents, spaces and punctuation ("South saigon T.O" = SOUTH SAI GON
+TRANSACTION OFFICE). Anything else - "Pham Hung" (list: PHAM HUNG BRANCH),
+"HCMC", a name two codes share (two RISK MANAGEMENT DIVISION codes) - stays
+**unresolved** and is mapped by hand in Settings > Branch Aliases, once.
+A single-branch report file is **cross-checked** (`_file_branch`, also
+used by the pre-import period check): the branch code in the **file name**
+(e.g. "HCMC BRANCH 8009 - ...xlsx"; exactly one distinct code that exists
+in the list - years are not codes), the sheet's "Branch Name:" **label**,
+and the most common value of the **BRANCH / DEPT column** are each mapped
+through the list as above. Sources that don't map are skipped; the ones
+that map must agree. If two point to different branches the file stays
+unresolved and the import result says so ("file name / label / BRANCH
+column point to different branches"), listing each source and what it
+mapped to (`CleaningReport.branch_checks` / `branch_conflict`). A CCTV
+sheet's BRANCH/DEPT column is not a source (it holds device names and
+department text). The earlier rule took the best
+substring match and silently sent "HCMC" (HO CHI MINH BRANCH 8009's own
+report) to HCM CARD CENTER 8079, "ICT" to DISTRICT 11 and "HO" to CAN THO
+(tests: `tests/test_branch_resolve.py`). A single-branch report file
 resolves its branch **once per file** from the sheet's own label and stamps
 every row with it, rather than trusting each row's often-terse per-row
 branch text. Genuinely novel abbreviations/nicknames still need a manual

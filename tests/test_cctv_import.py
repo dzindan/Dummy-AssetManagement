@@ -233,7 +233,7 @@ class ImportAssetReportMultiSheetTests(unittest.TestCase):
         self._add_branch("8129", "ICT PLANNING DEPARTMENT")
         wb = openpyxl.Workbook()
         wb.remove(wb.active)
-        self._cctv_sheet(wb, "ICT PLANNING", "ICT PLANNING")
+        self._cctv_sheet(wb, "ICT PLANNING DEPARTMENT", "ICT PLANNING DEPARTMENT")
         path = os.path.join(self.tmpdir, "cctv_only.xlsx")
         wb.save(path)
         reports = {r.kind: r for r in import_asset_report(path, source_label="cctv_only.xlsx", period="2026-07")}

@@ -23,8 +23,11 @@
     <p class="muted" style="margin-top:0.9rem;">
       Sheet: <strong>{{ r.sheet_name }}</strong> &middot;
       Branch label found in file: <strong>{{ r.branch_hint or '-' }}</strong> &middot;
-      Matched to: {% if r.branch_matched %}<span class="badge badge-added">{{ r.branch_matched }}</span>{% else %}<span class="badge badge-changed">no match - add an alias in Settings</span>{% endif %}
+      Matched to: {% if r.branch_matched %}<span class="badge badge-added">{{ r.branch_matched }}</span>{% elif r.branch_conflict %}<span class="badge badge-changed">file name / label / BRANCH column point to different branches - check the file, then map it in Settings</span>{% else %}<span class="badge badge-changed">no match - add an alias in Settings</span>{% endif %}
     </p>
+    {% if r.branch_checks %}
+    <p class="muted" style="margin-top:0.2rem;">Branch checked against the branch list: {{ r.branch_checks | join(' · ') }}</p>
+    {% endif %}
     {% if r.unmapped_columns %}
     <p class="muted">Unrecognized columns kept but not mapped: {{ r.unmapped_columns | join(', ') }}</p>
     {% endif %}
