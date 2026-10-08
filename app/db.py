@@ -246,6 +246,24 @@ CREATE TABLE IF NOT EXISTS diff_reports (
     label TEXT
 );
 
+-- Disposal Check history (see app/disposal.py): one row per checked list,
+-- with every item's result as it was at check time (items_json) - reopening
+-- an old check shows that snapshot, not a re-check against today's data.
+-- stored_name = the uploaded file's copy in the uploads folder.
+CREATE TABLE IF NOT EXISTS disposal_checks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    checked_at TEXT NOT NULL,
+    checked_by TEXT,
+    file_name TEXT,
+    stored_name TEXT,
+    branches TEXT,
+    total_items INTEGER,
+    marked_items INTEGER,
+    counts_json TEXT,
+    notes_json TEXT,
+    items_json TEXT NOT NULL
+);
+
 -- Login/permissions. Deliberately named `accounts`/`roles`, not `users` -
 -- `users` above is bank-staff domain data imported from IDFromAither
 -- (PK user_no), unrelated to who can log into this tool.

@@ -266,9 +266,14 @@ computers on the same office network.
     - Badges filter by result; each app match links to its asset's edit
       page; **Export to Excel** downloads the current view (list columns +
       result, note and the app's branch/device/model/user/status/period).
-    - The upload is kept in the uploads folder as `disposal_<random>.xlsx`
-      so the result page and export can re-read it (the URL carries that
-      name; anything else is a 404).
+    - **History** (on the same page): every check is saved in
+      `disposal_checks` (data.db) - when, who, file name, branch IDs,
+      item / marked counts, result counts, and every item's result as it was
+      at check time (`items_json`). Opening an old check (`/disposal-check/
+      <id>`) shows that snapshot, not a re-check against today's data (user's
+      choice 2026-10-08) - re-upload the list for a fresh check. The uploaded
+      file is kept in the uploads folder (`disposal_<random>.xlsx`, column
+      `stored_name`) and can be downloaded again from the result page.
     - First real list (8064 Tran Duy Hung, Oct 2026): 520 items, 53 marked
       for disposal - 25 OK, 8 still in use, 3 duplicate serials, 17 without
       serial.

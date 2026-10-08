@@ -11,7 +11,7 @@
   Upload a disposal / inventory list exported from Aither (FA/WT list with Serial number, Ref. Number, Branch ID,
   Remark/Suggestion, GAD opinion - every sheet is read). Each item is checked by serial number against the assets
   in this app: still in use, at another branch, no longer in the current list, never imported, or the same serial
-  twice on the list. Nothing in the database is changed.
+  twice on the list. Asset data is not changed; each check is saved with its results in the History below.
 </p>
 
 <div class="panel">
@@ -22,7 +22,7 @@
         <input type="file" id="file" name="file" accept=".xlsx,.xlsm" required>
       </div>
       <div>
-        <label><input type="checkbox" name="only_marked" value="1" {{ 'checked' if items is none or only_marked else '' }}>
+        <label><input type="checkbox" name="only_marked" value="1" {{ 'checked' if not check or only_marked else '' }}>
           Only items marked for disposal</label>
         <p class="muted" style="margin-top:0.3rem;">"Disposal" in Remark/Suggestion or GAD opinion. Untick to check every item on the list.</p>
       </div>
@@ -31,23 +31,29 @@
   </form>
 </div>
 
-{% if items is not none %}
+{% if check %}
+{% set only = '1' if only_marked else '0' %}
 <div class="panel">
   <p>
-    <strong>{{ name or 'Uploaded list' }}</strong> &middot;
+    <strong>{{ check['file_name'] or 'Uploaded list' }}</strong> &middot; checked {{ check['checked_at'] }}{% if check['checked_by'] %} by {{ check['checked_by'] }}{% endif %}
+    {% if has_file %}&middot; <a href="{{ url_for('disposal_check.original', check_id=check['id']) }}">Download the list</a>{% endif %}
+    &middot; <a href="{{ url_for('disposal_check.index') }}">History</a>
+  </p>
+  <p class="muted">Results as at check time - re-upload the list to check it against today's data.</p>
+  <p>
     {% if only_marked %}{{ total }} item(s) marked for disposal (of {{ total_all }} on the list){% else %}all {{ total }} item(s){% endif %}
-    &middot; <a href="{{ url_for('disposal_check.result', token=token, name=name, only='0' if only_marked else '1') }}">{{ 'Show every item' if only_marked else 'Only items marked for disposal' }}</a>
+    &middot; <a href="{{ url_for('disposal_check.result', check_id=check['id'], only='0' if only_marked else '1') }}">{{ 'Show every item' if only_marked else 'Only items marked for disposal' }}</a>
   </p>
   <p>
-    <a class="badge {{ 'badge-changed' if picked else 'badge-unchanged' }}" href="{{ url_for('disposal_check.result', token=token, name=name, only='1' if only_marked else '0') }}">All {{ total }}</a>
+    <a class="badge {{ 'badge-changed' if picked else 'badge-unchanged' }}" href="{{ url_for('disposal_check.result', check_id=check['id'], only=only) }}">All {{ total }}</a>
     {% for key, label, badge, n in counts if n %}
     <a class="badge {{ badge }}" style="{{ 'outline:2px solid currentColor;' if picked == key else '' }}"
-       href="{{ url_for('disposal_check.result', token=token, name=name, only='1' if only_marked else '0', result=key) }}">{{ label }}: {{ n }}</a>
+       href="{{ url_for('disposal_check.result', check_id=check['id'], only=only, result=key) }}">{{ label }}: {{ n }}</a>
     {% endfor %}
   </p>
   <p class="muted">{% for n in notes %}{{ n }}{% if not loop.last %} &middot; {% endif %}{% endfor %}</p>
   <div class="actions" style="margin-top:0;">
-    <a class="btn" href="{{ url_for('disposal_check.export', token=token, name=name, only='1' if only_marked else '0', result=picked) }}">Export to Excel</a>
+    <a class="btn" href="{{ url_for('disposal_check.export', check_id=check['id'], only=only, result=picked) }}">Export to Excel</a>
   </div>
 </div>
 
@@ -87,6 +93,37 @@
   </div>
   {% else %}
   <p class="muted">No items in this view.</p>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if history is not none %}
+<div class="panel">
+  <h2>History</h2>
+  {% if history %}
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr><th>Checked at</th><th>By</th><th>List</th><th>Branch</th><th>Items</th><th>Marked for disposal</th><th>Results (marked items)</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for h in history %}
+      <tr>
+        <td>{{ h.checked_at }}</td>
+        <td>{{ h.checked_by or '' }}</td>
+        <td>{{ h.file_name }}</td>
+        <td>{{ h.branches }}</td>
+        <td>{{ h.total_items }}</td>
+        <td>{{ h.marked_items }}</td>
+        <td>{% for key, (label, badge) in results.items() if h.marked_counts.get(key) %}<span class="badge {{ badge }}">{{ label }}: {{ h.marked_counts[key] }}</span> {% endfor %}</td>
+        <td><a class="btn secondary" href="{{ url_for('disposal_check.result', check_id=h.id) }}">Open</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">No list checked yet.</p>
   {% endif %}
 </div>
 {% endif %}

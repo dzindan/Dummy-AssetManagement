@@ -97,11 +97,10 @@ class DisposalCheckTests(unittest.TestCase):
 
     def test_results(self):
         from app.disposal import check_items, read_disposal_list
-        from app.routes.disposal_check import _token_path
-        url = self._upload()
-        with self.app.test_request_context():
-            token = url.split("/disposal-check/")[1].split("?")[0]
-            items, notes = read_disposal_list(_token_path(token))
+        path = os.path.join(tempfile.mkdtemp(), "list.xlsx")
+        with open(path, "wb") as f:
+            f.write(self._workbook().getvalue())
+        items, notes = read_disposal_list(path)
         self.assertEqual(len(items), 8)                     # sheet2's R1 merged into sheet1's R1
         self.assertEqual(items[0].also_in, ["sheet2 row 2"])
         conn = get_connection()
@@ -119,6 +118,7 @@ class DisposalCheckTests(unittest.TestCase):
 
     def test_page_filter_and_export(self):
         url = self._upload()
+        self.assertRegex(url, r"/disposal-check/\d+\?only=1$")
         page = self.client.get(url).data.decode()
         self.assertIn("6 item(s) marked for disposal (of 8 on the list)", page)
         self.assertIn("Still in use: 1", page)
@@ -127,19 +127,45 @@ class DisposalCheckTests(unittest.TestCase):
         only_used = self.client.get(url + "&result=in_use").data.decode()
         self.assertIn("PC still used", only_used)
         self.assertNotIn("Monitor at HN", only_used)
-        token = url.split("/disposal-check/")[1].split("?")[0]
-        resp = self.client.get(f"/disposal-check/{token}/export.xlsx?only=0")
+        check_id = url.split("/disposal-check/")[1].split("?")[0]
+        resp = self.client.get(f"/disposal-check/{check_id}/export.xlsx?only=0")
         self.assertEqual(resp.status_code, 200)
         ws = openpyxl.load_workbook(io.BytesIO(resp.data)).active
         self.assertEqual(ws.cell(1, 1).value, "Result")
         self.assertEqual(ws.max_row, 9)                     # header + all 8 items
+        original = self.client.get(f"/disposal-check/{check_id}/original")
+        self.assertEqual(original.status_code, 200)
+        self.assertEqual(openpyxl.load_workbook(io.BytesIO(original.data)).sheetnames, ["sheet1", "sheet2"])
+        original.close()
 
-    def test_bad_token_and_file_type(self):
-        self.assertEqual(self.client.get("/disposal-check/../../x.xlsx").status_code, 404)
-        self.assertEqual(self.client.get("/disposal-check/" + "a" * 32 + ".xlsx").status_code, 404)
+    def test_history_keeps_the_result_as_at_check_time(self):
+        url = self._upload()
+        conn = get_connection()
+        try:
+            # The PC still in use goes to the warehouse after the check.
+            conn.execute("UPDATE asset_items SET status = 'WAREHOUSE', user_id_raw = '' WHERE serial_tag = 'SN-USED'")
+            conn.commit()
+        finally:
+            conn.close()
+        page = self.client.get(url).data.decode()
+        self.assertIn("Still in use: 1", page)              # the saved snapshot, not re-checked
+        history = self.client.get("/disposal-check/").data.decode()
+        self.assertIn("8064_list.xlsx", history)
+        self.assertIn("checker", history)
+        self.assertIn("Still in use: 1", history)
+        again = self.client.get(self._upload()).data.decode()
+        self.assertNotIn("Still in use", again.split("Results as at check time")[1].split("<table")[0])
+        self.assertEqual(self.client.get("/disposal-check/").data.decode().count(">Open</a>"), 2)
+
+    def test_bad_id_and_file_type(self):
+        self.assertEqual(self.client.get("/disposal-check/999").status_code, 404)
+        self.assertEqual(self.client.get("/disposal-check/999/original").status_code, 404)
         resp = self.client.post("/disposal-check/", data={"file": (io.BytesIO(b"x"), "list.csv")},
                                 content_type="multipart/form-data", follow_redirects=True)
         self.assertIn(b"Choose the disposal list", resp.data)
+        resp = self.client.post("/disposal-check/", data={"file": (io.BytesIO(b"not a workbook"), "list.xlsx")},
+                                content_type="multipart/form-data", follow_redirects=True)
+        self.assertIn(b"Could not read that file", resp.data)
 
 
 if __name__ == "__main__":

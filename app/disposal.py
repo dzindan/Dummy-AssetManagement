@@ -21,8 +21,9 @@ Each list item ends in one result (RESULTS, worst first for sorting):
 
 from __future__ import annotations
 
+import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 import openpyxl
 from unidecode import unidecode
@@ -228,3 +229,46 @@ def check_items(conn, items: list[ListItem]) -> list[ListItem]:
 def summary(items: list[ListItem]) -> list[tuple[str, str, str, int]]:
     """[(result key, label, badge class, count)] in RESULTS order."""
     return [(k, label, badge, sum(1 for i in items if i.result == k)) for k, (label, badge) in RESULTS.items()]
+
+
+# --- History (disposal_checks table) ---------------------------------------
+# A check is saved with every list item's result as it was at that moment,
+# so reopening it later shows what was found then (user's choice
+# 2026-10-08), not a re-check against data that has moved on since.
+
+def _counts(items: list[ListItem]) -> dict[str, int]:
+    return {k: sum(1 for i in items if i.result == k) for k in RESULTS}
+
+
+def save_check(conn, items: list[ListItem], notes: list[str], file_name: str, stored_name: str, checked_by: str) -> int:
+    """Store a checked list; returns its id. Doesn't commit."""
+    marked = [i for i in items if i.marked_for_disposal]
+    branches = ", ".join(sorted({i.branch for i in items if i.branch}))
+    cur = conn.execute(
+        "INSERT INTO disposal_checks (checked_at, checked_by, file_name, stored_name, branches, total_items, "
+        "marked_items, counts_json, notes_json, items_json) VALUES (datetime('now', 'localtime'), ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (checked_by, file_name, stored_name, branches, len(items), len(marked),
+         json.dumps({"marked": _counts(marked), "all": _counts(items)}), json.dumps(notes, ensure_ascii=False),
+         json.dumps([asdict(i) for i in items], ensure_ascii=False, default=str)),
+    )
+    return cur.lastrowid
+
+
+def load_check(conn, check_id: int):
+    """(the disposal_checks row, its items as ListItem) or None."""
+    row = conn.execute("SELECT * FROM disposal_checks WHERE id = ?", (check_id,)).fetchone()
+    if not row:
+        return None
+    return row, [ListItem(**d) for d in json.loads(row["items_json"])]
+
+
+def list_checks(conn, limit: int = 200) -> list[dict]:
+    """Newest first, without the item snapshots (they can be large)."""
+    out = []
+    for r in conn.execute(
+        "SELECT id, checked_at, checked_by, file_name, stored_name, branches, total_items, marked_items, counts_json "
+        "FROM disposal_checks ORDER BY id DESC LIMIT ?", (limit,)
+    ):
+        counts = json.loads(r["counts_json"] or "{}")
+        out.append({**dict(r), "marked_counts": counts.get("marked", {}), "all_counts": counts.get("all", {})})
+    return out
