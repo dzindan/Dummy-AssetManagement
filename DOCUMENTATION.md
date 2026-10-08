@@ -73,7 +73,7 @@ computers on the same office network.
     the original Cleaning Report page.
 12. **Grouped navigation**: the top menu collapses related pages into
     dropdowns — **Assets** (Manage Assets, Manage CCTV, User History,
-    Network Check, CUCM Phone Scan) and **Hand-Over** (Lookup & Hand-Over,
+    Network Check, CUCM Phone Scan, Disposal Check) and **Hand-Over** (Lookup & Hand-Over,
     History) — alongside standalone Asset Dashboard, CCTV Dashboard, Import
     Data, and Settings links, so related functionality
     lives in one place instead of a long flat list. The **Settings** page itself is split into
@@ -238,6 +238,40 @@ computers on the same office network.
     Branch Detail's header says "(+ N CCTV/DVR counted separately)".
     Listings are unchanged - Manage Assets, Branch Detail's Current Assets
     table, row exports and Lookup still show every row. See §4 CCTV.
+24. **Disposal Check** (Assets → Disposal Check, 2026-10-08): upload a
+    disposal / fixed-asset inventory list exported from Aither (FA/WT list:
+    Branch ID, FA/WT Name, Ref. Number, Classification, Serial number/
+    Specification, Inventory Status, Remark/Suggestion, GAD opinion) and
+    check it item by item against this app, by serial (`app/disposal.py`,
+    `routes/disposal_check.py`). Read-only - nothing in the database
+    changes.
+    - Every sheet with a header row (top 10 rows) holding a Serial column
+      and a Name or Ref. Number column is read; a second header line under
+      merged cells (blank, or Aither repeating the header text) is skipped.
+      An item on several sheets (same Ref. Number - Aither's sheet2 of new
+      working tools is also copied under sheet1) counts once, remark/GAD
+      merged.
+    - By default only items **marked for disposal** are shown: "Disposal"
+      (or "thanh lý") in Remark/Suggestion or GAD opinion; one click shows
+      the whole list.
+    - Result per item, worst first: **Still in use** (in the branch's
+      current assets but status USING ..., user shown), **Different
+      branch** (current at another branch than the list's Branch ID),
+      **Not in current assets** (imported before; last period/branch/status
+      shown), **Not in the app** (never imported), **Duplicate serial on the
+      list** (another list item - marked or not - has the same serial; e.g.
+      a PC to dispose carrying a printer's serial in Aither), **OK** (current,
+      same branch, not USING), **No serial - not checked** ("N/A":
+      furniture, software...). A duplicate is also noted on worse results.
+    - Badges filter by result; each app match links to its asset's edit
+      page; **Export to Excel** downloads the current view (list columns +
+      result, note and the app's branch/device/model/user/status/period).
+    - The upload is kept in the uploads folder as `disposal_<random>.xlsx`
+      so the result page and export can re-read it (the URL carries that
+      name; anything else is a 404).
+    - First real list (8064 Tran Duy Hung, Oct 2026): 520 items, 53 marked
+      for disposal - 25 OK, 8 still in use, 3 duplicate serials, 17 without
+      serial.
 
 ---
 

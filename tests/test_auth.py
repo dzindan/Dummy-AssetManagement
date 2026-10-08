@@ -279,6 +279,7 @@ class RouteCoverageGuardTests(unittest.TestCase):
         "auth.setup",
         "auth.forgot_password",
         "lookup.review",  # builds a preview only, no DB write
+        "disposal_check.index",  # uploads a list to check against the data, no DB write
         "settings.set_security_question_route",  # self-service, same as setting your own password
     }
 

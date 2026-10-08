@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Disposal Check - Asset Management Tool{% endblock %}
+{% block content %}
+<style>
+  .disposal-table td { white-space: normal; vertical-align: top; }
+  .disposal-table td.wide { min-width: 14rem; max-width: 24rem; }
+  .disposal-table .badge { white-space: nowrap; }
+</style>
+<h1>Disposal Check</h1>
+<p class="muted">
+  Upload a disposal / inventory list exported from Aither (FA/WT list with Serial number, Ref. Number, Branch ID,
+  Remark/Suggestion, GAD opinion - every sheet is read). Each item is checked by serial number against the assets
+  in this app: still in use, at another branch, no longer in the current list, never imported, or the same serial
+  twice on the list. Nothing in the database is changed.
+</p>
+
+<div class="panel">
+  <form method="post" action="{{ url_for('disposal_check.index') }}" enctype="multipart/form-data">
+    <div class="field-row">
+      <div>
+        <label for="file">Disposal list (.xlsx)</label>
+        <input type="file" id="file" name="file" accept=".xlsx,.xlsm" required>
+      </div>
+      <div>
+        <label><input type="checkbox" name="only_marked" value="1" {{ 'checked' if items is none or only_marked else '' }}>
+          Only items marked for disposal</label>
+        <p class="muted" style="margin-top:0.3rem;">"Disposal" in Remark/Suggestion or GAD opinion. Untick to check every item on the list.</p>
+      </div>
+    </div>
+    <div class="actions"><button type="submit">Check list</button></div>
+  </form>
+</div>
+
+{% if items is not none %}
+<div class="panel">
+  <p>
+    <strong>{{ name or 'Uploaded list' }}</strong> &middot;
+    {% if only_marked %}{{ total }} item(s) marked for disposal (of {{ total_all }} on the list){% else %}all {{ total }} item(s){% endif %}
+    &middot; <a href="{{ url_for('disposal_check.result', token=token, name=name, only='0' if only_marked else '1') }}">{{ 'Show every item' if only_marked else 'Only items marked for disposal' }}</a>
+  </p>
+  <p>
+    <a class="badge {{ 'badge-changed' if picked else 'badge-unchanged' }}" href="{{ url_for('disposal_check.result', token=token, name=name, only='1' if only_marked else '0') }}">All {{ total }}</a>
+    {% for key, label, badge, n in counts if n %}
+    <a class="badge {{ badge }}" style="{{ 'outline:2px solid currentColor;' if picked == key else '' }}"
+       href="{{ url_for('disposal_check.result', token=token, name=name, only='1' if only_marked else '0', result=key) }}">{{ label }}: {{ n }}</a>
+    {% endfor %}
+  </p>
+  <p class="muted">{% for n in notes %}{{ n }}{% if not loop.last %} &middot; {% endif %}{% endfor %}</p>
+  <div class="actions" style="margin-top:0;">
+    <a class="btn" href="{{ url_for('disposal_check.export', token=token, name=name, only='1' if only_marked else '0', result=picked) }}">Export to Excel</a>
+  </div>
+</div>
+
+<div class="panel">
+  {% if items %}
+  <div class="table-scroll">
+  <table class="disposal-table">
+    <thead>
+      <tr><th>Result</th><th>Ref. Number</th><th>FA/WT Name</th><th>Serial</th><th>Note</th><th>In the app</th>
+        <th>Classification</th><th>Branch ID</th><th>Inventory Status</th><th>Remark / GAD</th><th>Sheet / Row</th></tr>
+    </thead>
+    <tbody>
+      {% for i in items %}
+      <tr>
+        <td><span class="badge {{ results[i.result][1] }}">{{ results[i.result][0] }}</span></td>
+        <td>{{ i.ref }}</td>
+        <td class="wide">{{ i.name }}</td>
+        <td>{{ i.serial }}</td>
+        <td class="wide">{{ i.note }}</td>
+        <td class="wide">
+          {% for r in i.app_rows %}
+          <div>{{ r['branch_no'] }} &middot; {{ r['device_name'] or '' }} &middot; {{ r['model_device'] or '' }} &middot; <strong>{{ r['status'] or '' }}</strong>
+            {% if r['user_id_raw'] %}&middot; {{ r['user_id_raw'] }} {{ r['full_name'] or '' }}{% endif %}
+            <span class="muted">({{ r['period'] }})</span>
+            <a href="{{ url_for('asset_edit.edit', asset_id=r['id'], next=request.full_path) }}">#{{ r['id'] }}</a></div>
+          {% endfor %}
+        </td>
+        <td>{{ i.classification }}</td>
+        <td>{{ i.branch }}</td>
+        <td>{{ i.inventory_status }}</td>
+        <td class="wide">{{ i.remark }}{% if i.remark and i.gad_opinion %}<br>{% endif %}<span class="muted">{{ i.gad_opinion }}</span></td>
+        <td class="muted">{{ i.sheet }} / {{ i.row }}{% if i.also_in %}<br>also {{ i.also_in | join(', ') }}{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">No items in this view.</p>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}
