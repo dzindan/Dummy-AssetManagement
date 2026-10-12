@@ -365,11 +365,22 @@ document.addEventListener("click", function (e) {
     alert("Select at least one row first.");
     return;
   }
-  if (!confirm("Delete " + ids.length + " selected asset(s)? This cannot be undone.")) return;
+  // data-bulk-delete-note: extra line for the confirm box (Manage CCTV:
+  // the matching Manage Assets rows go too).
+  const note = btn.dataset.bulkDeleteNote ? "\n\n" + btn.dataset.bulkDeleteNote : "";
+  if (!confirm("Delete " + ids.length + " selected asset(s)? This cannot be undone." + note)) return;
 
   const form = document.createElement("form");
   form.method = "post";
   form.action = btn.dataset.bulkDeleteUrl;
+
+  if (btn.dataset.bulkDeleteAllMonths) {
+    const allMonths = document.createElement("input");
+    allMonths.type = "hidden";
+    allMonths.name = "all_months";
+    allMonths.value = "1";
+    form.appendChild(allMonths);
+  }
 
   const nextInput = document.createElement("input");
   nextInput.type = "hidden";

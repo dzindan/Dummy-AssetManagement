@@ -943,6 +943,79 @@ HAND_FIX_FIELDS = {
     "status": ("status_unmapped", "raw_status"),
 }
 
+def delete_summary(counts: dict, selected: int) -> str:
+    """Flash text for delete_asset_rows' result."""
+    return (f"Deleted {selected} selected item(s): {counts['asset_items']} row(s) in Manage Assets and "
+            f"{counts['cctv_items']} in Manage CCTV, all months included.")
+
+
+def delete_asset_rows(conn, table: str, ids: list[int], all_months: bool = True, performed_by: str = "") -> dict:
+    """Delete rows from Manage Assets (asset_items) or Manage CCTV
+    (cctv_items) the way the user wants (rule 2026-10-09): deleting a device
+    on one side deletes it on the other side too (the CCTV <-> asset mirror,
+    cctv_items.asset_item_id), and - with `all_months` - in every month, not
+    just the one shown (same branch_no + asset_key, as apply_hand_fix).
+
+    Expanded until nothing new is found: a linked row on the other side brings
+    its own other months, and those their links. In a month that already has
+    a row being deleted for that key, no other row of the same key is added -
+    two devices sharing a key (no serial, same user/model) in one month stay
+    apart. Without `all_months` (Duplicate Check, the import's Cleaning
+    Report: rows sharing a serial on purpose) only the rows themselves and
+    their linked rows on the other side go.
+
+    Every deleted row is logged ("asset" / "cctv"). Returns
+    {"asset_items": n, "cctv_items": n}. Doesn't commit."""
+    other_table = {"asset_items": "cctv_items", "cctv_items": "asset_items"}
+    picked = {"asset_items": set(), "cctv_items": set()}
+    picked[table] = set(ids)
+    while True:
+        before = {t: set(v) for t, v in picked.items()}
+        if all_months:
+            for t in picked:
+                if not picked[t]:
+                    continue
+                marks = ",".join("?" * len(picked[t]))
+                chosen = conn.execute(f"SELECT id, batch_id, branch_no, asset_key FROM {t} WHERE id IN ({marks})",
+                                      list(picked[t])).fetchall()
+                taken = {(r["branch_no"] or "", r["asset_key"] or "", r["batch_id"]) for r in chosen}
+                for key in {(r["branch_no"] or "", r["asset_key"]) for r in chosen if r["asset_key"]}:
+                    for r in conn.execute(f"SELECT id, batch_id FROM {t} WHERE branch_no = ? AND asset_key = ?",
+                                          (key[0], key[1])).fetchall():
+                        if (key[0], key[1], r["batch_id"]) not in taken:
+                            picked[t].add(r["id"])
+        if picked["cctv_items"]:
+            marks = ",".join("?" * len(picked["cctv_items"]))
+            picked["asset_items"] |= {r[0] for r in conn.execute(
+                f"SELECT asset_item_id FROM cctv_items WHERE id IN ({marks}) AND asset_item_id IS NOT NULL",
+                list(picked["cctv_items"]))}
+        if picked["asset_items"]:
+            marks = ",".join("?" * len(picked["asset_items"]))
+            picked["cctv_items"] |= {r[0] for r in conn.execute(
+                f"SELECT id FROM cctv_items WHERE asset_item_id IN ({marks})", list(picked["asset_items"]))}
+        if picked == before:
+            break
+    labels = {"asset_items": ("asset", "Deleted asset", "Asset"), "cctv_items": ("cctv", "Deleted CCTV item", "CCTV")}
+    counts = {}
+    for t in ("cctv_items", "asset_items"):
+        row_ids = sorted(picked[t])
+        counts[t] = 0
+        if not row_ids:
+            continue
+        marks = ",".join("?" * len(row_ids))
+        rows = conn.execute(f"SELECT t.id, t.device_name, t.serial_tag, ib.period FROM {t} t "
+                            f"LEFT JOIN import_batches ib ON ib.id = t.batch_id WHERE t.id IN ({marks})", row_ids).fetchall()
+        category, action, label = labels[t]
+        for r in rows:
+            how = "selected" if t == table and r["id"] in ids else f"same device, {'other month' if t == table else 'linked ' + labels[other_table[table]][2]}"
+            log_activity(conn, category, action, performed_by=performed_by,
+                         target=f"{label} #{r['id']} ({r['device_name']} {r['serial_tag']})".strip()
+                         + f" {r['period'] or ''} - {how}")
+        conn.execute(f"DELETE FROM {t} WHERE id IN ({marks})", row_ids)
+        counts[t] = len(rows)
+    return counts
+
+
 # What a device *is* doesn't change from one month to the next, so a hand
 # edit of these is always a correction for every month (user's rule,
 # 2026-10-06). Status does change month to month (USING LOCAL -> BROKEN), so

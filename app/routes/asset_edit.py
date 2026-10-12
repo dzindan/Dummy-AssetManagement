@@ -3,7 +3,8 @@ from urllib.parse import urlencode
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 
 from ..auth import current_username, require_permission
-from ..db import apply_hand_fix, get_connection, log_activity, prune_stale_unmapped, sync_cctv_asset_link
+from ..db import (apply_hand_fix, delete_asset_rows, delete_summary, get_connection, log_activity,
+                  prune_stale_unmapped, sync_cctv_asset_link)
 from ..importer import branch_for_edited_dept
 from ..sorting import current_sort
 from ..exports import ASSET_ROW_COLUMNS, build_asset_rows_workbook, build_duplicates_workbook, dated_download_name, send_workbook
@@ -234,18 +235,16 @@ def bulk_delete():
     else:
         conn = get_connection()
         try:
-            placeholders = ",".join("?" * len(ids))
-            rows = conn.execute(
-                f"SELECT id, device_name, serial_tag FROM asset_items WHERE id IN ({placeholders})", ids
-            ).fetchall()
-            performed_by = current_username()
-            for row in rows:
-                target = f"Asset #{row['id']} ({row['device_name']} {row['serial_tag']})".strip()
-                log_activity(conn, "asset", "Deleted asset", performed_by=performed_by, target=target)
-            conn.execute(f"DELETE FROM asset_items WHERE id IN ({placeholders})", ids)
+            # Manage Assets sends all_months=1; Duplicate Check and the
+            # Cleaning Report don't (their rows share a serial on purpose).
+            all_months = request.form.get("all_months") == "1"
+            counts = delete_asset_rows(conn, "asset_items", ids, all_months=all_months,
+                                       performed_by=current_username())
             prune_stale_unmapped(conn)
             conn.commit()
-            flash(f"Deleted {len(ids)} asset(s).", "success")
+            flash(delete_summary(counts, len(ids)) if all_months
+                  else f"Deleted {len(ids)} asset(s)" + (f" and {counts['cctv_items']} matching row(s) in Manage CCTV."
+                                                         if counts["cctv_items"] else "."), "success")
         finally:
             conn.close()
     next_url = request.form.get("next") or url_for("dashboard.index")
@@ -263,12 +262,14 @@ def delete(asset_id):
         if not row:
             flash("Asset not found.", "error")
         else:
-            target = f"Asset #{asset_id} ({row['device_name']} {row['serial_tag']})".strip()
-            log_activity(conn, "asset", "Deleted asset", performed_by=current_username(), target=target)
-            conn.execute("DELETE FROM asset_items WHERE id = ?", (asset_id,))
+            all_months = request.form.get("all_months") == "1"
+            counts = delete_asset_rows(conn, "asset_items", [asset_id], all_months=all_months,
+                                       performed_by=current_username())
             prune_stale_unmapped(conn)
             conn.commit()
-            flash(f"Asset #{asset_id} deleted.", "success")
+            flash(f"Asset #{asset_id}: " + delete_summary(counts, 1) if all_months
+                  else f"Asset #{asset_id} deleted" + (" (and its row in Manage CCTV)." if counts["cctv_items"] else "."),
+                  "success")
     finally:
         conn.close()
     next_url = request.form.get("next") or url_for("dashboard.index")

@@ -116,6 +116,8 @@
     <button type="button" class="danger" data-bulk-delete-trigger
       data-bulk-delete-url="{{ url_for('cctv_edit.bulk_delete') }}"
       data-bulk-delete-checkbox-class="cctv-row-checkbox"
+      data-bulk-delete-all-months="1"
+      data-bulk-delete-note="Every month of these devices is deleted, here and in Manage Assets."
       data-bulk-delete-next="{{ request.full_path }}">Delete Selected</button>
   </div>
   {% endif %}

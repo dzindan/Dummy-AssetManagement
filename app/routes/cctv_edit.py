@@ -3,7 +3,8 @@ from urllib.parse import urlencode
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 
 from ..auth import current_username, require_permission
-from ..db import apply_hand_fix, get_connection, log_activity, prune_stale_unmapped, sync_cctv_asset_link
+from ..db import (apply_hand_fix, delete_asset_rows, delete_summary, get_connection, log_activity, prune_stale_unmapped,
+                  sync_cctv_asset_link)
 from ..importer import branch_for_edited_dept
 from ..sorting import current_sort
 from ..exports import CCTV_ROW_COLUMNS, build_cctv_rows_workbook, dated_download_name, send_workbook
@@ -161,18 +162,13 @@ def bulk_delete():
     else:
         conn = get_connection()
         try:
-            placeholders = ",".join("?" * len(ids))
-            rows = conn.execute(
-                f"SELECT id, device_name, serial_tag FROM cctv_items WHERE id IN ({placeholders})", ids
-            ).fetchall()
-            performed_by = current_username()
-            for row in rows:
-                target = f"CCTV #{row['id']} ({row['device_name']} {row['serial_tag']})".strip()
-                log_activity(conn, "cctv", "Deleted CCTV item", performed_by=performed_by, target=target)
-            conn.execute(f"DELETE FROM cctv_items WHERE id IN ({placeholders})", ids)
+            counts = delete_asset_rows(conn, "cctv_items", ids, all_months=request.form.get("all_months") == "1",
+                                       performed_by=current_username())
             prune_stale_unmapped(conn)
             conn.commit()
-            flash(f"Deleted {len(ids)} CCTV item(s).", "success")
+            flash(delete_summary(counts, len(ids)) if request.form.get("all_months") == "1"
+                  else f"Deleted {len(ids)} CCTV item(s) and {counts['asset_items']} matching row(s) in Manage Assets.",
+                  "success")
         finally:
             conn.close()
     next_url = request.form.get("next") or url_for("cctv_edit.index")
@@ -190,12 +186,11 @@ def delete(asset_id):
         if not row:
             flash("CCTV item not found.", "error")
         else:
-            target = f"CCTV #{asset_id} ({row['device_name']} {row['serial_tag']})".strip()
-            log_activity(conn, "cctv", "Deleted CCTV item", performed_by=current_username(), target=target)
-            conn.execute("DELETE FROM cctv_items WHERE id = ?", (asset_id,))
+            counts = delete_asset_rows(conn, "cctv_items", [asset_id], all_months=request.form.get("all_months") == "1",
+                                       performed_by=current_username())
             prune_stale_unmapped(conn)
             conn.commit()
-            flash(f"CCTV #{asset_id} deleted.", "success")
+            flash(f"CCTV #{asset_id}: " + delete_summary(counts, 1), "success")
     finally:
         conn.close()
     next_url = request.form.get("next") or url_for("cctv_edit.index")

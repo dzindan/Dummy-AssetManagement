@@ -228,6 +228,19 @@ computers on the same office network.
     status, ...) in either Manage CCTV or Manage Assets updates the other
     one too.
 
+    **Deleting** (user's rule 2026-10-09, `db.delete_asset_rows`): deleting
+    a device in Manage Assets or Manage CCTV deletes it on **both sides**
+    (the CCTV <-> asset mirror) and in **every month** (same branch_no +
+    asset_key, as hand fixes), expanded until nothing new is linked; the
+    confirm box says so and every deleted row is logged with its period and
+    why it went ("selected" / "same device, other month" / "linked ...").
+    In a month that already has a row of that key being deleted no other
+    row of the same key is added, so two no-serial twins (same user/model)
+    in one month stay apart. Duplicate Check and the import's Cleaning
+    Report delete only the row and its linked row (their rows share a
+    serial on purpose). A later monthly import that still lists the device
+    brings it back for that month.
+
     **CCTV and DVR devices are counted separately from assets** (user's
     request 2026-10-05): the Asset Dashboard's Assets total, its trend
     charts, Assets by Branch table, Year Comparison and Excel export, and
