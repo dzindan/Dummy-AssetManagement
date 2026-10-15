@@ -6,6 +6,7 @@
 <div class="panel">
   <p><span class="badge badge-added">Success</span></p>
   <p>
+    Form No.: <strong>{{ record['id'] | form_number }}</strong> &middot;
     User: <strong>{{ record['receiving_name'] }}</strong> ({{ record['user_no'] }}) &middot;
     Type: {{ record['ho_type'] }} &middot;
     Reason: {{ record['reason'] }}

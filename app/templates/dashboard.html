@@ -36,12 +36,13 @@
 {%- endmacro %}
 {% block title %}Asset Dashboard - Asset Management Tool{% endblock %}
 {% block content %}
-<h1>Asset Dashboard</h1>
+<h1>Asset Dashboard{% if scope %} - {{ scope_label }}{% endif %}</h1>
+{% include "_scope_switch.html" %}
 
 <div class="grid grid-4">
   <div class="stat-tile">
     <div class="value">{{ branch_count }}</div>
-    <div class="label">Branches</div>
+    <div class="label">{{ 'Head Office units' if scope == 'ho' else 'Branches' }}</div>
   </div>
   <div class="stat-tile">
     <div class="value">{{ user_count }}</div>
@@ -51,7 +52,7 @@
     <div class="value">{{ asset_count }}</div>
     <div class="label">Assets (current, excl. CCTV)</div>
   </div>
-  <a class="stat-tile" href="{{ url_for('cctv_dashboard.index') }}"
+  <a class="stat-tile" href="{{ url_for('cctv_dashboard.index', scope=scope or None) }}"
      title="DVR/CCTV recorders and CCTV devices - not counted in Assets or the charts below">
     <div class="value">{{ cctv_gear_count }}</div>
     <div class="label">CCTV / DVR (counted separately)</div>
@@ -74,6 +75,7 @@
       <form method="get" action="{{ url_for('dashboard.index') }}" style="display:flex; align-items:center; gap:0.35rem;">
         <label for="dash-year" class="muted" style="font-size:0.85rem;">Report year</label>
         {% if branch_sort %}<input type="hidden" name="sort" value="{{ branch_sort }}">{% endif %}
+        {% if scope %}<input type="hidden" name="scope" value="{{ scope }}">{% endif %}
         <select id="dash-year" name="year" onchange="this.form.submit()">
           {% for y in available_years %}
           <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
@@ -81,7 +83,7 @@
         </select>
       </form>
       {% endif %}
-      <a class="btn secondary" href="{{ url_for('dashboard.export', year=selected_year, sort=branch_sort or None) }}">Export to Excel</a>
+      <a class="btn secondary" href="{{ url_for('dashboard.export', year=selected_year, sort=branch_sort or None, scope=scope or None) }}">Export to Excel</a>
     </div>
   </div>
   {% if month_table %}
@@ -97,7 +99,7 @@
       <thead>
         <tr>
           <th>
-            <a class="sort-header" href="{{ url_for('dashboard.index', year=selected_year, sort=next_branch_sort or None, _anchor='branch-month-table') }}"
+            <a class="sort-header" href="{{ url_for('dashboard.index', year=selected_year, sort=next_branch_sort or None, scope=scope or None, _anchor='branch-month-table') }}"
                title="{{ {'': 'Sort by Branch / Dept A-Z', 'branch': 'Sort by Branch / Dept Z-A', '-branch': 'Back to the default order (most assets first)'}[branch_sort] }}">
               Branch / Dept
               <span class="sort-arrow">{{ {'': '&#8645;', 'branch': '&#9650;', '-branch': '&#9660;'}[branch_sort] | safe }}</span>
@@ -226,7 +228,7 @@
 </div>
 
 <div class="panel">
-  <h2>Item Count Trend - All Branches (by month)</h2>
+  <h2>Item Count Trend - {{ scope_title }} (by month)</h2>
   <p class="muted">Each line is a device type, summed across every branch; counts come from each branch's most recent import for
     that month. Every device type is shown (none folded into OTHER). Click a chip to isolate or hide a series, or "Hide all" then pick the ones you want; hover the chart for exact monthly counts.</p>
   <div id="allBranchesTrendChart"></div>

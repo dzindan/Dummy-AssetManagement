@@ -18,6 +18,7 @@ a = Analysis(
         "docxtpl",
         "docxcompose",
         "docx",
+        "segno",
         "lxml",
         "lxml.etree",
         "zeep",

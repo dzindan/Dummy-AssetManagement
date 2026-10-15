@@ -1,0 +1,16 @@
+{# All / Branches / Head Office switch, shared by the Asset and CCTV
+   Dashboards (?scope=, see queries.DASHBOARD_SCOPES). Keeps the selected
+   report year. Which unit is which: queries.unit_group_sql, editable in
+   Settings > Branch Aliases > Unit Groups. #}
+<div style="display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap; margin-bottom:1rem;">
+  {% for key, label in scopes %}
+  <a class="btn{% if key != scope %} secondary{% endif %}"
+     href="{{ url_for(request.endpoint, scope=key or None, year=selected_year or None) }}"
+     {% if key == scope %}aria-current="page"{% endif %}>{{ label }}</a>
+  {% endfor %}
+  <span class="muted" style="font-size:0.85rem;">
+    Branches = branches + transaction offices; Head Office = every other unit.
+    Unresolved rows only show under All.
+    <a href="{{ url_for('settings.index') }}#unit-groups">Change a unit's group</a>
+  </span>
+</div>

@@ -49,8 +49,8 @@
 
 <div class="grid grid-2">
   <div class="panel">
-    <h2>3. Monthly Asset Reports</h2>
-    <p class="muted">From <code>Asset reports/</code> - one or more per-branch equipment list files. Column layout and sheet names may vary between files; the importer auto-detects the equipment sheet and maps columns, and normalizes device names against the known list in Settings. Each branch's new file is also compared against its previous import right on the result page (added/removed/changed), with an Excel export.
+    <h2>3. Monthly Asset Reports (branch reports)</h2>
+    <p class="muted">From <code>Asset reports/</code> - one or more per-branch equipment list files, each a unit's own report. The HO consolidated report goes in section 4 instead (it is refused here). Column layout and sheet names may vary between files; the importer auto-detects the equipment sheet and maps columns, and normalizes device names against the known list in Settings. Each branch's new file is also compared against its previous import right on the result page (added/removed/changed), with an Excel export.
       <a href="{{ url_for('import_data.template_asset_report') }}">Download Template</a></p>
     <form method="post" action="{{ url_for('import_data.upload_asset_reports') }}" enctype="multipart/form-data">
       <label for="asset-files">Excel files</label>
@@ -70,7 +70,21 @@
   </div>
 
   <div class="panel">
-    <h2>4. Total Asset History (one-time baseline)</h2>
+    <h2>4. HO Monthly Report</h2>
+    <p class="muted">The Head Office consolidated <code>Monthly Report ddmmyyyy.xlsx</code> ("Equipment list detail" sheet). Each row goes to the unit of its User ID (User IDs list), else its Dept / BRANCH / DEPT column; one batch per unit. Kept apart from the units' own monthly reports: neither ever replaces the other's data. Rows of a unit that sends its own monthly report are left out. Branch reports are refused here.</p>
+    <form method="post" action="{{ url_for('import_data.upload_ho_reports') }}" enctype="multipart/form-data">
+      <label for="ho-files">Excel file(s)</label>
+      <input type="file" id="ho-files" name="files" accept=".xlsx" multiple required>
+      <label for="ho-period">Reporting month <span class="muted">(blank = from the date in the file name)</span></label>
+      <input type="month" id="ho-period" name="period">
+      <button type="submit">Import HO Report</button>
+    </form>
+  </div>
+</div>
+
+<div class="grid grid-2">
+  <div class="panel">
+    <h2>5. Total Asset History (one-time baseline)</h2>
     <p class="muted">The aggregated "Total Asset" workbook that packs several months of every branch into one sheet (with Month/Year columns). Each month becomes its own historical snapshot. Only needed once, to seed history before regular monthly imports take over. Uses the same column layout as the Monthly Asset Reports template above, plus a <code>MONTH</code> and a <code>YEARS</code> column.</p>
     <form method="post" action="{{ url_for('import_data.upload_total_asset') }}" enctype="multipart/form-data">
       <label for="total-asset-file">Excel file</label>

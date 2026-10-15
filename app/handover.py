@@ -4,9 +4,15 @@ and logging each generated form to handover_records (the hand-over history)."""
 from __future__ import annotations
 
 import datetime as dt
+import io
 import json
 import os
+import re
+from copy import deepcopy
 
+import segno
+from docx.oxml import parse_xml
+from docx.shared import Mm, Pt
 from docxtpl import DocxTemplate
 
 from .db import get_connection, log_activity
@@ -32,6 +38,77 @@ def _box(selected: bool) -> str:
     return CHECKED if selected else UNCHECKED
 
 
+# Every generated form carries a QR code (page header, top-left - the
+# Shinhan logo already owns top-right) so a scanned, signed copy can be
+# matched back to its handover_records row automatically. Payload, all
+# ASCII, "|"-separated, version first so the format can change later:
+#   AMHO1|<record id>|<ho_date YYYY-MM-DD>|<user_no>|<ho_type>
+# The id alone identifies the form; date/user/type let a reader sort the
+# scan (and sanity-check the id) without access to this database.
+QR_PREFIX = "AMHO1"
+QR_SIZE = Mm(18)
+QR_TOP = Mm(6)  # from the page edge - clear of most printers' dead zone
+
+
+def form_number(record_id: int) -> str:
+    """Human-readable form number printed beside the QR and shown in the
+    History page - the same id the QR carries."""
+    return f"HO-{int(record_id):06d}"
+
+
+def _ascii_field(value) -> str:
+    return re.sub(r"[^0-9A-Za-z._-]", "", str(value or ""))
+
+
+def qr_payload(record_id: int, ho_date: dt.date, user_no, ho_type) -> str:
+    return "|".join(
+        [QR_PREFIX, str(int(record_id)), ho_date.isoformat(), _ascii_field(user_no),
+         _ascii_field((ho_type or "").upper())]
+    )
+
+
+def _add_header_qr(doc, payload: str, number: str) -> None:
+    """Puts the QR (floating, anchored to the page's top-left margin, text
+    wrapping around it like the logo opposite) and the form number into the
+    header shared by every page, so each page of a multi-page form - or of a
+    batch scan - identifies itself. Added to the in-memory copy docxtpl
+    renders from; the template file itself is unchanged."""
+    buf = io.BytesIO()
+    segno.make_qr(payload, error="m").save(buf, kind="png", scale=10, border=2)
+    buf.seek(0)
+
+    paragraph = doc.sections[0].header.paragraphs[0]
+    pic_run = paragraph.add_run()
+    pic_run.add_picture(buf, width=QR_SIZE, height=QR_SIZE)
+    inline = pic_run._r.find(".//{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}inline")
+    anchor = parse_xml(
+        '<wp:anchor xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+        'distT="0" distB="0" distL="0" distR="72000" simplePos="0" relativeHeight="251660288" '
+        'behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">'
+        '<wp:simplePos x="0" y="0"/>'
+        '<wp:positionH relativeFrom="margin"><wp:align>left</wp:align></wp:positionH>'
+        f'<wp:positionV relativeFrom="page"><wp:posOffset>{int(QR_TOP)}</wp:posOffset></wp:positionV>'
+        f'<wp:extent cx="{int(QR_SIZE)}" cy="{int(QR_SIZE)}"/>'
+        '<wp:effectExtent l="0" t="0" r="0" b="0"/>'
+        '<wp:wrapSquare wrapText="bothSides"/>'
+        "</wp:anchor>"
+    )
+    # Reuse the inline's docPr/graphic (they carry the image relationship id).
+    for tag in ("docPr", "cNvGraphicFramePr"):
+        el = inline.find(f"{{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}}{tag}")
+        if el is not None:
+            anchor.append(deepcopy(el))
+    anchor.append(deepcopy(inline.find("{http://schemas.openxmlformats.org/drawingml/2006/main}graphic")))
+    anchor.find("{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}docPr").set(
+        "name", "HandoverQR"
+    )
+    inline.getparent().replace(inline, anchor)
+
+    num_run = paragraph.add_run(number)
+    num_run.font.name = "Times New Roman"
+    num_run.font.size = Pt(8)
+
+
 def resolve_ho_date(ho_date: str | None) -> dt.date:
     """`ho_date` is an HTML <input type=date> value ("YYYY-MM-DD"). Falls
     back to today (the system date) if missing or unparseable."""
@@ -43,13 +120,14 @@ def resolve_ho_date(ho_date: str | None) -> dt.date:
     return dt.date.today()
 
 
-def render_handover_docx(data: dict) -> str:
+def render_handover_docx(data: dict, record_id: int) -> str:
     """`data` keys: ict_rep_name, ict_rep_id, receiving_name, receiving_title,
     receiving_dept, receiving_id, ho_type, temp_due_date, other_type_text,
     reason, other_reason_text, user_no, ho_date ("YYYY-MM-DD", defaults to
     today), signature_receiving_name, signature_prepared_by, assets (list of
-    dict with equipment_name, qty, serial_number, status). Returns the saved
-    .docx path.
+    dict with equipment_name, qty, serial_number, status). `record_id` is
+    the form's handover_records id, encoded in the header QR. Returns the
+    saved .docx path.
     """
     now = dt.datetime.now()
     ho_date = resolve_ho_date(data.get("ho_date"))
@@ -98,16 +176,27 @@ def render_handover_docx(data: dict) -> str:
     }
 
     tpl = DocxTemplate(get_handover_template_path())
+    number = form_number(record_id)
+    # Before render, not after: docxtpl re-reads each header's XML and swaps
+    # in a fresh part, so edits made to the header afterwards are lost.
+    _add_header_qr(
+        tpl.get_docx(), qr_payload(record_id, ho_date, data.get("user_no"), ho_type), number
+    )
     tpl.render(ctx)
 
     safe_user = "".join(c for c in str(data.get("user_no") or "unknown") if c.isalnum()) or "unknown"
-    filename = f"HANDOVER_{safe_user}_{now.strftime('%Y%m%d_%H%M%S')}.docx"
+    filename = f"HANDOVER_{number}_{safe_user}_{now.strftime('%Y%m%d_%H%M%S')}.docx"
     out_path = os.path.join(get_handovers_dir(), filename)
     tpl.save(out_path)
     return out_path
 
 
-def record_handover(data: dict, docx_path: str, created_by: str = "") -> int:
+def create_handover(data: dict, created_by: str = "") -> tuple[int, str]:
+    """Logs the form to handover_records and renders its .docx, as one unit:
+    the row is inserted first (the QR needs its id), the file rendered, then
+    the row's docx_path filled in and only then committed - a rendering
+    failure rolls the row back, so the history never lists a form with no
+    file. Returns (record id, .docx path)."""
     conn = get_connection()
     try:
         now = dt.datetime.now().isoformat(timespec="seconds")
@@ -137,12 +226,20 @@ def record_handover(data: dict, docx_path: str, created_by: str = "") -> int:
                 data.get("receiving_id", ""),
                 data.get("signature_receiving_name", ""),
                 data.get("signature_prepared_by", ""),
-                docx_path,
+                "",
                 created_by,
             ),
         )
+        record_id = cur.lastrowid
+        docx_path = render_handover_docx(data, record_id)
+        conn.execute(
+            "UPDATE handover_records SET docx_path = ? WHERE id = ?", (docx_path, record_id)
+        )
         conn.commit()
-        return cur.lastrowid
+        return record_id, docx_path
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

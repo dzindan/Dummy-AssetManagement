@@ -5,6 +5,7 @@ from flask import Flask, Response
 
 from .auth import register_auth
 from .db import get_setting, init_db, set_setting
+from .handover import form_number
 from .paths import get_app_data_dir_status, get_bundle_dir
 from .sorting import sort_url
 from .text_utils import usage_duration_years
@@ -48,6 +49,8 @@ def create_app() -> Flask:
     # directly, via exports.ASSET_ROW_COLUMNS, since a workbook cell has no
     # Jinja filter to run).
     app.jinja_env.filters["usage_duration"] = usage_duration_years
+    # "HO-000123" - the number printed beside a hand-over form's QR code.
+    app.jinja_env.filters["form_number"] = form_number
     # Header links of the server-sorted tables (templates/_sort.html).
     app.jinja_env.globals["sort_url"] = sort_url
 

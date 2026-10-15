@@ -21,12 +21,74 @@ again). Rows whose branch couldn't be auto-resolved are grouped by their raw
 branch_dept text instead, so they still surface as their own bucket rather
 than disappearing from the "current" view.
 
+All of the above is also per report source (import_batches.report_source):
+a unit's own monthly report and its rows in the HO consolidated report are
+two separate snapshots, each with its own latest batch, both "current".
+
 Diffing (added/removed/changed) uses the same per-branch latest-batch idea:
 it compares a branch's two most recent batches (by period) as full
 snapshots - see get_previous_batch_for_branch().
 """
 
 from __future__ import annotations
+
+from .db import REPORT_SOURCE_BRANCH
+
+# --- Branch network vs Head Office (Dashboard / CCTV Dashboard scope) -------
+# Every unit in `branches` is either part of the branch network (branches and
+# their transaction offices) or a Head Office department/division/center.
+# `branches.unit_group` holds a manual choice ('BRANCH' / 'HO', Settings >
+# Branch Aliases > Unit Groups); NULL/blank means "decide from the name":
+# BRANCH or TRANSACTION OFFICE as a word in eng_name -> BRANCH, anything
+# else (departments, divisions, teams, centers, custom units) -> HO. One SQL
+# expression, so the dashboards' filters and the Settings list can never
+# disagree. Rows whose branch couldn't be resolved belong to neither group -
+# they only show under "All".
+UNIT_GROUP_BRANCH = "BRANCH"
+UNIT_GROUP_HO = "HO"
+UNIT_GROUP_LABELS = {UNIT_GROUP_BRANCH: "Branch", UNIT_GROUP_HO: "Head Office"}
+
+# ?scope= values -> unit_group; "" (or anything unknown) = all units.
+DASHBOARD_SCOPES = [("", "All"), ("branch", "Branches"), ("ho", "Head Office")]
+# Chart/sheet titles per scope ("Item Count Trend - <this>").
+SCOPE_TITLES = {"": "All Branches", "branch": "Branch Network", "ho": "Head Office"}
+_SCOPE_GROUPS = {"branch": UNIT_GROUP_BRANCH, "ho": UNIT_GROUP_HO}
+
+
+def auto_unit_group_sql(alias: str = "b") -> str:
+    name = f"(' ' || UPPER(COALESCE({alias}.eng_name, '')) || ' ')"
+    return (
+        f"(CASE WHEN {name} LIKE '% BRANCH %' OR {name} LIKE '% TRANSACTION OFFICE %'"
+        f" THEN '{UNIT_GROUP_BRANCH}' ELSE '{UNIT_GROUP_HO}' END)"
+    )
+
+
+def unit_group_sql(alias: str = "b") -> str:
+    """SQL for a branches row's effective group: the manual choice, else the
+    name rule (auto_unit_group_sql)."""
+    return f"COALESCE(NULLIF({alias}.unit_group, ''), {auto_unit_group_sql(alias)})"
+
+
+def normalize_scope(scope: str | None) -> str:
+    return scope if scope in _SCOPE_GROUPS else ""
+
+
+def scope_condition(branch_col: str, scope: str | None) -> str:
+    """`<branch_col> IN (units of that group)`, or "" for all units. Built
+    only from the fixed _SCOPE_GROUPS values, never from request text."""
+    group = _SCOPE_GROUPS.get(scope or "")
+    if not group:
+        return ""
+    return (
+        f"{branch_col} IN (SELECT sb.branch_no FROM branches sb"
+        f" WHERE {unit_group_sql('sb')} = '{group}')"
+    )
+
+
+def _and(*conds: str) -> str:
+    """" WHERE a AND b" from the non-empty conditions, or ""."""
+    conds = tuple(c for c in conds if c)
+    return (" WHERE " + " AND ".join(conds)) if conds else ""
 
 
 def current_assets_cte(batch_where: str = "", table: str = "asset_items") -> str:
@@ -66,18 +128,22 @@ WITH branch_key AS (
     FROM {table} ai
 ),
 -- One row per (branch, batch) actually imported, paired with that batch's
--- own reporting period - kept to distinct (bkey, batch_id) pairs so this
--- stays cheap regardless of how many asset rows a batch has.
+-- own reporting period and source - kept to distinct (bkey, batch_id) pairs
+-- so this stays cheap regardless of how many asset rows a batch has.
 branch_batches AS (
-    SELECT DISTINCT bk.bkey, bk.batch_id, ib.period
+    SELECT DISTINCT bk.bkey, bk.batch_id, ib.period, ib.report_source AS src
     FROM branch_key bk
     JOIN import_batches ib ON ib.id = bk.batch_id
     {batch_where}
 ),
+-- Per unit AND per report source (branch report / HO report - see
+-- import_batches.report_source): a unit appearing in both keeps the latest
+-- batch of each, so e.g. a few HO-report rows for HO CHI MINH BRANCH dated
+-- September can't hide that branch's own August report.
 latest_period AS (
-    SELECT bkey, MAX(period) AS period
+    SELECT bkey, src, MAX(period) AS period
     FROM branch_batches
-    GROUP BY bkey
+    GROUP BY bkey, src
 ),
 latest_batch AS (
     -- "IS", not "=": a NULL period (shouldn't happen for a real import - see
@@ -86,8 +152,8 @@ latest_batch AS (
     -- "NULL = NULL" is never true and would drop every such row here.
     SELECT bb.bkey, MAX(bb.batch_id) AS batch_id
     FROM branch_batches bb
-    JOIN latest_period lp ON lp.bkey = bb.bkey AND lp.period IS bb.period
-    GROUP BY bb.bkey
+    JOIN latest_period lp ON lp.bkey = bb.bkey AND lp.src = bb.src AND lp.period IS bb.period
+    GROUP BY bb.bkey, bb.src
 )
 SELECT bk.*
 FROM branch_key bk
@@ -151,20 +217,21 @@ def search_current_assets_by_serial(conn, serial_query: str):
     return conn.execute(sql, [like]).fetchall()
 
 
-def get_current_asset_count(conn, cctv_gear: bool = False) -> int:
+def get_current_asset_count(conn, cctv_gear: bool = False, scope: str | None = None) -> int:
     """Current assets excluding CCTV/DVR (the Dashboard's "Assets" total),
-    or with `cctv_gear=True` only the CCTV/DVR rows left out of it."""
-    cond = cctv_gear_sql("bk.device_name")
-    sql = f"SELECT COUNT(*) AS c FROM ({CURRENT_ASSETS_CTE} WHERE {'' if cctv_gear else 'NOT '}{cond})"
+    or with `cctv_gear=True` only the CCTV/DVR rows left out of it.
+    `scope`: see scope_condition."""
+    cond = ("" if cctv_gear else "NOT ") + cctv_gear_sql("bk.device_name")
+    sql = f"SELECT COUNT(*) AS c FROM ({CURRENT_ASSETS_CTE}{_and(cond, scope_condition('bk.branch_no', scope))})"
     return conn.execute(sql).fetchone()["c"]
 
 
-def get_current_cctv_count(conn) -> int:
-    sql = f"SELECT COUNT(*) AS c FROM ({CURRENT_CCTV_CTE})"
+def get_current_cctv_count(conn, scope: str | None = None) -> int:
+    sql = f"SELECT COUNT(*) AS c FROM ({CURRENT_CCTV_CTE}{_and(scope_condition('bk.branch_no', scope))})"
     return conn.execute(sql).fetchone()["c"]
 
 
-def get_current_cctv_items_for_tree(conn):
+def get_current_cctv_items_for_tree(conn, scope: str | None = None):
     """Every currently-reported CCTV item (see CURRENT_CCTV_CTE), one row
     per DVR/recorder/monitor, with its branch display name attached -
     backs the CCTV Dashboard's expandable per-branch tree (recorder count,
@@ -189,12 +256,13 @@ def get_current_cctv_items_for_tree(conn):
         bk.location AS location
     FROM ({cte}) bk
     LEFT JOIN branches b ON b.branch_no = bk.branch_no
+    {_and(scope_condition('bk.branch_no', scope))}
     ORDER BY display_name, bk.device_name
     """
     return conn.execute(sql).fetchall()
 
 
-def get_cctv_items_by_branch_period(conn, branch_no: str | None = None):
+def get_cctv_items_by_branch_period(conn, branch_no: str | None = None, scope: str | None = None):
     """Every CCTV item from each branch's most-recent batch *for each
     reporting period on file* (not just the single latest one - see
     CURRENT_CCTV_CTE's docstring on why "latest batch per (branch, period)"
@@ -205,21 +273,21 @@ def get_cctv_items_by_branch_period(conn, branch_no: str | None = None):
     compute several different per-period totals (recorder count, parsed
     camera/HDD sums) from the same row set rather than just one count.
     `branch_no` narrows this to one branch - Branch Detail's own CCTV
-    section."""
+    section; `scope` to one unit group (see scope_condition)."""
     sql = """
     WITH rows AS (
         SELECT
             ci.id, ci.batch_id,
             COALESCE(NULLIF(ci.branch_no, ''), 'UNRESOLVED:' || ci.branch_dept) AS bkey,
             ci.branch_no AS branch_no, ci.branch_dept AS branch_dept,
-            ib.period AS period,
+            ib.period AS period, ib.report_source AS src,
             ci.camera_count AS camera_count, ci.hdd_count AS hdd_count, ci.hdd_capacity AS hdd_capacity
         FROM cctv_items ci
         JOIN import_batches ib ON ci.batch_id = ib.id
         WHERE ib.period IS NOT NULL AND ib.period != ''
     ),
     latest AS (
-        SELECT bkey, period, MAX(batch_id) AS batch_id FROM rows GROUP BY bkey, period
+        SELECT bkey, period, MAX(batch_id) AS batch_id FROM rows GROUP BY bkey, period, src
     )
     SELECT
         r.bkey AS bkey, r.branch_no AS branch_no, r.branch_dept AS branch_dept, r.period AS period,
@@ -228,8 +296,8 @@ def get_cctv_items_by_branch_period(conn, branch_no: str | None = None):
     JOIN latest l ON r.bkey = l.bkey AND r.period = l.period AND r.batch_id = l.batch_id
     """
     params: tuple = ()
+    sql += _and("r.branch_no = ?" if branch_no else "", scope_condition("r.branch_no", scope))
     if branch_no:
-        sql += " WHERE r.branch_no = ?"
         params = (branch_no,)
     rows = conn.execute(sql, params).fetchall()
     names = {b["branch_no"]: b["eng_name"] for b in conn.execute("SELECT branch_no, eng_name FROM branches")}
@@ -246,7 +314,7 @@ def get_cctv_items_by_branch_period(conn, branch_no: str | None = None):
     return result
 
 
-def get_current_branch_breakdown(conn, table: str = "asset_items"):
+def get_current_branch_breakdown(conn, table: str = "asset_items", scope: str | None = None):
     """One row per branch (resolved branch_no when known, otherwise grouped
     by its raw branch_dept text - see CURRENT_ASSETS_CTE), with a
     dashboard-friendly display name and count. `branch_no` is empty for
@@ -262,6 +330,7 @@ def get_current_branch_breakdown(conn, table: str = "asset_items"):
         COUNT(*) AS c
     FROM ({cte}) bk
     LEFT JOIN branches b ON b.branch_no = bk.branch_no
+    {_and(scope_condition('bk.branch_no', scope))}
     GROUP BY bk.bkey
     ORDER BY c DESC
     """
@@ -652,23 +721,24 @@ def inline_edit_suggestions(conn) -> dict:
     }
 
 
-def find_existing_batch_for_branch_period(conn, branch_no: str, period: str):
+def find_existing_batch_for_branch_period(conn, branch_no: str, period: str, source: str = REPORT_SOURCE_BRANCH):
     """Most recent existing import batch for this branch already stamped
     with this period, if any - used to warn before importing a file that
     would otherwise silently add a second (or third...) import on top,
     e.g. from forgetting to change the Reporting Month field away from
-    today's pre-filled default."""
+    today's pre-filled default. Only batches of the same report source
+    count: the HO report's rows for a unit never replace its own report."""
     return conn.execute(
         """
         SELECT ib.id, ib.imported_at, ib.label, COUNT(ai.id) AS row_count
         FROM import_batches ib
         JOIN asset_items ai ON ai.batch_id = ib.id
-        WHERE ai.branch_no = ? AND ib.period = ?
+        WHERE ai.branch_no = ? AND ib.period = ? AND ib.report_source = ?
         GROUP BY ib.id
         ORDER BY ib.id DESC
         LIMIT 1
         """,
-        (branch_no, period),
+        (branch_no, period, source),
     ).fetchone()
 
 
@@ -748,22 +818,24 @@ def get_previous_batch_for_branch(conn, branch_no: str, before_batch_id: int) ->
     whichever batch happened to be imported most recently in wall-clock
     time."""
     period_row = conn.execute(
-        "SELECT ib.period FROM asset_items ai JOIN import_batches ib ON ib.id = ai.batch_id "
+        "SELECT ib.period, ib.report_source FROM asset_items ai JOIN import_batches ib ON ib.id = ai.batch_id "
         "WHERE ai.batch_id = ? LIMIT 1",
         (before_batch_id,),
     ).fetchone()
     if period_row is None:
         return None
+    # Same report source only - an HO-report batch is compared with the
+    # previous HO report's rows for that unit, never with its own report.
     row = conn.execute(
         """
         SELECT ai.batch_id
         FROM asset_items ai
         JOIN import_batches ib ON ib.id = ai.batch_id
-        WHERE ai.branch_no = ? AND ib.period < ?
+        WHERE ai.branch_no = ? AND ib.period < ? AND ib.report_source = ?
         ORDER BY ib.period DESC, ai.batch_id DESC
         LIMIT 1
         """,
-        (branch_no, period_row["period"]),
+        (branch_no, period_row["period"], period_row["report_source"]),
     ).fetchone()
     return row["batch_id"] if row else None
 

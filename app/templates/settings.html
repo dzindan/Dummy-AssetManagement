@@ -215,6 +215,55 @@
   {% endif %}
 </div>
 
+<div class="panel" data-settings-tab="branches" id="unit-groups">
+  <h2>Unit Groups (Branch / Head Office)</h2>
+  <p class="muted">Which side of the Asset and CCTV Dashboards' <strong>Branches / Head Office</strong> switch each unit
+    falls on. <strong>Auto</strong> decides from the name: "BRANCH" or "TRANSACTION OFFICE" in it = Branch, anything
+    else (departments, divisions, teams, centers, custom units) = Head Office. Pick Branch or Head Office to override
+    it; new units from the branch list or custom units start on Auto.</p>
+  <form method="post" action="{{ url_for('settings.save_unit_groups') }}">
+    <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; margin-bottom:0.5rem;">
+      <input type="search" id="unit-group-filter" placeholder="Filter by code or name" style="max-width:280px;">
+      <button type="submit">Save Unit Groups</button>
+      <span class="muted" style="font-size:0.85rem;">
+        {{ unit_groups | selectattr('unit_group', 'equalto', 'BRANCH') | list | length }} Branch,
+        {{ unit_groups | selectattr('unit_group', 'equalto', 'HO') | list | length }} Head Office
+      </span>
+    </div>
+    <div class="table-scroll" style="max-height:480px;">
+    <table id="unit-group-table">
+      <thead><tr><th>Code</th><th>Unit</th><th>Group</th></tr></thead>
+      <tbody>
+        {% for u in unit_groups %}
+        <tr data-filter="{{ (u['branch_no'] ~ ' ' ~ (u['eng_name'] or '')) | upper }}">
+          <td>{{ u['branch_no'] }}</td>
+          <td>{{ u['eng_name'] }}</td>
+          <td>
+            <select name="group_{{ u['branch_no'] }}">
+              <option value="" {% if not u['manual_group'] %}selected{% endif %}>Auto ({{ unit_group_labels[u['auto_group']] }})</option>
+              {% for key, label in unit_group_labels.items() %}
+              <option value="{{ key }}" {% if u['manual_group'] == key %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </form>
+  <script>
+  (function () {
+    var box = document.getElementById("unit-group-filter");
+    var rows = document.querySelectorAll("#unit-group-table tbody tr");
+    box.addEventListener("input", function () {
+      var q = box.value.trim().toUpperCase();
+      rows.forEach(function (r) { r.style.display = !q || r.dataset.filter.indexOf(q) !== -1 ? "" : "none"; });
+    });
+  })();
+  </script>
+</div>
+
 <div class="panel" data-settings-tab="devices" id="mapping-check">
   <h2>Mapping Check</h2>
   <p class="muted">

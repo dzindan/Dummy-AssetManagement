@@ -19,7 +19,14 @@ from ..exports import (
     write_sheet,
     write_trend_matrix_sheet,
 )
-from ..queries import get_current_asset_count, get_latest_batch
+from ..queries import (
+    DASHBOARD_SCOPES,
+    SCOPE_TITLES,
+    get_current_asset_count,
+    get_latest_batch,
+    normalize_scope,
+    scope_condition,
+)
 
 bp = Blueprint("dashboard", __name__)
 
@@ -46,31 +53,46 @@ def _sort_month_table(rows: list[dict], sort: str) -> list[dict]:
     return named + [r for r in rows if not r["branch_no"]]
 
 
+def _where(cond: str) -> str:
+    return f" WHERE {cond}" if cond else ""
+
+
 @bp.route("/")
 def index():
+    # ?scope=branch / ho: the whole page - tiles, tables, charts, export -
+    # narrowed to the branch network or the Head Office units (see
+    # queries.unit_group_sql); "" = everything, as before.
+    scope = normalize_scope(request.args.get("scope"))
     conn = get_connection()
     try:
-        branch_count = conn.execute("SELECT COUNT(*) c FROM branches").fetchone()["c"]
-        user_count = conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
+        branch_count = conn.execute(
+            "SELECT COUNT(*) c FROM branches" + _where(scope_condition("branch_no", scope))
+        ).fetchone()["c"]
+        user_count = conn.execute(
+            "SELECT COUNT(*) c FROM users" + _where(scope_condition("branch_no", scope))
+        ).fetchone()["c"]
 
         latest_asset_batch = get_latest_batch(conn)
         # CCTV/DVR devices aren't part of the asset total, charts or tables
         # below - shown on their own tile instead (see
         # queries.CCTV_ASSET_DEVICE_NAMES).
-        asset_count = get_current_asset_count(conn)
-        cctv_gear_count = get_current_asset_count(conn, cctv_gear=True)
+        asset_count = get_current_asset_count(conn, scope=scope)
+        cctv_gear_count = get_current_asset_count(conn, cctv_gear=True, scope=scope)
 
-        handover_count = conn.execute("SELECT COUNT(*) c FROM handover_records").fetchone()["c"]
+        handover_where = _where(scope_condition("branch_no", scope))
+        handover_count = conn.execute(
+            "SELECT COUNT(*) c FROM handover_records" + handover_where
+        ).fetchone()["c"]
         recent_handovers = conn.execute(
-            "SELECT * FROM handover_records ORDER BY id DESC LIMIT 5"
+            "SELECT * FROM handover_records" + handover_where + " ORDER BY id DESC LIMIT 5"
         ).fetchall()
 
         # Every device type, no OTHER bucket (see analytics.MAX_SERIES).
-        all_periods, all_items, all_matrix = get_all_branches_item_trend(conn, max_series=None)
+        all_periods, all_items, all_matrix = get_all_branches_item_trend(conn, max_series=None, scope=scope)
 
         available_years = get_available_report_years(conn)
         selected_year = resolve_report_year(request.args.get("year"), available_years)
-        change_rows = fetch_month_change_rows(conn)  # shared by both month tables
+        change_rows = fetch_month_change_rows(conn, scope=scope)  # shared by both month tables
         month_periods, month_table, month_column_totals, month_column_added, month_column_removed = (
             get_branch_month_change_table(conn, selected_year, rows=change_rows)
         )
@@ -80,7 +102,7 @@ def index():
             get_device_month_change_table(conn, selected_year, rows=change_rows)
         )
 
-        year_comparison = get_year_comparison_table(conn)
+        year_comparison = get_year_comparison_table(conn, scope=scope)
 
         unmapped_device_count = conn.execute("SELECT COUNT(*) c FROM device_unmapped").fetchone()["c"]
     finally:
@@ -92,6 +114,10 @@ def index():
     return render_template(
         "dashboard.html",
         active_page="dashboard",
+        scope=scope,
+        scopes=DASHBOARD_SCOPES,
+        scope_label=dict(DASHBOARD_SCOPES)[scope],
+        scope_title=SCOPE_TITLES[scope],
         branch_count=branch_count,
         user_count=user_count,
         asset_count=asset_count,
@@ -126,17 +152,18 @@ def export():
     Dashboard itself (see get_branch_month_change_table)
     rather than reusing state passed from index() - matches how every other
     export route in this app re-queries instead of caching across requests."""
+    scope = normalize_scope(request.args.get("scope"))
     conn = get_connection()
     try:
         available_years = get_available_report_years(conn)
         selected_year = resolve_report_year(request.args.get("year"), available_years)
-        change_rows = fetch_month_change_rows(conn)
+        change_rows = fetch_month_change_rows(conn, scope=scope)
         month_periods, month_table, _totals, _added, _removed = get_branch_month_change_table(
             conn, selected_year, rows=change_rows)
         month_table = _sort_month_table(month_table, _branch_sort_param())  # same order as on screen
         _p, device_table, _totals, _added, _removed = get_device_month_change_table(
             conn, selected_year, rows=change_rows)
-        all_periods, _all_items, all_matrix = get_all_branches_item_trend(conn, max_series=None)
+        all_periods, _all_items, all_matrix = get_all_branches_item_trend(conn, max_series=None, scope=scope)
     finally:
         conn.close()
 
@@ -150,7 +177,9 @@ def export():
     items = list(all_matrix.keys())
     if len(all_periods) >= 2 and items:
         ws = write_trend_matrix_sheet(wb, "Item Count Trend", all_periods, items, all_matrix)
-        add_trend_line_chart(ws, "Item Count Trend - All Branches", len(all_periods), len(items), "A" + str(len(all_periods) + 3))
+        add_trend_line_chart(ws, f"Item Count Trend - {SCOPE_TITLES[scope]}", len(all_periods), len(items),
+                             "A" + str(len(all_periods) + 3))
         add_solo_item_charts(ws, items, len(all_periods), len(all_periods) + 20)
 
-    return send_workbook(wb, f"assets_by_branch_by_month_{selected_year}.xlsx")
+    suffix = f"_{scope}" if scope else ""
+    return send_workbook(wb, f"assets_by_branch_by_month_{selected_year}{suffix}.xlsx")

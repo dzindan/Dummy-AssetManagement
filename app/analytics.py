@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from .queries import cctv_gear_sql, current_assets_cte
+from .queries import cctv_gear_sql, current_assets_cte, scope_condition
 
 # Caps distinct item series per chart; the rest fold into "OTHER" - 7 real
 # series + OTHER = 8, matching the categorical palette's full slot count
@@ -22,27 +22,31 @@ from .queries import cctv_gear_sql, current_assets_cte
 MAX_SERIES = 7
 
 
-def _not_cctv_gear(table: str, device_col: str) -> str:
+def _not_cctv_gear(table: str, device_col: str, branch_col: str = "", scope: str | None = None) -> str:
     """`WHERE NOT <CCTV/DVR>` for asset_items, empty for any other table
     - the asset counts/charts leave CCTV/DVR devices out (see
     queries.CCTV_ASSET_DEVICE_NAMES). Always applied to the final SELECT,
     after the latest batch per (branch, period) has been picked from every
-    row."""
-    if table != "asset_items":
-        return ""
-    return f" WHERE NOT {cctv_gear_sql(device_col)}"
+    row. `scope` ("branch"/"ho", see queries.scope_condition) also keeps
+    only that unit group's rows, by `branch_col`."""
+    conds = []
+    if table == "asset_items":
+        conds.append(f"NOT {cctv_gear_sql(device_col)}")
+    if branch_col and scope_condition(branch_col, scope):
+        conds.append(scope_condition(branch_col, scope))
+    return (" WHERE " + " AND ".join(conds)) if conds else ""
 
 
 def _branch_trend_sql(table: str) -> str:
     return f"""
 WITH rows AS (
-    SELECT ai.batch_id, ib.period AS period, ai.device_name AS item
+    SELECT ai.batch_id, ib.period AS period, ib.report_source AS src, ai.device_name AS item
     FROM {table} ai
     JOIN import_batches ib ON ai.batch_id = ib.id
     WHERE ai.branch_no = ? AND ib.period IS NOT NULL AND ib.period != ''
 ),
 latest AS (
-    SELECT period, MAX(batch_id) AS batch_id FROM rows GROUP BY period
+    SELECT period, MAX(batch_id) AS batch_id FROM rows GROUP BY period, src
 )
 SELECT r.period, r.item, COUNT(*) AS cnt
 FROM rows r
@@ -53,21 +57,22 @@ ORDER BY r.period, r.item
 """
 
 
-def _all_branches_trend_sql(table: str) -> str:
+def _all_branches_trend_sql(table: str, scope: str | None = None) -> str:
     return f"""
 WITH rows AS (
-    SELECT ai.batch_id, ai.branch_no AS branch_no, ib.period AS period, ai.device_name AS item
+    SELECT ai.batch_id, ai.branch_no AS branch_no, ib.period AS period, ib.report_source AS src,
+           ai.device_name AS item
     FROM {table} ai
     JOIN import_batches ib ON ai.batch_id = ib.id
     WHERE ib.period IS NOT NULL AND ib.period != ''
 ),
 latest AS (
-    SELECT branch_no, period, MAX(batch_id) AS batch_id FROM rows GROUP BY branch_no, period
+    SELECT branch_no, period, MAX(batch_id) AS batch_id FROM rows GROUP BY branch_no, period, src
 )
 SELECT r.period, r.item, COUNT(*) AS cnt
 FROM rows r
 JOIN latest l ON r.branch_no = l.branch_no AND r.period = l.period AND r.batch_id = l.batch_id
-{_not_cctv_gear(table, "r.item")}
+{_not_cctv_gear(table, "r.item", "r.branch_no", scope)}
 GROUP BY r.period, r.item
 ORDER BY r.period, r.item
 """
@@ -107,12 +112,13 @@ def get_branch_item_trend(conn, branch_no: str, table: str = "asset_items", max_
     return _build_trend(rows, max_series)
 
 
-def get_all_branches_item_trend(conn, table: str = "asset_items", max_series: int | None = MAX_SERIES):
+def get_all_branches_item_trend(conn, table: str = "asset_items", max_series: int | None = MAX_SERIES,
+                                scope: str | None = None):
     """`table="cctv_items"` backs the CCTV Dashboard's equivalent trend
     chart - same per-(branch, period) latest-batch logic, just over CCTV
     gear (DVR/recorder/monitor `device_name`) instead of person-assigned
     equipment."""
-    rows = conn.execute(_all_branches_trend_sql(table)).fetchall()
+    rows = conn.execute(_all_branches_trend_sql(table, scope)).fetchall()
     return _build_trend(rows, max_series)
 
 
@@ -169,6 +175,39 @@ def _walk_period_changes(rows: list[tuple[str, str, str]]) -> dict[str, dict]:
             "total_removed": total_removed,
             "current_count": current_count,
         }
+    return result
+
+
+def _walk_by_source(rows) -> dict[str, dict]:
+    """_walk_period_changes for rows that also carry their report source -
+    (group_key, src, period, asset_key). Each (group, source) is walked as
+    its own series - a unit's own report diffed against its previous own
+    report, its HO-report rows against the previous HO report - then the
+    sources are added back together per group. Walking them as one series
+    would show a month in which only the HO report came in (a few rows) as
+    every one of the branch report's devices removed. current_count sums
+    each source's latest count, the same total "current state" shows, and
+    each period cell's "current" is that sum as of that period (what
+    _prepare_year_columns sorts by)."""
+    split = _walk_period_changes(((g, src), period, key) for g, src, period, key in rows)
+    result: dict[str, dict] = {}
+    for (group_key, _src), data in sorted(split.items(), key=lambda kv: str(kv[0])):
+        merged = result.setdefault(
+            group_key, {"periods": {}, "total_added": 0, "total_removed": 0, "current_count": 0})
+        merged["total_added"] += data["total_added"]
+        merged["total_removed"] += data["total_removed"]
+        merged["current_count"] += data["current_count"]
+        for period, cell in data["periods"].items():
+            into = merged["periods"].setdefault(period, {"count": 0, "added": None, "removed": None})
+            into["count"] += cell["count"]
+            for field in ("added", "removed"):
+                if cell[field] is not None:
+                    into[field] = (into[field] or 0) + cell[field]
+    for (group_key, src), data in split.items():
+        for period, cell in result[group_key]["periods"].items():
+            as_of = [p for p in data["periods"] if p <= period]
+            if as_of:
+                cell["current"] = cell.get("current", 0) + data["periods"][max(as_of)]["count"]
     return result
 
 
@@ -232,7 +271,7 @@ def _prepare_year_columns(by_group: dict[str, dict], year: str):
                 continue
             any_data = True
             cells.append({"count": cell["count"], "added": cell["added"], "removed": cell["removed"]})
-            last_count = cell["count"]
+            last_count = cell.get("current", cell["count"])
         if any_data:
             prepared[key] = {"cells": cells, "current_count": last_count}
     return visible_periods, prepared
@@ -256,36 +295,39 @@ def _column_totals_and_deltas(visible_periods: list[str], table: list[dict]) -> 
     return column_totals, column_added, column_removed
 
 
-def _branch_month_changes_sql(table: str) -> str:
+def _branch_month_changes_sql(table: str, scope: str | None = None) -> str:
     """(branch_no, device_name, period, asset_key) for every row of each
     branch's latest batch per period - the input of both month-change
     tables (by branch, by device type)."""
     return f"""
 WITH rows AS (
-    SELECT ai.batch_id, ai.branch_no AS branch_no, ib.period AS period, ai.asset_key AS asset_key,
+    SELECT ai.batch_id, ai.branch_no AS branch_no, ib.period AS period, ib.report_source AS src,
+           ai.asset_key AS asset_key,
            ai.device_name AS device_name
     FROM {table} ai
     JOIN import_batches ib ON ai.batch_id = ib.id
     WHERE ib.period IS NOT NULL AND ib.period != ''
 ),
 latest AS (
-    SELECT branch_no, period, MAX(batch_id) AS batch_id FROM rows GROUP BY branch_no, period
+    SELECT branch_no, period, MAX(batch_id) AS batch_id FROM rows GROUP BY branch_no, period, src
 )
-SELECT r.branch_no AS branch_no, r.device_name AS device_name, r.period AS period, r.asset_key AS asset_key
+SELECT r.branch_no AS branch_no, r.device_name AS device_name, r.period AS period, r.asset_key AS asset_key,
+       r.src AS src
 FROM rows r
 JOIN latest l ON r.branch_no = l.branch_no AND r.period = l.period AND r.batch_id = l.batch_id
-{_not_cctv_gear(table, "r.device_name")}
+{_not_cctv_gear(table, "r.device_name", "r.branch_no", scope)}
 """
 
 
-def fetch_month_change_rows(conn, table: str = "asset_items"):
+def fetch_month_change_rows(conn, table: str = "asset_items", scope: str | None = None):
     """The rows both month-change tables are built from - fetch once and
     pass as `rows=` when a page shows both (the Dashboard), since this
     query is the slow part."""
-    return conn.execute(_branch_month_changes_sql(table)).fetchall()
+    return conn.execute(_branch_month_changes_sql(table, scope)).fetchall()
 
 
-def get_branch_month_change_table(conn, year: str, table: str = "asset_items", rows=None):
+def get_branch_month_change_table(conn, year: str, table: str = "asset_items", rows=None,
+                                  scope: str | None = None):
     """Dashboard summary table: one row per branch, showing its asset count
     for each of the 12 months of `year`, sorted by current (latest-in-year)
     count. Every column carries its own added/removed indicator (diffed
@@ -295,8 +337,8 @@ def get_branch_month_change_table(conn, year: str, table: str = "asset_items", r
     difference. `table="cctv_items"` backs the CCTV Dashboard's equivalent
     table. `rows`: see fetch_month_change_rows."""
     if rows is None:
-        rows = fetch_month_change_rows(conn, table)
-    by_group = _walk_period_changes((r["branch_no"] or "", r["period"], r["asset_key"]) for r in rows)
+        rows = fetch_month_change_rows(conn, table, scope)
+    by_group = _walk_by_source((r["branch_no"] or "", r["src"], r["period"], r["asset_key"]) for r in rows)
     visible_periods, prepared = _prepare_year_columns(by_group, year)
 
     names = {
@@ -351,7 +393,7 @@ def _device_changes_across_branches(rows) -> dict[str, dict]:
     return result
 
 
-def get_device_month_change_table(conn, year: str, rows=None):
+def get_device_month_change_table(conn, year: str, rows=None, scope: str | None = None):
     """Dashboard "Assets by Device Type (by month)": the by-branch table
     above turned around - one row per device type, summed across every
     branch, same 12 months of `year`, same identity-based +added/-removed
@@ -365,9 +407,11 @@ def get_device_month_change_table(conn, year: str, rows=None):
     but counts once under each type here. `rows`: see
     fetch_month_change_rows."""
     if rows is None:
-        rows = fetch_month_change_rows(conn)
+        rows = fetch_month_change_rows(conn, scope=scope)
+    # Each (branch, report source) is its own series - see _walk_by_source.
     by_group = _device_changes_across_branches(
-        (r["branch_no"] or "", r["device_name"] or "(UNKNOWN)", r["period"], r["asset_key"]) for r in rows
+        ((r["branch_no"] or "", r["src"]), r["device_name"] or "(UNKNOWN)", r["period"], r["asset_key"])
+        for r in rows
     )
     visible_periods, prepared = _prepare_year_columns(by_group, year)
     # A device type a branch dropped to zero still gets a cell (count 0,
@@ -388,16 +432,17 @@ def get_device_month_change_table(conn, year: str, rows=None):
 # past "as of" snapshot can't mean anything for one of those) - see
 # current_assets_cte()'s docstring for why that's not the unbounded
 # version's own default behavior too.
-def _year_snapshot_sql(table: str) -> str:
+def _year_snapshot_sql(table: str, scope: str | None = None) -> str:
     return (
         "SELECT COUNT(*) AS c FROM ("
         + current_assets_cte("WHERE ib.period IS NOT NULL AND ib.period != '' AND ib.period <= ?", table=table)
-        + _not_cctv_gear(table, "bk.device_name")
+        + _not_cctv_gear(table, "bk.device_name", "bk.branch_no", scope)
         + ")"
     )
 
 
-def get_year_comparison_table(conn, table: str = "asset_items", years_kinds: tuple[str, ...] | None = None) -> list[dict]:
+def get_year_comparison_table(conn, table: str = "asset_items", years_kinds: tuple[str, ...] | None = None,
+                              scope: str | None = None) -> list[dict]:
     """Dashboard year-comparison panel: one row per calendar year with any
     reporting data, oldest first, showing that year's end-of-year asset
     snapshot (same per-branch "latest period up to and including this
@@ -410,7 +455,7 @@ def get_year_comparison_table(conn, table: str = "asset_items", years_kinds: tup
     years = get_available_report_years(conn, kinds=years_kinds)
     years.sort()  # oldest first, opposite of get_available_report_years' newest-first default
 
-    sql = _year_snapshot_sql(table)
+    sql = _year_snapshot_sql(table, scope)
     table_rows = []
     prev_count: int | None = None
     for year in years:
@@ -435,15 +480,16 @@ def get_branch_device_year_table(conn, branch_no: str, year: str, top_items: lis
     confusingly between years just because it had a quiet one."""
     sql = """
     WITH rows AS (
-        SELECT ai.batch_id, ai.device_name AS device_name, ib.period AS period, ai.asset_key AS asset_key
+        SELECT ai.batch_id, ai.device_name AS device_name, ib.period AS period, ib.report_source AS src,
+               ai.asset_key AS asset_key
         FROM asset_items ai
         JOIN import_batches ib ON ai.batch_id = ib.id
         WHERE ai.branch_no = ? AND ib.period IS NOT NULL AND ib.period != ''
     ),
     latest AS (
-        SELECT period, MAX(batch_id) AS batch_id FROM rows GROUP BY period
+        SELECT period, MAX(batch_id) AS batch_id FROM rows GROUP BY period, src
     )
-    SELECT r.device_name AS device_name, r.period AS period, r.asset_key AS asset_key
+    SELECT r.device_name AS device_name, r.period AS period, r.asset_key AS asset_key, r.src AS src
     FROM rows r
     JOIN latest l ON r.period = l.period AND r.batch_id = l.batch_id
     """ + _not_cctv_gear("asset_items", "r.device_name")
@@ -451,10 +497,10 @@ def get_branch_device_year_table(conn, branch_no: str, year: str, top_items: lis
     top_set = set(top_items)
     folded = (
         ((row["device_name"] or "(UNKNOWN)") if (row["device_name"] or "(UNKNOWN)") in top_set else "OTHER",
-         row["period"], row["asset_key"])
+         row["src"], row["period"], row["asset_key"])
         for row in raw
     )
-    by_group = _walk_period_changes(folded)
+    by_group = _walk_by_source(folded)
     visible_periods, prepared = _prepare_year_columns(by_group, year)
 
     order = {item: i for i, item in enumerate(top_items)}

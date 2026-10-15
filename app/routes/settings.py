@@ -34,6 +34,7 @@ from ..importer import (
     reresolve_unresolved_assets,
 )
 from ..paths import get_app_data_dir, get_default_app_data_dir, set_app_data_dir
+from ..queries import UNIT_GROUP_LABELS, auto_unit_group_sql, unit_group_sql
 
 bp = Blueprint("settings", __name__, url_prefix="/settings")
 
@@ -50,6 +51,14 @@ def index():
             """
         ).fetchall()
         branches = conn.execute("SELECT branch_no, eng_name FROM branches ORDER BY eng_name").fetchall()
+        unit_groups = conn.execute(
+            f"""
+            SELECT b.branch_no, b.eng_name, COALESCE(b.unit_group, '') AS manual_group,
+                   {auto_unit_group_sql('b')} AS auto_group, {unit_group_sql('b')} AS unit_group
+            FROM branches b
+            ORDER BY {unit_group_sql('b')}, b.eng_name
+            """
+        ).fetchall()
 
         standard_names = [r["name"] for r in conn.execute(
             "SELECT name FROM device_standard_names ORDER BY name"
@@ -109,6 +118,8 @@ def index():
         current_question_text=SECURITY_QUESTIONS_BY_KEY.get(current_question_key),
         branch_aliases=branch_aliases,
         branches=branches,
+        unit_groups=unit_groups,
+        unit_group_labels=UNIT_GROUP_LABELS,
         standard_names=standard_names,
         standard_statuses=standard_statuses,
         standard_models=standard_models,
@@ -256,6 +267,39 @@ def delete_branch_alias():
         conn.close()
     flash("Branch alias removed.", "success")
     return redirect(url_for("settings.index"))
+
+
+@bp.route("/unit-groups", methods=["POST"])
+@require_permission("manage_mappings")
+def save_unit_groups():
+    """Branch network vs Head Office for each unit (the Dashboards' scope
+    switch - see queries.unit_group_sql). One `group_<branch_no>` field per
+    unit: "" = by name (auto), or BRANCH / HO. Only changed units are
+    written and logged."""
+    conn = get_connection()
+    changed = 0
+    try:
+        for row in conn.execute("SELECT branch_no, COALESCE(unit_group, '') AS g FROM branches").fetchall():
+            field = f"group_{row['branch_no']}"
+            if field not in request.form:
+                continue
+            new = request.form[field].strip().upper()
+            if new not in ("", *UNIT_GROUP_LABELS):
+                continue
+            if new == row["g"]:
+                continue
+            conn.execute(
+                "UPDATE branches SET unit_group = ? WHERE branch_no = ?", (new or None, row["branch_no"])
+            )
+            log_activity(conn, "mapping", "Changed unit group", performed_by=current_username(),
+                         target=row["branch_no"], field="unit_group",
+                         old_value=row["g"] or "AUTO", new_value=new or "AUTO")
+            changed += 1
+        conn.commit()
+    finally:
+        conn.close()
+    flash(f"Unit groups saved ({changed} changed)." if changed else "No unit group changed.", "success")
+    return redirect(url_for("settings.index") + "#unit-groups")
 
 
 # --- Branch mapping (unresolved raw hint -> branch) -------------------------

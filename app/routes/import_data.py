@@ -26,6 +26,7 @@ from ..importer import (
     CleaningReport,
     import_asset_report,
     import_branch_file,
+    import_ho_report,
     import_id_file,
     import_total_asset_history,
     import_user_file,
@@ -557,6 +558,48 @@ def confirm_period_import():
         return redirect(url_for("import_data.index"))
 
     batch_ids = _run_asset_report_imports(files, period, source)
+    return _result_redirect(batch_ids)
+
+
+@bp.route("/ho-reports", methods=["POST"])
+@require_permission("import_data")
+def upload_ho_reports():
+    """The HO consolidated Monthly Report - its own form and importer
+    (importer.import_ho_report), never the branch-report path: each file is
+    split into one batch per Head Office unit, stored as report source HO so
+    it is kept apart from every unit's own monthly report."""
+    files = [f for f in request.files.getlist("files") if f and f.filename]
+    if not files:
+        flash("No files selected.", "error")
+        return redirect(url_for("import_data.index"))
+
+    period = request.form.get("period", "").strip()
+    batch_ids = []
+    periods = []
+    for f in files:
+        path = _save_upload(f)
+        try:
+            reports, summary = import_ho_report(path, source_label=f.filename, period=period,
+                                                performed_by=current_username())
+        finally:
+            os.remove(path)
+        if summary.error:
+            flash(f"{f.filename}: {summary.error}", "error")
+            continue
+        batch_ids.extend(r.batch_id for r in reports)
+        periods.append(summary.period)
+        message = (f"{f.filename}: HO report for {summary.period} - {summary.rows_read} rows into "
+                   f"{len(reports)} unit(s).")
+        if summary.skipped_own_report:
+            skipped = sum(summary.skipped_own_report.values())
+            message += (f" {skipped} row(s) left out because their unit sends its own monthly report: "
+                        + ", ".join(f"{name} ({n})" for name, n in sorted(summary.skipped_own_report.items())) + ".")
+        if summary.unresolved_rows:
+            message += (f" {summary.unresolved_rows} row(s) matched no unit - map them in "
+                        "Settings > Branch Aliases.")
+        flash(message, "info")
+
+    _save_diff_report(batch_ids, periods[0] if len(set(periods)) == 1 else "")
     return _result_redirect(batch_ids)
 
 

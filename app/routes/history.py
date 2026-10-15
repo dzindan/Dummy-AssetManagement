@@ -4,7 +4,7 @@ from flask import Blueprint, abort, render_template, request, send_file
 
 from ..db import get_connection
 from ..exports import build_workbook, dated_download_name, send_workbook
-from ..handover import HO_TYPES
+from ..handover import HO_TYPES, form_number
 from ..queries import search_handover_records
 
 bp = Blueprint("history", __name__, url_prefix="/history")
@@ -12,6 +12,7 @@ bp = Blueprint("history", __name__, url_prefix="/history")
 HO_TYPE_LABELS = dict(HO_TYPES)
 
 HANDOVER_EXPORT_COLUMNS = [
+    ("Form No.", lambda r: form_number(r["id"])),
     ("Hand-Over Date", "ho_date"),
     ("Logged At", lambda r: r["created_at"][:16] if r["created_at"] else ""),
     ("Created By", lambda r: r["created_by"] or ""),

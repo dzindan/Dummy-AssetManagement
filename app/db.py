@@ -21,6 +21,12 @@ from .text_utils import clean_ip, normalize_handover_date, normalize_user_id, st
 # on another); the two folder paths are literal local filesystem paths,
 # meaningless on another machine. Every other setting key defaults to
 # portable, which is the right default for anything added here later.
+# import_batches.report_source values - see the column's comment in SCHEMA.
+REPORT_SOURCE_BRANCH = "BRANCH"
+REPORT_SOURCE_HO = "HO"
+# import_batches.branch_hint of every HO consolidated report batch.
+HO_REPORT_HINT = "HO Monthly Report"
+
 LOCAL_SETTING_KEYS = frozenset({"secret_key", "asset_reports_folder", "id_files_folder"})
 
 SCHEMA = """
@@ -28,7 +34,8 @@ CREATE TABLE IF NOT EXISTS branches (
     branch_no TEXT PRIMARY KEY,
     local_name TEXT,
     eng_name TEXT,
-    updated_at TEXT
+    updated_at TEXT,
+    unit_group TEXT  -- 'BRANCH' / 'HO' set by hand; NULL = by name (queries.unit_group_sql)
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -51,8 +58,14 @@ CREATE TABLE IF NOT EXISTS import_batches (
     period TEXT,
     sheet_name TEXT,
     branch_hint TEXT,
-    unmapped_columns_json TEXT
+    unmapped_columns_json TEXT,
+    report_source TEXT NOT NULL DEFAULT 'BRANCH'
 );
+-- import_batches.report_source: which import path made the batch -
+-- REPORT_SOURCE_BRANCH (a branch's own monthly report, Total Asset history)
+-- or REPORT_SOURCE_HO (the HO consolidated "Monthly Report", split per
+-- unit). "Current state" picks the latest batch per unit *per source*, so
+-- one never hides the other.
 
 CREATE INDEX IF NOT EXISTS idx_import_batches_period ON import_batches (period);
 
@@ -754,6 +767,10 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
     if "status_raw" not in existing:
         conn.execute("ALTER TABLE asset_items ADD COLUMN status_raw TEXT")
 
+    existing_branch_cols = {row["name"] for row in conn.execute("PRAGMA table_info(branches)").fetchall()}
+    if "unit_group" not in existing_branch_cols:
+        conn.execute("ALTER TABLE branches ADD COLUMN unit_group TEXT")
+
     existing_user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
     if "user_no_norm" not in existing_user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN user_no_norm TEXT")
@@ -769,6 +786,14 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE import_batches ADD COLUMN branch_hint TEXT")
     if "unmapped_columns_json" not in existing_batch_cols:
         conn.execute("ALTER TABLE import_batches ADD COLUMN unmapped_columns_json TEXT")
+    if "report_source" not in existing_batch_cols:
+        conn.execute("ALTER TABLE import_batches ADD COLUMN report_source TEXT NOT NULL DEFAULT 'BRANCH'")
+        # HO consolidated reports imported before the column existed (bulk
+        # import 2026-10-01) are recognizable by the hint they were given.
+        conn.execute(
+            "UPDATE import_batches SET report_source = ? WHERE branch_hint = ?",
+            (REPORT_SOURCE_HO, HO_REPORT_HINT),
+        )
 
     existing_account_cols = {row["name"] for row in conn.execute("PRAGMA table_info(accounts)").fetchall()}
     if "security_question_key" not in existing_account_cols:

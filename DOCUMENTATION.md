@@ -290,6 +290,72 @@ computers on the same office network.
     - First real list (8064 Tran Duy Hung, Oct 2026): 520 items, 53 marked
       for disposal - 25 OK, 8 still in use, 3 duplicate serials, 17 without
       serial.
+25. **Branches vs Head Office on the Dashboards** (2026-10-14): the Asset
+    Dashboard and the CCTV Dashboard each have an **All / Branches / Head
+    Office** switch at the top (`?scope=`, `""` / `branch` / `ho`). It
+    narrows the whole page - tiles, both by-month tables, Year Comparison,
+    every trend chart, Recent Hand-Over Forms, the CCTV Compare by Branch
+    tree - and its **Export to Excel** (file name gets `_branch` / `_ho`).
+    The selected report year and sort carry over; the CCTV tile on the Asset
+    Dashboard opens the CCTV Dashboard on the same scope.
+    - **Which unit is which** (`queries.unit_group_sql`, one SQL expression
+      used by every filter and by Settings, so they can't disagree):
+      `branches.unit_group` if set by hand (`BRANCH` / `HO`), otherwise by
+      name - "BRANCH" or "TRANSACTION OFFICE" as a whole word in `eng_name`
+      = Branch, anything else (departments, divisions, teams, every
+      "... CENTER", HEAD OFFICE, custom C-units) = Head Office. On the real
+      data 2026-10-14: 55 Branch / 94 Head Office units; 2026-10-15 HNCMC
+      (7905, HA NOI CORPORATE MARKETING CENTER) set to Branch by hand -
+      the user counts 56 branches (it sends its own branch-style report).
+    - **Settings → Branch Aliases → Unit Groups** (`#unit-groups`) lists
+      every unit with an Auto (→ what the name gives) / Branch / Head
+      Office choice and a filter box; Save writes only changed units, each
+      logged to the Activity Log (`Changed unit group`, AUTO ↔ BRANCH/HO).
+      Needs `manage_mappings`. Re-importing the branch code list keeps
+      the choice (its upsert doesn't touch `unit_group`).
+    - **Rows whose branch didn't resolve** belong to neither group - they
+      only count under All. So All = Branches + Head Office + unresolved.
+    - The scope value is matched against a fixed list
+      (`queries.normalize_scope`) and the SQL is built only from those fixed
+      values; anything else means All.
+26. **Branch reports and the HO report are imported separately**
+    (2026-10-15): Import Data section 3 takes a unit's own monthly report,
+    section 4 the HO consolidated `Monthly Report ddmmyyyy.xlsx`. Each
+    refuses the other's file (`importer.find_ho_report_sheet`: the HO file's
+    "Equipment list detail" sheet has a `Dept` column besides `BRANCH /
+    DEPT`). Every batch records which path made it in
+    `import_batches.report_source` (`BRANCH` / `HO`), and "current state",
+    trends, month tables, Branch Detail and diffs keep the two apart - see
+    §4 "Report source". Before this, the HO report had only been loaded
+    once by a one-off script (2026-10-01), and its few September rows for
+    HO CHI MINH BRANCH (8009, two staff whose devices sit at HO) replaced
+    that branch's own August report: the Dashboard showed 6 assets instead
+    of 310.
+    - **HO import** (`importer.import_ho_report`, route
+      `import_data.upload_ho_reports`): one batch per unit. A row's unit,
+      the rule the user set for the first HO import (2026-10-01): its USER
+      ID's unit in the User IDs list, else the `Dept` column, else `BRANCH
+      / DEPT`, each mapped through the branch list (aliases, exact names -
+      no guessing); a candidate that is a unit sending its own monthly
+      report is skipped, and a row with nothing but such units is left out
+      (shown per unit on the result). Rows nothing maps stay unresolved and
+      queue in Settings → Branch Aliases. Period: the form's Reporting
+      month, or blank = the date in the file name.
+    - Exception (user's call, 2026-10-15): SCMC sites are counted by
+      location - a `BRANCH / DEPT` that maps to a unit named `SCMC ...`
+      (C001 SCMC PICO, C002 GOLDEN PALACE, C003 DALI, ...) comes before the
+      user's unit; otherwise most of those devices would land on 8160 SMART
+      CREDIT MARKETING CENTER, the unit of their users.
+    - Since 2026-10-07 the branch list match is exact, while the first HO
+      import used substring guessing; many `Dept` texts ("CREDIT PLANNING",
+      "ICT DEV", "DS", ...) no longer map and fall through to `BRANCH /
+      DEPT` (mostly HEAD OFFICE 8061) unless aliased. Only rows whose user
+      isn't in the User IDs list are affected. 2026-10-15: 53 aliases added
+      for these texts - names that clearly match a unit, the rest by the
+      unit most of the users writing that text belong to. "DS" (Shinhan DS,
+      which substring guessing had put on 7906 FUND SERVICE TEAM), rooms,
+      warehouses and ties (ICTD, RETAIL LENDING, CMC, ...) are left
+      unaliased on purpose and fall to HEAD OFFICE.
 
 ---
 
@@ -406,6 +472,10 @@ build.spec                            PyInstaller spec
   silently guessing; the "import all from folder" shortcut still
   auto-detects each file's type, since that path is for a whole folder of
   mixed files at once.
+- `Monthly Report ddmmyyyy.xlsx` (from HO, not kept in this folder) — the
+  Head Office consolidated equipment list, all HO units in one
+  "Equipment list detail" sheet. Its own upload (Import Data → section 4),
+  see §1 #26.
 - `Total Asset - *.xlsx` — an aggregate of every branch across several
   months in one sheet (has `Month`/`Years` columns). Used once, as a
   historical baseline, via Import Data → section 3.
@@ -421,13 +491,19 @@ None of these original files are ever modified by the app.
 
 Tables (see `app/db.py` for the full schema):
 
-- `branches`, `users` — loaded from the ID master files.
+- `branches`, `users` — loaded from the ID master files. `branches.unit_group`
+  (`BRANCH` / `HO` / NULL = decide by name) is the Dashboards' Branches /
+  Head Office split - see §1 #25.
 - `import_batches` — one row per import. Carries `period` ("YYYY-MM"): the
   month the data is *about*, distinct from `imported_at` (when it was
   actually imported). Set explicitly at upload time (defaults to the current
   month); this is what the trend charts group by. `kind` says what the
   batch holds - e.g. `asset_report` (rows in `asset_items`) or
-  `cctv_report` (rows in `cctv_items`).
+  `cctv_report` (rows in `cctv_items`). `report_source` says which import
+  path made it: `BRANCH` (a unit's own monthly report, Total Asset history
+  - the default) or `HO` (the HO consolidated report, §1 #26). Added
+  2026-10-15; the migration marks the earlier HO batches (`branch_hint` =
+  "HO Monthly Report") as `HO`.
 - `asset_items` — every row from every import, ever (nothing is deleted).
   `device_name` is the normalized/canonical name; `device_name_raw` keeps
   what the source file actually said.
@@ -509,6 +585,19 @@ ordering by `batch_id` alone would make an actually-newer period look stale
 just because it happened to be imported first. `get_previous_batch_for_branch`
 (used for diffing) follows the same period-first rule when picking a
 branch's "previous" snapshot to compare against.
+
+**Report source** (2026-10-15, §1 #26): all of the above is per unit *and*
+per `import_batches.report_source`. A unit can have rows from its own
+monthly report (`BRANCH`) and from the HO consolidated report (`HO`); each
+source keeps its own latest batch and both count as current, so neither
+replaces the other. The same split applies wherever one batch per unit and
+period is picked: the trend charts, the by-month tables (each source is
+diffed against its own previous report and the cells added back together -
+`analytics._walk_by_source`, so a month with only the HO rows doesn't show
+the unit's own devices as removed; a row's sort count is each source's
+latest count added up), Branch Detail's tables, the CCTV per-period query,
+`get_previous_batch_for_branch` and the period-conflict check before an
+import.
 
 **Branch name resolution** (`importer.resolve_branch`): asset report files
 label their branch with a free-text string that often doesn't match the
@@ -1466,6 +1555,50 @@ some paragraphs) that don't set `rFonts` explicitly.
 To regenerate the template (e.g. if the bank issues a new form design), edit
 `scripts/build_handover_template.py` to match the new file's structure and
 run `python scripts/build_handover_template.py`.
+
+### QR code and form number
+
+Every generated form carries a **QR code** and a **form number**
+(`HO-000123`, `handover.form_number()` - the `handover_records.id`,
+zero-padded) in the page header, top-left; the Shinhan logo already owns
+top-right. It exists so a signed, scanned copy can later be matched back to
+its `handover_records` row automatically, e.g. by a tool that sorts the
+scanned PDFs into folders, instead of having someone read every form.
+
+- **Payload** (`handover.qr_payload()`), ASCII, `|`-separated, version first
+  so the format can change later:
+  `AMHO1|<record id>|<ho_date YYYY-MM-DD>|<user_no>|<ho_type>`, e.g.
+  `AMHO1|123|2026-10-14|1001|ASSIGNMENT`. The id alone identifies the form;
+  the date/user/type let a reader sort a scan (and sanity-check the id)
+  without access to this database. `user_no`/`ho_type` keep only
+  `[0-9A-Za-z._-]`.
+- **On every page**: it's in the header, which all pages share, so each page
+  of a 2-page form - or of a batch scan of many forms - identifies itself.
+- **Layout untouched**: an 18 mm floating image (`wp:anchor`, 6 mm from the
+  page's top edge, aligned to the left margin, square wrap) - it ends above
+  where the logo opposite already ends, so no body text moves. Verified in
+  Word: forms with 6-10 assets paginate identically with and without it.
+  The QR was read back from simulated scans (150 and 300 dpi, blurred,
+  skewed 2°) on every page.
+- **Added in code, not in the template**: `_add_header_qr()` runs on the
+  in-memory copy docxtpl renders from, so
+  `templates_docx/handover_template.docx` and
+  `scripts/build_handover_template.py` are unchanged. It must run *before*
+  `tpl.render()`: docxtpl re-reads each header's XML into a fresh part while
+  rendering, and python-docx keeps handing back the old (cached) part, so
+  header edits made after rendering are silently dropped from the saved file.
+- **The id must exist before rendering**, so `handover.create_handover()`
+  inserts the `handover_records` row first (with an empty `docx_path`),
+  renders, fills in `docx_path`, and only then commits - if rendering fails
+  the row is rolled back, so History never lists a form without a file.
+- QR image generated with **segno** (pure Python, writes the PNG itself - no
+  Pillow), error correction level M.
+- The saved file name now starts with the form number:
+  `HANDOVER_HO-000123_<user>_<timestamp>.docx`.
+- The form number is shown on the "Hand-Over Form Generated" page and as the
+  first column of Hand-Over History and its Excel export. Forms generated
+  before this change have an id too, so they show a number, but their
+  printed copies carry no QR.
 
 ---
 

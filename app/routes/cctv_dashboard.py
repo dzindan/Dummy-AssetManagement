@@ -19,11 +19,14 @@ from ..exports import (
     write_trend_matrix_sheet,
 )
 from ..queries import (
+    DASHBOARD_SCOPES,
+    SCOPE_TITLES,
     get_cctv_items_by_branch_period,
     get_current_branch_breakdown,
     get_current_cctv_count,
     get_current_cctv_items_for_tree,
     get_latest_batch,
+    normalize_scope,
 )
 
 bp = Blueprint("cctv_dashboard", __name__, url_prefix="/cctv/dashboard")
@@ -70,13 +73,15 @@ def _build_branch_cctv_tree(rows):
     return tree
 
 
-def _build_branch_tree_with_months(conn, month_periods):
+def _build_branch_tree_with_months(conn, month_periods, scope=""):
     """Shared by index() and export_compare() - the "Compare by Branch"
     tree plus its per-branch month_cells, for whatever `month_periods` the
     caller already resolved (so both stay on the exact same selected year
     without a second, possibly-inconsistent, query for it)."""
-    branch_tree = _build_branch_cctv_tree(get_current_cctv_items_for_tree(conn))
-    branch_month_metrics = build_month_metrics_by_branch(get_cctv_items_by_branch_period(conn), month_periods)
+    branch_tree = _build_branch_cctv_tree(get_current_cctv_items_for_tree(conn, scope=scope))
+    branch_month_metrics = build_month_metrics_by_branch(
+        get_cctv_items_by_branch_period(conn, scope=scope), month_periods
+    )
     for b in branch_tree:
         b["month_cells"] = branch_month_metrics.get(b["bkey"], [None] * len(month_periods))
     return branch_tree
@@ -84,20 +89,21 @@ def _build_branch_tree_with_months(conn, month_periods):
 
 @bp.route("/")
 def index():
+    scope = normalize_scope(request.args.get("scope"))  # see dashboard.index
     conn = get_connection()
     try:
-        branch_count = len(get_current_branch_breakdown(conn, table=TABLE))
-        cctv_count = get_current_cctv_count(conn)
+        branch_count = len(get_current_branch_breakdown(conn, table=TABLE, scope=scope))
+        cctv_count = get_current_cctv_count(conn, scope=scope)
         latest_cctv_batch = get_latest_batch(conn, kind="cctv_report")
 
-        all_periods, all_items, all_matrix = get_all_branches_item_trend(conn, table=TABLE)
+        all_periods, all_items, all_matrix = get_all_branches_item_trend(conn, table=TABLE, scope=scope)
         # Item Count Trend counts DVR/recorder *units* per device-name
         # series above - that's a different question from "how many cameras
         # are attached account-wide", which is a best-effort sum of each
         # unit's own free-text camera_count field, not a row count. Folded
         # into the same chart as one more series rather than a separate
         # chart/tile, per how this was asked for.
-        camera_totals_by_period = summarize_by_period(get_cctv_items_by_branch_period(conn))
+        camera_totals_by_period = summarize_by_period(get_cctv_items_by_branch_period(conn, scope=scope))
         all_matrix["Cameras"] = {
             period: (data["camera_total"] or 0) for period, data in camera_totals_by_period.items()
         }
@@ -109,11 +115,11 @@ def index():
         # the flat "CCTV by Branch (by month)" table, removed as redundant
         # with Compare by Branch's per-branch month breakdown.
         month_periods, _month_table, _totals, _added, _removed = get_branch_month_change_table(
-            conn, selected_year, table=TABLE
+            conn, selected_year, table=TABLE, scope=scope
         )
 
-        year_comparison = get_year_comparison_table(conn, table=TABLE, years_kinds=YEARS_KINDS)
-        branch_tree = _build_branch_tree_with_months(conn, month_periods)
+        year_comparison = get_year_comparison_table(conn, table=TABLE, years_kinds=YEARS_KINDS, scope=scope)
+        branch_tree = _build_branch_tree_with_months(conn, month_periods, scope)
     finally:
         conn.close()
 
@@ -123,6 +129,10 @@ def index():
     return render_template(
         "cctv_dashboard.html",
         active_page="cctv_dashboard",
+        scope=scope,
+        scopes=DASHBOARD_SCOPES,
+        scope_label=dict(DASHBOARD_SCOPES)[scope],
+        scope_title=SCOPE_TITLES[scope],
         branch_count=branch_count,
         cctv_count=cctv_count,
         latest_cctv_batch=latest_cctv_batch,
@@ -145,17 +155,18 @@ def export_compare():
     on screen that neither the flat by-month export above (item count
     only, no DVR/Camera/HDD split) nor Manage CCTV's own export (row-level
     detail, no per-branch totals) does."""
+    scope = normalize_scope(request.args.get("scope"))
     conn = get_connection()
     try:
         available_years = get_available_report_years(conn, kinds=YEARS_KINDS)
         selected_year = resolve_report_year(request.args.get("year"), available_years)
         month_periods, _month_table, _totals, _added, _removed = get_branch_month_change_table(
-            conn, selected_year, table=TABLE
+            conn, selected_year, table=TABLE, scope=scope
         )
-        branch_tree = _build_branch_tree_with_months(conn, month_periods)
+        branch_tree = _build_branch_tree_with_months(conn, month_periods, scope)
 
-        all_periods, _all_items, all_matrix = get_all_branches_item_trend(conn, table=TABLE)
-        camera_totals_by_period = summarize_by_period(get_cctv_items_by_branch_period(conn))
+        all_periods, _all_items, all_matrix = get_all_branches_item_trend(conn, table=TABLE, scope=scope)
+        camera_totals_by_period = summarize_by_period(get_cctv_items_by_branch_period(conn, scope=scope))
         all_matrix["Cameras"] = {
             period: (data["camera_total"] or 0) for period, data in camera_totals_by_period.items()
         }
@@ -202,9 +213,10 @@ def export_compare():
     if len(all_periods) >= 2 and items:
         trend_ws = write_trend_matrix_sheet(wb, "Item Count Trend", all_periods, items, all_matrix)
         add_trend_line_chart(
-            trend_ws, "CCTV Item Count Trend - All Branches", len(all_periods), len(items),
+            trend_ws, f"CCTV Item Count Trend - {SCOPE_TITLES[scope]}", len(all_periods), len(items),
             "A" + str(len(all_periods) + 3),
         )
         add_solo_item_charts(trend_ws, items, len(all_periods), len(all_periods) + 20)
 
-    return send_workbook(wb, f"cctv_compare_by_branch_{selected_year}.xlsx")
+    suffix = f"_{scope}" if scope else ""
+    return send_workbook(wb, f"cctv_compare_by_branch_{selected_year}{suffix}.xlsx")

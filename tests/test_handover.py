@@ -110,5 +110,69 @@ class HandoverDateStampingTests(unittest.TestCase):
         self.assertEqual(row["handover_date"], "15/03/2026")
 
 
+class HandoverQrTests(HandoverDateStampingTests):
+    """Every generated form carries a QR code + form number in its page
+    header (app/handover.py's _add_header_qr) identifying its
+    handover_records row, so a signed scan can be matched back to it."""
+
+    # The date-stamping tests are inherited for setUp only.
+    test_generate_stamps_handover_date_onto_asset = None
+    test_generating_again_with_same_date_does_not_log_again = None
+
+    def _record(self):
+        conn = get_connection()
+        try:
+            return conn.execute("SELECT * FROM handover_records ORDER BY id DESC LIMIT 1").fetchone()
+        finally:
+            conn.close()
+
+    def test_docx_header_has_qr_and_form_number(self):
+        import io
+
+        import segno
+        from docx import Document
+
+        from app.handover import form_number, qr_payload
+        import datetime as dt
+
+        self._generate("2026-03-15")
+        rec = self._record()
+        self.assertTrue(os.path.basename(rec["docx_path"]).startswith(f"HANDOVER_{form_number(rec['id'])}_"))
+
+        doc = Document(rec["docx_path"])
+        header = doc.sections[0].header
+        self.assertIn(form_number(rec["id"]), header.paragraphs[0].text)
+
+        ns = {"wp": "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"}
+        anchors = [a for a in header._element.findall(".//wp:anchor", ns)
+                   if a.find("wp:docPr", ns).get("name") == "HandoverQR"]
+        self.assertEqual(len(anchors), 1)
+        blip = anchors[0].find(".//{http://schemas.openxmlformats.org/drawingml/2006/main}blip")
+        rid = blip.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed")
+        image_bytes = header.part.related_parts[rid].blob
+
+        payload = qr_payload(rec["id"], dt.date(2026, 3, 15), "1001", "ASSIGNMENT")
+        self.assertEqual(payload, f"AMHO1|{rec['id']}|2026-03-15|1001|ASSIGNMENT")
+        expected = io.BytesIO()
+        segno.make_qr(payload, error="m").save(expected, kind="png", scale=10, border=2)
+        self.assertEqual(image_bytes, expected.getvalue())
+
+    def test_history_and_success_show_form_number(self):
+        resp = self._generate("2026-03-15")
+        rec = self._record()
+        number = f"HO-{rec['id']:06d}"
+        self.assertIn(number, resp.get_data(as_text=True))
+        self.assertIn(number, self.client.get("/history/").get_data(as_text=True))
+
+    def test_render_failure_leaves_no_history_row(self):
+        from unittest import mock
+
+        with mock.patch("app.handover._add_header_qr", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                self.app.config["PROPAGATE_EXCEPTIONS"] = True
+                self._generate("2026-03-15")
+        self.assertIsNone(self._record())
+
+
 if __name__ == "__main__":
     unittest.main()
