@@ -18,7 +18,7 @@ from app.db import get_connection  # noqa: E402
 
 def _fresh_app():
     os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_handovertest_")
-    return create_app()
+    return create_app(csrf=False)
 
 
 def _role_id(conn, name):

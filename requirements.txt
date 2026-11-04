@@ -1,4 +1,10 @@
 Flask==3.0.3
+# the central server (`serve`): a production WSGI server, TLS built in
+cheroot==11.1.2
+# AD sign-in (app/winauth.py): SSPI Negotiate + LogonUser on the domain-joined server
+pywin32==311
+# HTTPS: the self-signed certificate `make-cert` makes (app/tls.py)
+cryptography==46.0.3
 openpyxl==3.1.5
 xlrd==2.0.2
 docxtpl==0.18.0

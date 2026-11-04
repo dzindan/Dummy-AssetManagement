@@ -47,7 +47,7 @@ def _workbook(path: str) -> None:
 class CctvGearSplitTests(unittest.TestCase):
     def setUp(self):
         os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_cctvsplit_")
-        self.app = create_app()
+        self.app = create_app(csrf=False)
         self.client = self.app.test_client()
         tmp = tempfile.mkdtemp(prefix="am_cctvsplit_files_")
         conn = get_connection()

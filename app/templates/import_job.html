@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{# Shared by imports (import_data.job) and CUCM scans (cucm_scan.job) -
+   the scan passes its own words and URLs. #}
+{% set noun = noun or "import" %}
+{% set status_url = status_url or url_for('import_data.job_status', job_id=job.id) %}
+{% set job_url = job_url or url_for('import_data.job', job_id=job.id) %}
+{% set back_name = back_name or "Import Data" %}
+{% block title %}{{ noun | capitalize }} - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>{{ (running_title or "Importing…") if job.status == "running" else (waiting_title or "Waiting to import…") }}</h1>
+<div class="panel" data-job-status-url="{{ status_url }}" data-job-url="{{ job_url }}">
+  <p><b>{{ job.label }}</b></p>
+  {% if job.status == "running" %}
+  <p class="muted">Started at {{ job.started.strftime("%H:%M:%S") }}. This page shows the result as soon as it's done -
+    you can leave it open, or come back to it later from {{ back_name }}.</p>
+  {% else %}
+  <p class="muted">{{ why_one_at_a_time or "Imports run one at a time, so everyone's data stays consistent." }}
+    {% if running %}Now {{ "scanning" if noun == "scan" else "importing" }}: {{ running.label }} ({{ running.owner }}, since {{ running.started.strftime("%H:%M") }}).{% endif %}
+    {% if ahead > 1 %}{{ ahead - 1 }} more {{ noun }}(s) before yours.{% endif %}
+    Yours starts automatically - you can leave this page open.</p>
+  {% endif %}
+  <noscript><p><a href="{{ job_url }}">Refresh</a></p></noscript>
+</div>
+<script>
+(function () {
+  var box = document.querySelector("[data-job-status-url]");
+  function check() {
+    fetch(box.dataset.jobStatusUrl, { headers: { "X-Requested-With": "fetch" } })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.status === "done" || d.status === "error" || d.error) { window.location = box.dataset.jobUrl; }
+        else if ((d.status === "running") !== {{ "true" if job.status == "running" else "false" }}) { window.location = box.dataset.jobUrl; }
+        else { setTimeout(check, 1500); }
+      })
+      .catch(function () { setTimeout(check, 4000); });
+  }
+  setTimeout(check, 1000);
+})();
+</script>
+{% endblock %}

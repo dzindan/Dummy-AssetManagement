@@ -793,3 +793,46 @@ document.addEventListener("DOMContentLoaded", function () {
     nodes.forEach(function (n) { tree.appendChild(n); });
   });
 })();
+
+// "Choose a folder" beside a multi-file input marked data-folder-pick: the
+// browser uploads the Excel files directly in the picked folder (not its
+// subfolders - e.g. last months' folders inside "Asset reports"), the way
+// "Import all from folder" reads a folder on the PC running the app.
+(function () {
+  var inputs = document.querySelectorAll("input[type=file][data-folder-pick]");
+  if (!inputs.length || !("webkitdirectory" in document.createElement("input")) ||
+      typeof DataTransfer === "undefined") { return; }
+  inputs.forEach(function (input) {
+    var exts = (input.getAttribute("accept") || ".xlsx").split(",").map(function (e) { return e.trim().toLowerCase(); });
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "secondary";
+    btn.textContent = "Choose a folder…";
+    btn.style.marginLeft = "0.4rem";
+    var note = document.createElement("span");
+    note.className = "muted";
+    note.style.marginLeft = "0.4rem";
+    input.insertAdjacentElement("afterend", btn);
+    btn.insertAdjacentElement("afterend", note);
+    btn.addEventListener("click", function () {
+      input.webkitdirectory = true;
+      input.click();
+    });
+    input.addEventListener("change", function () {
+      if (!input.webkitdirectory) { note.textContent = ""; return; }
+      input.webkitdirectory = false; // the next plain click picks files again
+      var folder = "";
+      var dt = new DataTransfer();
+      Array.prototype.forEach.call(input.files, function (f) {
+        var parts = (f.webkitRelativePath || f.name).split("/");
+        folder = folder || (parts.length > 1 ? parts[0] : "");
+        var top = parts.length <= 2;
+        var name = f.name.toLowerCase();
+        var excel = exts.some(function (e) { return name.endsWith(e); }) && name.indexOf("~$") !== 0;
+        if (top && excel) { dt.items.add(f); }
+      });
+      input.files = dt.files;
+      note.textContent = dt.files.length + " Excel file(s) from folder " + folder;
+    });
+  });
+})();

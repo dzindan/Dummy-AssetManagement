@@ -20,7 +20,7 @@ TABS = ["account", "general", "branches", "devices", "statuses", "models", "cucm
 class SettingsTabsTests(unittest.TestCase):
     def setUp(self):
         os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_settingstabs_")
-        self.app = create_app()
+        self.app = create_app(csrf=False)
         self.client = self.app.test_client()
         conn = get_connection()
         try:

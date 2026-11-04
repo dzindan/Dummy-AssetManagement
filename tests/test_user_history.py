@@ -19,7 +19,7 @@ from app.routes.user_history import _build_custody_segments, _find_neighbor  # n
 
 def _fresh_app():
     os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_userhistorytest_")
-    return create_app()
+    return create_app(csrf=False)
 
 
 def _role_id(conn, name):

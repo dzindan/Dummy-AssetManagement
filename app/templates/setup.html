@@ -6,6 +6,8 @@
   <title>Create Admin Account - Asset Management Tool</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <link rel="icon" href="{{ url_for('static', filename='img/logo.png') }}">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <script src="{{ url_for('static', filename='csrf.js') }}"></script>
   <style>
     body { align-items: center; justify-content: center; min-height: 100vh; }
     .auth-card { width: 100%; max-width: 400px; margin: 0 1rem; }

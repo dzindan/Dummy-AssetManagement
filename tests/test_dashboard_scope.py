@@ -29,7 +29,7 @@ UNITS = {
 
 def _fresh_app():
     os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_scopetest_")
-    return create_app()
+    return create_app(csrf=False)
 
 
 class DashboardScopeTests(unittest.TestCase):

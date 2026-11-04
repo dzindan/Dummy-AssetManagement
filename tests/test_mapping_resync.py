@@ -37,7 +37,7 @@ def _workbook(path: str) -> None:
 class MappingResyncTests(unittest.TestCase):
     def setUp(self):
         os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_mapsync_")
-        self.app = create_app()
+        self.app = create_app(csrf=False)
         self.client = self.app.test_client()
         tmp = tempfile.mkdtemp(prefix="am_mapsync_files_")
         conn = get_connection()

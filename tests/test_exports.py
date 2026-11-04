@@ -2,7 +2,7 @@
 """Excel export + import-template verification.
 
 Follows the same isolated-DB pattern as tests/test_auth.py: override
-%LOCALAPPDATA% to a fresh temp directory before create_app(), then drive the
+%LOCALAPPDATA% to a fresh temp directory before create_app(csrf=False), then drive the
 app through app.test_client(). Every export/template route sits behind the
 login gate (see app/auth.py), so each test logs in an Admin account first.
 """
@@ -31,7 +31,7 @@ from app.importer import (  # noqa: E402
 
 def _fresh_app():
     os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_exporttest_")
-    return create_app()
+    return create_app(csrf=False)
 
 
 def _role_id(conn, name):
@@ -151,7 +151,7 @@ class ExportRouteSmokeTests(unittest.TestCase):
         resp = self.client.get("/network-check/log/export")
         self._assert_valid_xlsx(
             resp,
-            expected_header=("Applied At", "Branch", "IP", "Asset ID", "Field", "Old Value", "New Value"),
+            expected_header=("Applied At", "Branch", "IP", "Asset ID", "Field", "Old Value", "New Value", "By"),
             expected_rows=1,
         )
 

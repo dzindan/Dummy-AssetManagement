@@ -47,7 +47,7 @@ def _workbook(path: str) -> None:
 class HandFixTests(unittest.TestCase):
     def setUp(self):
         os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_handfix_")
-        self.app = create_app()
+        self.app = create_app(csrf=False)
         self.client = self.app.test_client()
         self.tmp = tempfile.mkdtemp(prefix="am_handfix_files_")
         conn = get_connection()

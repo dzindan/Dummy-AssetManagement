@@ -75,6 +75,7 @@
       </div>
     </div>
 
+    {% if not server_mode %}
     <h2 style="margin-top:1.5rem;">Default Import Folders</h2>
     <p class="muted">Optional. When set, the Import Data and Update &amp; Compare pages show an "Import all from folder" shortcut instead of manual file selection.</p>
     <div class="field-row">
@@ -87,6 +88,7 @@
         <input type="text" id="id_files_folder" name="id_files_folder" value="{{ id_files_folder }}" placeholder="C:\...\IDFromAither">
       </div>
     </div>
+    {% endif %}
     <button type="submit">Save Settings</button>
   </form>
 </div>
@@ -110,10 +112,11 @@
       </div>
       <div>
         <label for="cucm_axlpassword">AXL password</label>
-        <input type="password" id="cucm_axlpassword" name="axlpassword" value="{{ cucm_config.axlpassword }}">
+        <input type="password" id="cucm_axlpassword" name="axlpassword" value="" autocomplete="new-password"
+               placeholder="{{ 'Saved - leave blank to keep it' if cucm_password_set else '' }}">
       </div>
       <div>
-        <label for="cucm_riswsdl">Local RISService70 WSDL path (optional)</label>
+        <label for="cucm_riswsdl">Local RISService70 WSDL path (optional){% if server_mode %} - a file on the server{% endif %}</label>
         <input type="text" id="cucm_riswsdl" name="riswsdl" value="{{ cucm_config.riswsdl }}"
                placeholder="Leave blank to fetch it from the CUCM server above">
       </div>
@@ -126,6 +129,16 @@
     <p class="muted" style="margin-top:0.3rem;">
       The number-mask ranges are used by CUCM Phone Scan's "Auto-split scan" option to cover more phones than
       CUCM's ~1000-per-request limit - each mask is queried separately and the results are merged.
+    </p>
+    <p class="muted" style="margin-top:0.3rem;">
+      {% if cucm_cert.sha256 %}
+        CUCM's certificate, trusted on {{ cucm_cert.trusted_at or "the first scan" }} - a scan refuses any other one:
+        <code style="word-break:break-all;">{{ cucm_cert.sha256 }}</code><br>
+        <label style="display:inline;font-weight:normal;"><input type="checkbox" name="forget_cert" value="1">
+          Trust CUCM's new certificate (it was renewed) - the next scan trusts the one CUCM shows then</label>
+      {% else %}
+        CUCM's certificate is trusted on the next scan, then checked on every scan after.
+      {% endif %}
     </p>
     <button type="submit">Save CUCM Settings</button>
   </form>
@@ -529,6 +542,50 @@
   </div>
 </div>
 
+{% if server_mode %}
+<div class="panel" data-settings-tab="system">
+  <h2>Data Storage Location</h2>
+  <p class="muted">This is the central server: the one database for everyone, with every hand-over form,
+    export and upload, is in this folder <b>on the server</b>:</p>
+  <p><code>{{ data_dir }}</code></p>
+  <p class="muted">It is set in <code>%ProgramData%\AssetManagementTool\server.json</code> on the server
+    (<code>AssetManagementTool.exe init-server --data-dir ...</code>), not here.</p>
+</div>
+{% if backup_info %}
+<div class="panel" data-settings-tab="system" id="backups">
+  <h2>Backups</h2>
+  <p class="muted">The server backs up the database, the settings and the hand-over forms every night at
+    <b>{{ backup_info.time }}</b> into <code>{{ backup_info.folder }}</code>, keeping the newest {{ backup_info.keep }}.
+    Restoring is done on the server with the app stopped:
+    <code>AssetManagementTool.exe restore --from &lt;backup zip&gt;</code>.</p>
+  {% if backup_info.same_disk %}
+  <p class="flash flash-error">The backups are on the same disk as the database, so a dead disk takes both - set
+    <code>backup_dir</code> in server.json to another disk or a share
+    (<code>init-server --data-dir ... --backup-dir \\server\share\AMBackup</code>).</p>
+  {% endif %}
+  {% if backup_info.last_error and (not backup_info.last_ok_at or backup_info.last_error_at > backup_info.last_ok_at) %}
+  <div class="flash flash-error">The last backup ({{ backup_info.last_error_at }}) failed: {{ backup_info.last_error }}</div>
+  {% endif %}
+  <p>{% if backup_info.last_ok_at %}Last backup: <b>{{ backup_info.last_ok_at }}</b> ({{ backup_info.last_ok_kind }}).{% else %}No backup yet.{% endif %}</p>
+  <form method="post" action="{{ url_for('settings.backup_now') }}">
+    <button type="submit" class="secondary">Back up now</button>
+  </form>
+  {% if backup_info.list %}
+  <div class="table-scroll" style="margin-top:0.8rem;">
+  <table>
+    <thead><tr><th>Backup</th><th>Kind</th><th>Made</th><th>Size</th></tr></thead>
+    <tbody>
+      {% for b in backup_info.list %}
+      <tr><td><code>{{ b.name }}</code></td><td>{{ b.kind }}</td><td>{{ b.created.strftime("%Y-%m-%d %H:%M") }}</td>
+        <td>{{ "%.1f" | format(b.size / 1048576) }} MB</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+{% else %}
 <div class="panel" data-settings-tab="system">
   <h2>Data Storage Location</h2>
   <p class="muted">The database and every generated hand-over form are stored here, independent of where this program itself is installed:</p>
@@ -559,6 +616,7 @@
     </div>
   </form>
 </div>
+{% endif %}
 
 <div class="panel" data-settings-tab="system">
   <h2>Reset Imported Data</h2>
@@ -580,7 +638,11 @@
 
 <div class="panel" data-settings-tab="system">
   <h2>Share With Other Computers</h2>
-  {% if lan_url %}
+  {% if server_mode %}
+  <p class="muted">This is the central server. Everyone uses the app - with the same data - by opening this
+    address in their browser (nothing to install):</p>
+  <p><code>{{ lan_url }}</code></p>
+  {% elif lan_url %}
   <p class="muted">This computer is acting as the server. Everyone else on the same office/home network can use this tool - with the same shared data - just by opening this address in their own browser (no install needed):</p>
   <p><code>{{ lan_url }}</code></p>
   <p class="muted">If it's not reachable from another computer, check that Windows Firewall allowed this app on "Private networks" (it usually prompts the first time), and that both computers are on the same network.</p>

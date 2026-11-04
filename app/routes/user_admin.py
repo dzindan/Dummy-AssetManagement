@@ -2,7 +2,17 @@ import sqlite3
 
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
-from ..auth import create_account, current_permissions, current_username, hash_password, would_orphan_manage_users
+from ..auth import (
+    AD_SETTING_KEYS,
+    ad_settings,
+    create_account,
+    current_account,
+    current_permissions,
+    current_username,
+    hash_password,
+    refresh_session_password,
+    would_orphan_manage_users,
+)
 from ..db import PERMISSIONS, get_connection, log_activity
 
 bp = Blueprint("user_admin", __name__, url_prefix="/settings/users")
@@ -25,7 +35,7 @@ def index():
     conn = get_connection()
     try:
         accounts = conn.execute(
-            "SELECT a.id, a.username, a.is_active, a.last_login_at, a.created_at, "
+            "SELECT a.id, a.username, a.is_active, a.last_login_at, a.created_at, a.auth_source, "
             "r.id AS role_id, r.name AS role_name "
             "FROM accounts a JOIN roles r ON r.id = a.role_id "
             "ORDER BY a.username"
@@ -40,9 +50,13 @@ def index():
     finally:
         conn.close()
 
+    from .. import winauth
+
     return render_template(
         "user_admin.html",
         active_page="settings",
+        ad=ad_settings(),
+        ad_available=winauth.available(),
         accounts=accounts,
         roles=roles,
         role_permissions=role_permissions,
@@ -125,6 +139,45 @@ def toggle_active(account_id):
     return redirect(url_for("user_admin.index"))
 
 
+@bp.route("/ad", methods=["POST"])
+def save_ad():
+    """AD sign-in: on / off, the domain, the AD group that may use the app,
+    the role a new AD account starts with."""
+    from .. import winauth
+    from ..db import set_setting
+
+    enabled = request.form.get("ad_enabled") == "1"
+    group = request.form.get("ad_group", "").strip()
+    domain = request.form.get("ad_domain", "").strip().upper()
+    role = request.form.get("ad_default_role", "").strip()
+    if enabled and not group:
+        flash("Enter the AD group whose members may use the app (e.g. CORP\\AM Users).", "error")
+        return redirect(url_for("user_admin.index"))
+    if enabled:
+        if not winauth.available():
+            flash("AD sign-in needs Windows (pywin32) - not available here.", "error")
+            return redirect(url_for("user_admin.index"))
+        try:
+            winauth.group_sid(group)
+        except winauth.AuthError as e:
+            flash(str(e), "error")
+            return redirect(url_for("user_admin.index"))
+    conn = get_connection()
+    try:
+        values = {"ad_enabled": "1" if enabled else "0", "ad_domain": domain, "ad_group": group,
+                  "ad_default_role": role}
+        for key in AD_SETTING_KEYS:
+            set_setting(key, values[key])
+        log_activity(conn, "user_admin", "AD sign-in settings saved", performed_by=current_username(),
+                     target=f"{'on' if enabled else 'off'}, group {group or '-'}, domain {domain or '-'}")
+        conn.commit()
+    finally:
+        conn.close()
+    flash("AD sign-in saved." + (" Members of that group can now sign in with their Windows account."
+                                 if enabled else " Only the accounts of this app can sign in."), "success")
+    return redirect(url_for("user_admin.index"))
+
+
 @bp.route("/accounts/<int:account_id>/reset-password", methods=["POST"])
 def reset_password(account_id):
     password = request.form.get("password", "")
@@ -133,7 +186,10 @@ def reset_password(account_id):
         return redirect(url_for("user_admin.index"))
     conn = get_connection()
     try:
-        account = conn.execute("SELECT username FROM accounts WHERE id = ?", (account_id,)).fetchone()
+        account = conn.execute("SELECT username, auth_source FROM accounts WHERE id = ?", (account_id,)).fetchone()
+        if account and account["auth_source"] == "ad":
+            flash("An AD account's password is its Windows password - reset it in AD.", "error")
+            return redirect(url_for("user_admin.index"))
         conn.execute(
             "UPDATE accounts SET password_hash = ? WHERE id = ?", (hash_password(password), account_id)
         )
@@ -142,6 +198,9 @@ def reset_password(account_id):
         conn.commit()
     finally:
         conn.close()
+    # that account's other sessions end (auth.session_account); one's own stays signed in
+    if current_account() and current_account()["id"] == account_id:
+        refresh_session_password()
     flash("Password reset.", "success")
     return redirect(url_for("user_admin.index"))
 

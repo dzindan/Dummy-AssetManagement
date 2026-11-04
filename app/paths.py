@@ -4,6 +4,21 @@ import sys
 
 APP_FOLDER_NAME = "AssetManagementTool"
 
+# Client/server mode (`AssetManagementTool.exe serve`, server_config.py):
+# the data folder of server.json, for the whole process - then
+# %LOCALAPPDATA%, data_location.json and Settings > Data Storage Location
+# play no part (the service account's profile is no place for the data).
+_server_data_dir: str | None = None
+
+
+def use_server_data_dir(path: str | None) -> None:
+    global _server_data_dir
+    _server_data_dir = path
+
+
+def is_server_mode() -> bool:
+    return _server_data_dir is not None
+
 
 def is_frozen() -> bool:
     return getattr(sys, "frozen", False)
@@ -131,6 +146,12 @@ def get_app_data_dir_status() -> dict:
     the OSError text explaining why the configured path couldn't be used,
     None when nothing is wrong.
     """
+    if _server_data_dir is not None:
+        # no fallback: a server serving an empty database elsewhere would
+        # look like lost data to everyone - create_app shows the error instead
+        _ensure_data_subdirs(_server_data_dir)
+        return {"path": _server_data_dir, "is_fallback": False, "configured_path": _server_data_dir,
+                "error": None}
     configured = _configured_data_dir()
     if configured:
         try:
@@ -186,6 +207,9 @@ def get_local_settings_path() -> str:
     secret_key generates itself; the two folder paths get re-entered once in
     Settings) rather than inheriting values that would be wrong or unsafe
     there."""
+    if _server_data_dir is not None:
+        # the server's own: secret_key (sessions survive a restart) and its folders
+        return os.path.join(_server_data_dir, "local_settings.json")
     default_dir = get_default_app_data_dir()
     os.makedirs(default_dir, exist_ok=True)
     return os.path.join(default_dir, "local_settings.json")
@@ -207,6 +231,23 @@ def get_diff_reports_dir() -> str:
 
 def get_uploads_dir() -> str:
     return os.path.join(get_app_data_dir(), "uploads")
+
+
+def find_moved_file(stored: str | None, folder: str) -> str | None:
+    """A file the database recorded by its full path (a hand-over form's
+    docx_path, a saved diff report's file_path), or None. After the data
+    folder moved (Settings > Data Storage Location, or the data brought onto
+    the central server) that path is gone, but the file is in today's
+    `folder` under the same name."""
+    if not stored:
+        return None
+    if os.path.isfile(stored):
+        return stored
+    name = stored.replace("\\", "/").rsplit("/", 1)[-1]
+    if name in ("", ".", ".."):
+        return None
+    moved = os.path.join(folder, name)
+    return moved if os.path.isfile(moved) else None
 
 
 def get_handover_template_path() -> str:

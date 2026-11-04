@@ -6,6 +6,8 @@
   <title>{% block title %}Asset Management Tool{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <link rel="icon" href="{{ url_for('static', filename='img/logo.png') }}">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <script src="{{ url_for('static', filename='csrf.js') }}"></script>
 </head>
 <body>
   <header class="topbar">
@@ -54,7 +56,7 @@
   </header>
 
   <main class="content">
-    {% if data_dir_status and data_dir_status.is_fallback %}
+    {% if data_dir_status and data_dir_status.is_fallback and not server_mode %}
     <div class="flash flash-error">
       Can't reach the configured data folder (<code>{{ data_dir_status.configured_path }}</code>) -
       using the default location for now, so nothing entered here is being saved to the usual

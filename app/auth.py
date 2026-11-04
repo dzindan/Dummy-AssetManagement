@@ -1,4 +1,5 @@
 import functools
+import hashlib
 from datetime import timedelta
 
 from flask import flash, g, jsonify, redirect, request, session, url_for
@@ -25,8 +26,92 @@ def hash_password(password: str) -> str:
     return generate_password_hash(password)
 
 
+AD_PASSWORD_HASH = "!ad"  # an AD account: no password of its own, Windows checks it
+
+
 def verify_password(password: str, password_hash: str) -> bool:
+    if not password_hash or password_hash.startswith("!"):
+        return False  # an AD account never signs in with an app password
     return check_password_hash(password_hash, password)
+
+
+# --- AD sign-in (winauth.py) --------------------------------------------------------
+
+AD_SETTING_KEYS = ("ad_enabled", "ad_domain", "ad_group", "ad_default_role")
+
+
+def ad_settings() -> dict:
+    """Users & Roles > AD sign-in, set on the server the first time it runs."""
+    from .db import get_setting
+    from .winauth import computer_domain
+
+    return {"enabled": get_setting("ad_enabled", "0") == "1",
+            "domain": (get_setting("ad_domain", "") or "").strip() or computer_domain(),
+            "group": (get_setting("ad_group", "") or "").strip(),
+            "default_role": (get_setting("ad_default_role", "") or "").strip()}
+
+
+def ad_sign_in_on() -> bool:
+    from .winauth import available
+
+    s = ad_settings()
+    return s["enabled"] and bool(s["group"]) and available()
+
+
+class SignInRefused(Exception):
+    pass
+
+
+def sign_in_ad(identity) -> int:
+    """An AD user Windows vouched for -> their account id (made on the first
+    sign-in, with the default role). Refused (SignInRefused) when they
+    aren't in the access group, or their account here is deactivated."""
+    from . import winauth
+    from .db import log_activity
+
+    s = ad_settings()
+    if not ad_sign_in_on():
+        raise SignInRefused("AD sign-in is off - use an account of this app.")
+    try:
+        allowed = winauth.group_sid(s["group"])
+    except winauth.AuthError as e:
+        raise SignInRefused(f"{e} - check Settings > Users & Roles > AD sign-in.") from None
+    if allowed not in identity.group_sids:
+        raise SignInRefused(f"{identity.username} isn't a member of {s['group']} - ask an administrator "
+                            "to add you to that AD group.")
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT * FROM accounts WHERE ad_sid = ?", (identity.sid,)).fetchone() or \
+            conn.execute("SELECT * FROM accounts WHERE username_norm = ? AND auth_source = 'ad'",
+                         (normalize_username(identity.username),)).fetchone()
+        if row is None:
+            if conn.execute("SELECT 1 FROM accounts WHERE username_norm = ?",
+                            (normalize_username(identity.username),)).fetchone():
+                raise SignInRefused(f"An account of this app is already named {identity.username} - "
+                                    "rename it in Users & Roles first.")
+            role = None
+            if s["default_role"]:
+                role = conn.execute("SELECT id FROM roles WHERE id = ? OR name = ?",
+                                    (s["default_role"], s["default_role"])).fetchone()
+            role = role or conn.execute("SELECT id FROM roles WHERE name = 'Viewer'").fetchone()
+            cursor = conn.execute(
+                "INSERT INTO accounts (username, username_norm, password_hash, role_id, is_active, created_at, "
+                "auth_source, ad_sid) VALUES (?, ?, ?, ?, 1, datetime('now'), 'ad', ?)",
+                (identity.username, normalize_username(identity.username), AD_PASSWORD_HASH, role["id"],
+                 identity.sid))
+            log_activity(conn, "user_admin", "AD account created on its first sign-in",
+                         performed_by=identity.username, target=identity.username)
+            conn.commit()
+            return cursor.lastrowid
+        if not row["is_active"]:
+            raise SignInRefused("Your account is deactivated in this app - ask an administrator.")
+        if row["username"] != identity.username or row["ad_sid"] != identity.sid:  # renamed in AD
+            conn.execute("UPDATE accounts SET username = ?, username_norm = ?, ad_sid = ? WHERE id = ?",
+                         (identity.username, normalize_username(identity.username), identity.sid, row["id"]))
+            conn.commit()
+        return row["id"]
+    finally:
+        conn.close()
 
 
 def normalize_username(username: str) -> str:
@@ -61,13 +146,36 @@ def load_active_account(account_id):
     conn = get_connection()
     try:
         return conn.execute(
-            "SELECT a.id, a.username, a.role_id, r.name AS role_name "
+            "SELECT a.id, a.username, a.role_id, a.password_hash, r.name AS role_name "
             "FROM accounts a JOIN roles r ON r.id = a.role_id "
             "WHERE a.id = ? AND a.is_active = 1",
             (account_id,),
         ).fetchone()
     finally:
         conn.close()
+
+
+def _password_mark(password_hash: str) -> str:
+    """Kept in the session at sign-in: a new password (reset by an admin,
+    or via Forgot password) changes it, and every session signed in with
+    the old one ends on its next request."""
+    return hashlib.sha256((password_hash or "").encode()).hexdigest()[:16]
+
+
+def session_account():
+    """The signed-in account of this request's session, or None (no
+    session, the account deactivated, or its password changed since)."""
+    account = load_active_account(session.get("account_id"))
+    if account is None or session.get("pwv") != _password_mark(account["password_hash"]):
+        return None
+    return account
+
+
+def refresh_session_password() -> None:
+    """After someone resets their *own* password: keep this session."""
+    account = load_active_account(session.get("account_id"))
+    if account is not None:
+        session["pwv"] = _password_mark(account["password_hash"])
 
 
 def load_permissions_for_role(role_id) -> set:
@@ -155,6 +263,8 @@ def login_account(account_id: int) -> None:
     session.permanent = True
     conn = get_connection()
     try:
+        row = conn.execute("SELECT password_hash FROM accounts WHERE id = ?", (account_id,)).fetchone()
+        session["pwv"] = _password_mark(row["password_hash"] if row else "")
         conn.execute("UPDATE accounts SET last_login_at = datetime('now') WHERE id = ?", (account_id,))
         conn.commit()
     finally:
@@ -218,7 +328,8 @@ def require_permission(permission: str):
 
 # Endpoints reachable with no session at all - the login/setup flow itself,
 # and static assets (CSS/JS/favicon, needed to even render the login page).
-_EXEMPT_ENDPOINTS = {"auth.login", "auth.logout", "auth.setup", "auth.forgot_password", "static"}
+_EXEMPT_ENDPOINTS = {"auth.login", "auth.logout", "auth.setup", "auth.forgot_password", "auth.sso", "static",
+                     "health"}
 
 
 def register_auth(app) -> None:
@@ -233,7 +344,7 @@ def register_auth(app) -> None:
             return None
         if accounts_table_is_empty():
             return redirect(url_for("auth.setup"))
-        account = load_active_account(session.get("account_id"))
+        account = session_account()
         if account is None:
             session.pop("account_id", None)
             # Same fetch-detection as require_permission's 403 branch (see

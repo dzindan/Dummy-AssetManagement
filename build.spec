@@ -15,6 +15,18 @@ a = Analysis(
         ("templates_docx", "templates_docx"),
     ],
     hiddenimports=[
+        # the central server (`serve`, app/server.py imports them lazily)
+        "cheroot.wsgi",
+        "cheroot.ssl.builtin",
+        "cryptography.x509",
+        "cryptography.hazmat.primitives.asymmetric.rsa",
+        # AD sign-in (app/winauth.py imports them lazily)
+        "sspi",
+        "sspicon",
+        "win32security",
+        "win32api",
+        "win32con",
+        "pywintypes",
         "docxtpl",
         "docxcompose",
         "docx",

@@ -2,7 +2,7 @@
 """Login + role-based permissions verification.
 
 Follows this project's established isolated-DB pattern: override
-%LOCALAPPDATA% to a fresh temp directory before create_app() so every test
+%LOCALAPPDATA% to a fresh temp directory before create_app(csrf=False) so every test
 gets its own throwaway SQLite database, then drive the app through
 app.test_client() like a real browser would.
 """
@@ -23,7 +23,7 @@ LAST_HOLDER_TEXT = "Manage Users permission"
 
 def _fresh_app():
     os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_authtest_")
-    return create_app()
+    return create_app(csrf=False)
 
 
 def _role_id(conn, name):
@@ -93,7 +93,7 @@ class SecretKeyPersistenceTests(unittest.TestCase):
     def test_secret_key_persists_across_simulated_restart(self):
         os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_authtest_")
 
-        app1 = create_app()
+        app1 = create_app(csrf=False)
         conn = get_connection()
         try:
             admin_role_id = _role_id(conn, "Admin")
@@ -110,7 +110,7 @@ class SecretKeyPersistenceTests(unittest.TestCase):
 
         # A brand-new Flask app object (simulating a process restart) against
         # the SAME %LOCALAPPDATA% must accept a cookie signed by the first one.
-        app2 = create_app()
+        app2 = create_app(csrf=False)
         client2 = app2.test_client()
         client2.set_cookie("session", session_value)
         resp = client2.get("/")

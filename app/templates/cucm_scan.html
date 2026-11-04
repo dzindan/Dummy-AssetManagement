@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}CUCM Phone Scan - Asset Management Tool{% endblock %}
 {% block content %}
-<h1 data-scan-method="{{ request.method }}">CUCM Phone Scan</h1>
+<h1 data-scan-method="{{ 'POST' if fresh else 'GET' }}">CUCM Phone Scan</h1>
 <p class="muted">
   Live IP-phone inventory pulled directly from CUCM (extension, model, IP), plus each phone's serial number
   scraped from its own web page - finds phones CUCM knows about even before they're imported into Manage Assets.
@@ -23,6 +23,12 @@
 
 {% if error %}
 <div class="flash flash-error">{{ error }}</div>
+{% endif %}
+
+{% if server_mode or active_scans %}
+<p class="muted">{% if server_mode %}Scans run from the central server, one at a time (CUCM allows only a few requests a minute).{% endif %}
+  {% if active_scans %}Now: {% for j in active_scans %}{{ j.label }} ({{ j.owner }}, {{ "scanning" if j.status == "running" else "waiting" }}{% if j.owner == current_account.username %} - <a href="{{ url_for('cucm_scan.job', job_id=j.id) }}">yours, open</a>{% endif %}){{ "; " if not loop.last }}{% endfor %}.{% endif %}
+  {% if server_mode and my_last_scan and devices is none %}Your last scan: <a href="{{ url_for('cucm_scan.job', job_id=my_last_scan.id) }}">{{ my_last_scan.label }}</a>, finished {{ my_last_scan.finished.strftime("%H:%M") }}.{% endif %}</p>
 {% endif %}
 
 <div class="panel">

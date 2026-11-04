@@ -3,7 +3,7 @@
 
 Before this split, the app only ever wrote one app.db (business tables + a
 settings key/value table + the 3 log tables, all together). These tests
-hand-build that exact legacy shape directly with sqlite3 (create_app()/
+hand-build that exact legacy shape directly with sqlite3 (create_app(csrf=False)/
 init_db() now only ever produce the new layout, so they can't be used to
 seed it) and confirm: a clean migration on first boot, a crash mid-migration
 never corrupts the original file and retries cleanly, a business write and a
@@ -95,7 +95,7 @@ class LegacyMigrationTests(unittest.TestCase):
         self.legacy_path = _seed_legacy_app_db(self.data_dir)
 
     def test_migration_splits_legacy_db_into_four_files(self):
-        create_app()  # triggers init_db() -> _migrate_legacy_single_file_db()
+        create_app(csrf=False)  # triggers init_db() -> _migrate_legacy_single_file_db()
 
         self.assertTrue(os.path.exists(get_data_db_path()))
         self.assertTrue(os.path.exists(get_logs_db_path()))
@@ -161,7 +161,7 @@ class LegacyMigrationTests(unittest.TestCase):
             self.assertFalse(name.endswith(".migrating"), f"leftover temp file: {name}")
 
         # A clean retry (no mocking) completes the migration from scratch.
-        create_app()
+        create_app(csrf=False)
         self.assertTrue(os.path.exists(get_data_db_path()))
         self.assertTrue(os.path.exists(get_logs_db_path()))
         self.assertFalse(os.path.exists(self.legacy_path))
@@ -170,7 +170,7 @@ class LegacyMigrationTests(unittest.TestCase):
 class CrossDbAtomicityTests(unittest.TestCase):
     def setUp(self):
         os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_splittest_")
-        create_app()
+        create_app(csrf=False)
 
     def test_business_write_and_log_write_are_durable_together(self):
         conn = get_connection()
@@ -211,7 +211,7 @@ class CrossDbAtomicityTests(unittest.TestCase):
 class DataLocationMoveTests(unittest.TestCase):
     def setUp(self):
         os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_splittest_")
-        self.app = create_app()
+        self.app = create_app(csrf=False)
         self.client = self.app.test_client()
         resp = self.client.post(
             "/setup",

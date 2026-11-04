@@ -4,7 +4,7 @@ from flask import Blueprint, abort, render_template, request, send_file
 
 from ..db import get_connection
 from ..exports import build_workbook, dated_download_name, send_workbook
-from ..handover import HO_TYPES, form_number
+from ..handover import HO_TYPES, form_number, resolve_docx_path
 from ..queries import search_handover_records
 
 bp = Blueprint("history", __name__, url_prefix="/history")
@@ -75,11 +75,8 @@ def download(record_id):
     finally:
         conn.close()
 
-    if not record or not record["docx_path"] or not os.path.exists(record["docx_path"]):
+    path = resolve_docx_path(record["docx_path"]) if record else None
+    if not path:
         abort(404, description="Hand-over file not found. It may have been moved or deleted.")
 
-    return send_file(
-        record["docx_path"],
-        as_attachment=True,
-        download_name=os.path.basename(record["docx_path"]),
-    )
+    return send_file(path, as_attachment=True, download_name=os.path.basename(path))

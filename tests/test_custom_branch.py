@@ -21,7 +21,7 @@ from app.importer import create_custom_branch, import_branch_file, is_custom_bra
 class CustomBranchTests(unittest.TestCase):
     def setUp(self):
         os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_custombranch_")
-        self.app = create_app()
+        self.app = create_app(csrf=False)
         self.client = self.app.test_client()
         conn = get_connection()
         try:

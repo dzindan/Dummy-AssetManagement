@@ -4,9 +4,10 @@ import secrets
 from flask import Flask, Response
 
 from .auth import register_auth
+from .csrf import register_csrf
 from .db import get_setting, init_db, set_setting
 from .handover import form_number
-from .paths import get_app_data_dir_status, get_bundle_dir
+from .paths import get_app_data_dir_status, get_bundle_dir, is_server_mode
 from .sorting import sort_url
 from .text_utils import usage_duration_years
 from .version import APP_VERSION
@@ -15,6 +16,17 @@ from .version import APP_VERSION
 def _db_error_response(db_error: str) -> Response:
     from markupsafe import escape
 
+    if is_server_mode():
+        hint = ("<p>Check the <code>data_dir</code> folder in the server's <code>server.json</code> "
+                "(<code>%ProgramData%\\AssetManagementTool\\server.json</code>): it must exist on a local disk "
+                "of the server and the account running the server must be able to write there. "
+                "Then restart the server; <code>&lt;data_dir&gt;\\logs\\server.log</code> has the details.</p>")
+    else:
+        hint = ("<p>This usually means the folder configured under <b>Settings &gt; Data Storage Location</b> "
+                "is on a drive or network share that isn't reachable right now (unplugged, disconnected, or "
+                "the path changed). Reconnect it and restart the app, or open "
+                "<code>%LOCALAPPDATA%\\AssetManagementTool\\data_location.json</code> in a text editor and "
+                "remove it to reset to the default location.</p>")
     html = f"""<!doctype html><html><head><meta charset="utf-8">
 <title>Asset Management Tool - Data Error</title>
 <style>body{{font-family:sans-serif;max-width:640px;margin:3rem auto;padding:0 1rem;
@@ -23,16 +35,13 @@ border-radius:3px}}</style></head><body>
 <h1>Can't open the data folder</h1>
 <p>The app started, but couldn't set up its database:</p>
 <p><code>{escape(db_error)}</code></p>
-<p>This usually means the folder configured under <b>Settings &gt; Data Storage Location</b>
-is on a drive or network share that isn't reachable right now (unplugged, disconnected, or
-the path changed). Reconnect it and restart the app, or open
-<code>%LOCALAPPDATA%\\AssetManagementTool\\data_location.json</code> in a text editor and
-remove it to reset to the default location.</p>
+{hint}
 </body></html>"""
     return Response(html, status=500, mimetype="text/html")
 
 
-def create_app() -> Flask:
+def create_app(csrf: bool = True) -> Flask:
+    """csrf=False: only for the tests, which post forms without a page."""
     # Explicit, absolute template/static paths (rather than Flask's default
     # root_path-relative lookup) so this keeps working once PyInstaller
     # freezes the app into a single exe, where __file__-based resolution of
@@ -44,6 +53,11 @@ def create_app() -> Flask:
         static_folder=os.path.join(bundle_dir, "app", "static"),
     )
     app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # 64 MB upload cap
+    app.config["CSRF_ENABLED"] = csrf
+    # the session cookie: never readable by page scripts, never sent along by
+    # another site's links/forms that post here (Secure too over HTTPS: server.py)
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     # "3 years" from a handover_date - used by Manage Assets/Branch Detail's
     # HTML tables (their .xlsx exports use the same usage_duration_years()
     # directly, via exports.ASSET_ROW_COLUMNS, since a workbook cell has no
@@ -126,11 +140,47 @@ def create_app() -> Flask:
     app.register_blueprint(cucm_scan_bp)
     app.register_blueprint(disposal_check_bp)
 
+    @app.route("/health")
+    def health():
+        """For a monitoring check / the admin: up, which version, the
+        database opens. No login, nothing private in it."""
+        from .db import get_connection
+
+        try:
+            conn = get_connection()
+            try:
+                conn.execute("SELECT 1").fetchone()
+            finally:
+                conn.close()
+            ok = True
+        except Exception:  # noqa: BLE001 - reported, not raised
+            ok = False
+        from flask import jsonify
+        return jsonify({"status": "ok" if ok else "db_error", "version": APP_VERSION}), 200 if ok else 503
+
     register_auth(app)
+    register_csrf(app)
+    from . import throttle
+    for t in throttle.ALL:  # a fresh app (the tests make many) starts with no failures counted
+        t.reset()
+    from .jobs import cucm_runner, runner
+    runner.reset()
+    cucm_runner.reset()
+    from .routes import network_check
+    network_check.reset_scans()
+
+    @app.after_request
+    def _security_headers(resp):
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        resp.headers.setdefault("Referrer-Policy", "same-origin")
+        return resp
 
     @app.context_processor
     def inject_app_version():
-        return {"app_version": APP_VERSION}
+        # server_mode: the central server - pages leave out what only makes
+        # sense on the PC running the app (its folders, moving its data)
+        return {"app_version": APP_VERSION, "server_mode": is_server_mode()}
 
     @app.context_processor
     def inject_data_dir_status():

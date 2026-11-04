@@ -34,7 +34,7 @@ BRANCHES = [
 class BranchResolveTests(unittest.TestCase):
     def setUp(self):
         os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_branchresolve_")
-        create_app()
+        create_app(csrf=False)
         self.conn = get_connection()
         self.conn.executemany("INSERT INTO branches (branch_no, local_name, eng_name, updated_at) "
                               "VALUES (?, ?, ?, datetime('now'))", BRANCHES)

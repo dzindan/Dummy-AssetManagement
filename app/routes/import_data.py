@@ -3,11 +3,14 @@ import glob
 import hashlib
 import json
 import os
+import re
 import uuid
 
-from flask import Blueprint, flash, redirect, render_template, request, send_file, url_for
+from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, send_file, url_for
 
+from .. import jobs
 from ..auth import current_username, require_permission
+from ..jobs import notify
 from ..db import get_connection, get_setting, log_activity
 from ..diffing import diff_batch, diff_branch_labels
 from ..exports import (
@@ -33,7 +36,7 @@ from ..importer import (
     peek_asset_report_branch,
     resync_full_names,
 )
-from ..paths import get_diff_reports_dir, get_uploads_dir
+from ..paths import find_moved_file, get_diff_reports_dir, get_uploads_dir, is_server_mode
 from ..queries import (
     find_duplicate_serials_in_batch,
     find_existing_batch_for_branch_period,
@@ -44,11 +47,58 @@ from ..queries import (
 bp = Blueprint("import_data", __name__, url_prefix="/import")
 
 
+_UPLOAD_NAME_RE = re.compile(r"^[0-9a-f]{32}\.[A-Za-z0-9]{1,6}$")
+
+
 def _save_upload(file_storage) -> str:
-    ext = os.path.splitext(file_storage.filename)[1] or ".xlsx"
+    ext = os.path.splitext(os.path.basename(file_storage.filename.replace("\\", "/")))[1]
+    if not re.fullmatch(r"\.[A-Za-z0-9]{1,6}", ext or ""):
+        ext = ".xlsx"
     dest = os.path.join(get_uploads_dir(), f"{uuid.uuid4().hex}{ext}")
     file_storage.save(dest)
     return dest
+
+
+def _folder_imports_on() -> bool:
+    """"Import all from folder" reads a folder of the PC running the app -
+    off on the central server (a client's folder isn't there; upload the
+    files, or pick the folder in the browser, instead)."""
+    return not is_server_mode()
+
+
+def _source_of(value: str) -> str:
+    return value if value == "folder" and _folder_imports_on() else "upload"
+
+
+def _checked_path(path: str, source: str) -> str | None:
+    """A file path the duplicate / period-conflict confirmation pages sent
+    back: only ever one of this import's own files - an upload's temporary
+    copy in the uploads folder, or a file of the configured import folder -
+    never any other file of the machine (it is read, and an upload's copy
+    deleted, after)."""
+    if source == "upload":
+        name = os.path.basename((path or "").replace("/", "\\").rsplit("\\", 1)[-1])
+        if not _UPLOAD_NAME_RE.match(name):
+            return None
+        return os.path.join(get_uploads_dir(), name)
+    folder = get_setting("asset_reports_folder", "")
+    if not folder or not path:
+        return None
+    real, base = os.path.realpath(path), os.path.realpath(folder)
+    if os.path.dirname(real) != base or not real.lower().endswith(".xlsx"):
+        return None
+    return real
+
+
+def _checked_pairs(values, source: str) -> list[tuple[str, str]]:
+    out = []
+    for value in values:
+        if "::" in value:
+            path, filename = value.split("::", 1)
+            path = _checked_path(path, source)
+            if path:
+                out.append((path, filename))
+    return out
 
 
 @bp.route("/")
@@ -56,9 +106,10 @@ def index():
     return render_template(
         "import_data.html",
         active_page="import",
-        asset_reports_folder=get_setting("asset_reports_folder", ""),
-        id_files_folder=get_setting("id_files_folder", ""),
+        asset_reports_folder=get_setting("asset_reports_folder", "") if _folder_imports_on() else "",
+        id_files_folder=get_setting("id_files_folder", "") if _folder_imports_on() else "",
         current_month=dt.date.today().strftime("%Y-%m"),
+        active_jobs=jobs.runner.active(),
     )
 
 
@@ -183,11 +234,13 @@ def download_diff_report(report_id):
         row = conn.execute("SELECT * FROM diff_reports WHERE id = ?", (report_id,)).fetchone()
     finally:
         conn.close()
-    if not row or not os.path.exists(row["file_path"]):
+    # its full path when saved - found again after the data folder moved
+    path = find_moved_file(row["file_path"], get_diff_reports_dir()) if row else None
+    if not path:
         flash("That saved report file could not be found - it may have been moved or deleted on disk.", "error")
         return redirect(url_for("import_data.diff_reports"))
     return send_file(
-        row["file_path"],
+        path,
         as_attachment=True,
         download_name=row["label"] or "asset_diff_report.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -219,27 +272,51 @@ def export_duplicates():
     return send_workbook(build_duplicates_workbook(dupes), dated_download_name("cleaning_report_duplicates"))
 
 
-def _upload_id_files(importer_fn, file_type: str):
-    """Shared by the Branch Codes and User IDs uploads below - same
-    save/import/cleanup shape, differing only in which importer function
-    runs and the file_type tag attached to each result."""
+def _excel_uploads() -> list:
+    """The form's files - only Excel ones (a whole folder picked in the
+    browser can hold anything else too)."""
     files = [f for f in request.files.getlist("files") if f and f.filename]
-    if not files:
-        flash("No files selected.", "error")
-        return redirect(url_for("import_data.index"))
+    excel = [f for f in files if f.filename.lower().endswith((".xlsx", ".xlsm"))]
+    if len(excel) < len(files):
+        flash(f"Left out {len(files) - len(excel)} file(s) that aren't Excel (.xlsx).", "info")
+    return excel
 
+
+def _submit(kind: str, label: str, fn):
+    """Hand an import to app/jobs.py (one at a time; in the background on
+    the central server) -> its page, which shows the result when done."""
+    job = jobs.runner.submit(current_app._get_current_object(), kind, label, current_username(), fn,
+                             background=current_app.config.get("IMPORT_JOBS_BACKGROUND", False))
+    return redirect(url_for("import_data.job", job_id=job.id))
+
+
+def _run_id_files(saved: list[tuple[str, str]], importer_fn, file_type: str, performed_by: str,
+                  remove: bool = True) -> dict:
     results = []
-    performed_by = current_username()
-    for f in files:
-        path = _save_upload(f)
+    for filename, path in saved:
         try:
             result = importer_fn(path, performed_by=performed_by)
             result.setdefault("file_type", file_type)
         finally:
-            os.remove(path)
-        results.append((f.filename, result))
+            if remove and os.path.exists(path):
+                os.remove(path)
+        results.append((filename, result))
+    return {"id_results": results}
 
-    return render_template("import_result_id.html", active_page="import", results=results)
+
+def _upload_id_files(importer_fn, file_type: str):
+    """Shared by the Branch Codes and User IDs uploads below - same
+    save/import/cleanup shape, differing only in which importer function
+    runs and the file_type tag attached to each result."""
+    files = _excel_uploads()
+    if not files:
+        flash("No files selected.", "error")
+        return redirect(url_for("import_data.index"))
+
+    saved = [(f.filename, _save_upload(f)) for f in files]
+    performed_by = current_username()
+    return _submit("id_files", f"ID files ({len(saved)} file(s))",
+                   lambda: _run_id_files(saved, importer_fn, file_type, performed_by))
 
 
 @bp.route("/branches", methods=["POST"])
@@ -256,6 +333,15 @@ def upload_branch_file():
 def upload_user_file():
     """User/banker list only (Branch ID, User No, User Name...)."""
     return _upload_id_files(import_user_file, "users")
+
+
+@bp.route("/id-files", methods=["POST"])
+@require_permission("import_data")
+def upload_id_files_auto():
+    """Branch and user files together (e.g. the whole IDFromAither folder
+    picked in the browser) - each file's kind is detected from its header,
+    like the desktop's "Import all ID files from folder"."""
+    return _upload_id_files(import_id_file, "unknown")
 
 
 @bp.route("/users/resync-names", methods=["POST"])
@@ -319,7 +405,8 @@ def _save_diff_report(batch_ids: list[int], period: str) -> None:
             return
         wb = build_diff_workbook(all_diffs)
         timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-        safe_period = (period or "unknown-period").replace("/", "-")
+        # the period comes from the form: only plain characters reach the file name
+        safe_period = re.sub(r"[^0-9A-Za-z_-]+", "-", period or "").strip("-")[:40] or "unknown-period"
         filename = f"asset_diff_report_{safe_period}_{timestamp}.xlsx"
         file_path = os.path.join(get_diff_reports_dir(), filename)
         wb.save(file_path)
@@ -390,7 +477,7 @@ def _check_period_conflicts(file_entries: list[dict], period: str) -> list[dict]
     return conflicts
 
 
-def _run_asset_report_imports(files: list[dict], period: str, source: str) -> list[int]:
+def _run_asset_report_imports(files: list[dict], period: str, source: str, performed_by: str) -> list[int]:
     """Actually imports each file - shared by every asset-report entry
     point (direct upload, after resolving duplicate-content files, after
     confirming past a period-conflict warning) once any checks have passed
@@ -398,18 +485,17 @@ def _run_asset_report_imports(files: list[dict], period: str, source: str) -> li
     files sourced from a configured folder are the user's own and are
     never touched."""
     batch_ids = []
-    performed_by = current_username()
     for item in files:
         path, filename = item["path"], item["filename"]
         if not os.path.exists(path):
-            flash(f"{filename}: file no longer available, skipped.", "error")
+            notify(f"{filename}: file no longer available, skipped.", "error")
             continue
         # One file can yield multiple reports now (e.g. an OA equipment sheet
         # plus a separate CCTV sheet) - each gets its own batch.
         reports = import_asset_report(path, source_label=filename, period=period, performed_by=performed_by)
         for report in reports:
             if report.error:
-                flash(f"{report.source_file}: {report.error}", "error")
+                notify(f"{report.source_file}: {report.error}", "error")
             elif report.batch_id:
                 batch_ids.append(report.batch_id)
 
@@ -425,10 +511,17 @@ def _run_asset_report_imports(files: list[dict], period: str, source: str) -> li
     return batch_ids
 
 
+def _submit_asset_reports(files: list[dict], period: str, source: str):
+    performed_by = current_username()
+    label = f"Monthly asset reports {period or ''} ({len(files)} file(s))".replace("  ", " ")
+    return _submit("asset_reports", label,
+                   lambda: {"batch_ids": _run_asset_report_imports(files, period, source, performed_by)})
+
+
 @bp.route("/asset-reports", methods=["POST"])
 @require_permission("import_data")
 def upload_asset_reports():
-    files = [f for f in request.files.getlist("files") if f and f.filename]
+    files = _excel_uploads()
     if not files:
         flash("No files selected.", "error")
         return redirect(url_for("import_data.index"))
@@ -458,8 +551,7 @@ def upload_asset_reports():
             source="upload",
         )
 
-    batch_ids = _run_asset_report_imports(saved, period, "upload")
-    return _result_redirect(batch_ids)
+    return _submit_asset_reports(saved, period, "upload")
 
 
 @bp.route("/asset-reports/confirm", methods=["POST"])
@@ -469,24 +561,23 @@ def confirm_asset_reports():
     flagged duplicate-content files: import only the file chosen per
     duplicate group, plus every file that had no duplicate to begin with."""
     period = request.form.get("period", "").strip()
-    source = request.form.get("source", "upload")
-    group_count = int(request.form.get("group_count", "0") or "0")
+    source = _source_of(request.form.get("source", "upload"))
+    try:
+        group_count = min(int(request.form.get("group_count", "0") or "0"), 1000)
+    except ValueError:
+        group_count = 0
 
     to_import: list[tuple[str, str]] = []
     to_cleanup: list[str] = []
 
     for i in range(group_count):
-        choice = request.form.get(f"choice_{i}", "")
-        if "::" in choice:
-            path, filename = choice.split("::", 1)
-            to_import.append((path, filename))
-        to_cleanup.extend(request.form.getlist(f"group_files_{i}"))
+        to_import.extend(_checked_pairs([request.form.get(f"choice_{i}", "")], source))
+        to_cleanup.extend(p for p in (_checked_path(v, source) for v in request.form.getlist(f"group_files_{i}"))
+                          if p)
 
-    for value in request.form.getlist("unique_files"):
-        if "::" in value:
-            path, filename = value.split("::", 1)
-            to_import.append((path, filename))
-            to_cleanup.append(path)
+    for path, filename in _checked_pairs(request.form.getlist("unique_files"), source):
+        to_import.append((path, filename))
+        to_cleanup.append(path)
 
     chosen_paths = {path for path, _ in to_import}
     if source == "upload":
@@ -514,8 +605,7 @@ def confirm_asset_reports():
             source=source,
         )
 
-    batch_ids = _run_asset_report_imports(files, period, source)
-    return _result_redirect(batch_ids)
+    return _submit_asset_reports(files, period, source)
 
 
 @bp.route("/asset-reports/confirm-period", methods=["POST"])
@@ -529,19 +619,17 @@ def confirm_period_import():
     removed - so a bulk import with a few already-imported branches can
     still bring in the rest."""
     period = request.form.get("period", "").strip()
-    source = request.form.get("source", "upload")
-    conflict_paths = set(request.form.getlist("conflict_files"))
-    chosen = set(request.form.getlist("import_conflict"))
+    source = _source_of(request.form.get("source", "upload"))
+    conflict_paths = {_checked_path(v, source) for v in request.form.getlist("conflict_files")} - {None}
+    chosen = {_checked_path(v, source) for v in request.form.getlist("import_conflict")} - {None}
     import_all = request.form.get("mode") == "all"
     files, skipped = [], []
-    for value in request.form.getlist("files"):
-        if "::" in value:
-            path, filename = value.split("::", 1)
-            item = {"path": path, "filename": filename}
-            if path in conflict_paths and not import_all and path not in chosen:
-                skipped.append(item)
-            else:
-                files.append(item)
+    for path, filename in _checked_pairs(request.form.getlist("files"), source):
+        item = {"path": path, "filename": filename}
+        if path in conflict_paths and not import_all and path not in chosen:
+            skipped.append(item)
+        else:
+            files.append(item)
 
     if source == "upload":
         for item in skipped:
@@ -557,8 +645,7 @@ def confirm_period_import():
         flash("Nothing imported - every file was skipped.", "info")
         return redirect(url_for("import_data.index"))
 
-    batch_ids = _run_asset_report_imports(files, period, source)
-    return _result_redirect(batch_ids)
+    return _submit_asset_reports(files, period, source)
 
 
 @bp.route("/ho-reports", methods=["POST"])
@@ -568,27 +655,34 @@ def upload_ho_reports():
     (importer.import_ho_report), never the branch-report path: each file is
     split into one batch per Head Office unit, stored as report source HO so
     it is kept apart from every unit's own monthly report."""
-    files = [f for f in request.files.getlist("files") if f and f.filename]
+    files = _excel_uploads()
     if not files:
         flash("No files selected.", "error")
         return redirect(url_for("import_data.index"))
 
     period = request.form.get("period", "").strip()
+    saved = [(f.filename, _save_upload(f)) for f in files]
+    performed_by = current_username()
+    return _submit("ho_reports", f"HO monthly report ({len(saved)} file(s))",
+                   lambda: _run_ho_reports(saved, period, performed_by))
+
+
+def _run_ho_reports(saved: list[tuple[str, str]], period: str, performed_by: str) -> dict:
     batch_ids = []
     periods = []
-    for f in files:
-        path = _save_upload(f)
+    for filename, path in saved:
         try:
-            reports, summary = import_ho_report(path, source_label=f.filename, period=period,
-                                                performed_by=current_username())
+            reports, summary = import_ho_report(path, source_label=filename, period=period,
+                                                performed_by=performed_by)
         finally:
-            os.remove(path)
+            if os.path.exists(path):
+                os.remove(path)
         if summary.error:
-            flash(f"{f.filename}: {summary.error}", "error")
+            notify(f"{filename}: {summary.error}", "error")
             continue
         batch_ids.extend(r.batch_id for r in reports)
         periods.append(summary.period)
-        message = (f"{f.filename}: HO report for {summary.period} - {summary.rows_read} rows into "
+        message = (f"{filename}: HO report for {summary.period} - {summary.rows_read} rows into "
                    f"{len(reports)} unit(s).")
         if summary.skipped_own_report:
             skipped = sum(summary.skipped_own_report.values())
@@ -597,10 +691,10 @@ def upload_ho_reports():
         if summary.unresolved_rows:
             message += (f" {summary.unresolved_rows} row(s) matched no unit - map them in "
                         "Settings > Branch Aliases.")
-        flash(message, "info")
+        notify(message, "info")
 
     _save_diff_report(batch_ids, periods[0] if len(set(periods)) == 1 else "")
-    return _result_redirect(batch_ids)
+    return {"batch_ids": batch_ids}
 
 
 @bp.route("/total-asset", methods=["POST"])
@@ -612,25 +706,71 @@ def upload_total_asset():
         return redirect(url_for("import_data.index"))
 
     path = _save_upload(f)
-    try:
-        reports = import_total_asset_history(path, performed_by=current_username())
-    finally:
-        os.remove(path)
+    performed_by = current_username()
 
-    batch_ids = []
-    for r in reports:
-        if r.error:
-            flash(f"{r.source_file}: {r.error}", "error")
-        elif r.batch_id:
-            batch_ids.append(r.batch_id)
+    def run():
+        try:
+            reports = import_total_asset_history(path, performed_by=performed_by)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+        batch_ids = []
+        for r in reports:
+            if r.error:
+                notify(f"{r.source_file}: {r.error}", "error")
+            elif r.batch_id:
+                batch_ids.append(r.batch_id)
+        return {"batch_ids": batch_ids}
 
-    return _result_redirect(batch_ids)
+    return _submit("total_asset", f"Total asset history ({f.filename})", run)
+
+
+@bp.route("/jobs/<int:job_id>")
+@require_permission("import_data")
+def job(job_id):
+    """An import's page: waiting / running (refreshes itself), then its
+    messages and the usual result. Only its owner sees the result."""
+    job = jobs.runner.get(job_id)
+    if job is None:
+        flash("That import's result isn't kept any more (the server was restarted, or it was long ago) - "
+              "see Import History.", "info")
+        return redirect(url_for("import_data.index"))
+    if job.owner != current_username():
+        abort(404)
+    if not job.done:
+        running = next((j for j in jobs.runner.active() if j.status == "running"), None)
+        return render_template("import_job.html", active_page="import", job=job, running=running,
+                               ahead=jobs.runner.ahead_of(job))
+    if not job.delivered:
+        job.delivered = True
+        for category, message in job.messages:
+            flash(message, category)
+        if job.status == "error":
+            flash(f"The import failed: {job.error}", "error")
+    if job.status == "error":
+        return redirect(url_for("import_data.index"))
+    if "id_results" in job.outcome:
+        return render_template("import_result_id.html", active_page="import", results=job.outcome["id_results"])
+    return _result_redirect(job.outcome.get("batch_ids") or [])
+
+
+@bp.route("/jobs/<int:job_id>/status")
+@require_permission("import_data")
+def job_status(job_id):
+    job = jobs.runner.get(job_id)
+    if job is None or job.owner != current_username():
+        return {"error": "not found"}, 404
+    return {"status": job.status, "ahead": jobs.runner.ahead_of(job)}
 
 
 @bp.route("/from-folder", methods=["POST"])
 @require_permission("import_data")
 def import_from_folder():
     kind = request.form.get("kind")
+    if not _folder_imports_on():
+        flash("Import from a folder isn't available on the central server - upload the files "
+              "(or choose the whole folder) instead.", "error")
+        return redirect(url_for("import_data.index"))
     folder = get_setting("asset_reports_folder" if kind == "asset_reports" else "id_files_folder", "")
     if not folder or not os.path.isdir(folder):
         flash(f"Configured folder does not exist: {folder or '(not set)'}. Set it in Settings first.", "error")
@@ -667,12 +807,12 @@ def import_from_folder():
                 source="folder",
             )
 
-        batch_ids = _run_asset_report_imports(saved, period, "folder")
-        return _result_redirect(batch_ids)
+        return _submit_asset_reports(saved, period, "folder")
 
     performed_by = current_username()
-    results = [(os.path.basename(path), import_id_file(path, performed_by=performed_by)) for path in xlsx_files]
-    return render_template("import_result_id.html", active_page="import", results=results)
+    saved = [(os.path.basename(path), path) for path in xlsx_files]
+    return _submit("id_files", f"ID files from {folder} ({len(saved)} file(s))",
+                   lambda: _run_id_files(saved, import_id_file, "unknown", performed_by, remove=False))
 
 
 @bp.route("/result")

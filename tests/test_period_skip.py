@@ -36,7 +36,7 @@ def _report(label: str, serial_prefix: str) -> bytes:
 class PeriodSkipTests(unittest.TestCase):
     def setUp(self):
         os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_periodskip_")
-        self.app = create_app()
+        self.app = create_app(csrf=False)
         self.client = self.app.test_client()
         conn = get_connection()
         try:

@@ -32,7 +32,7 @@ def item(no, name, ref, cls, serial, status="20-Broken", remark="Disposal", gad=
 class DisposalCheckTests(unittest.TestCase):
     def setUp(self):
         os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_disposal_")
-        self.app = create_app()
+        self.app = create_app(csrf=False)
         self.client = self.app.test_client()
         conn = get_connection()
         try:

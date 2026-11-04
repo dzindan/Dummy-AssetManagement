@@ -18,7 +18,7 @@ from app.db import get_connection  # noqa: E402
 class DeleteSyncTests(unittest.TestCase):
     def setUp(self):
         os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_delsync_")
-        self.app = create_app()
+        self.app = create_app(csrf=False)
         self.client = self.app.test_client()
         conn = get_connection()
         try:

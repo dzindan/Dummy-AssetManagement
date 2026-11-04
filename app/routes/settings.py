@@ -13,7 +13,7 @@ from ..auth import (
     require_permission,
     set_security_question,
 )
-from ..cucm import CUCM_SETTING_KEYS, get_cucm_config
+from ..cucm import CUCM_SETTING_KEYS, cert_pin, forget_cert_pin, get_cucm_config
 from ..db import (
     backfill_unmapped,
     get_connection,
@@ -33,7 +33,7 @@ from ..importer import (
     record_unmapped_status,
     reresolve_unresolved_assets,
 )
-from ..paths import get_app_data_dir, get_default_app_data_dir, set_app_data_dir
+from ..paths import get_app_data_dir, get_default_app_data_dir, is_server_mode, set_app_data_dir
 from ..queries import UNIT_GROUP_LABELS, auto_unit_group_sql, unit_group_sql
 
 bp = Blueprint("settings", __name__, url_prefix="/settings")
@@ -138,8 +138,55 @@ def index():
         default_data_dir=get_default_app_data_dir(),
         lan_url=current_app.config.get("LAN_URL", ""),
         reset_imported_data_options=RESET_IMPORTED_DATA_OPTIONS,
-        cucm_config=get_cucm_config(),
+        # the AXL password never goes back to the browser - only whether one is saved
+        cucm_config={**get_cucm_config(), "axlpassword": ""},
+        cucm_password_set=bool(get_cucm_config()["axlpassword"]),
+        cucm_cert=cert_pin(),
+        backup_info=_backup_info(),
     )
+
+
+def _backup_info() -> dict | None:
+    """The central server's backups (app/backup.py) - None on the desktop."""
+    config = current_app.config.get("SERVER_CONFIG")
+    if not is_server_mode() or not config:
+        return None
+    from .. import backup
+
+    folder = config.get("backup_dir") or backup.default_dir(config["data_dir"])
+    status = backup.read_status(config["data_dir"])
+    return {"folder": folder, "time": config["backup_time"], "keep": config["backup_keep"],
+            "same_disk": not config.get("backup_dir"),
+            "last_ok_at": (status.get("last_ok_at") or "").replace("T", " "),
+            "last_ok_kind": status.get("last_ok_kind", ""),
+            "last_error": status.get("last_error", ""),
+            "last_error_at": (status.get("last_error_at") or "").replace("T", " "),
+            "list": backup.list_backups_cached(folder)[:15]}
+
+
+@bp.route("/backup-now", methods=["POST"])
+@require_permission("manage_settings")
+def backup_now():
+    config = current_app.config.get("SERVER_CONFIG")
+    if not is_server_mode() or not config:
+        flash("Backups are made by the central server - on this PC, copy the data folder instead.", "error")
+        return redirect(url_for("settings.index") + "#backups")
+    from .. import backup
+
+    try:
+        result = backup.run_backup(config, "manual", by=current_username())
+    except Exception as e:  # noqa: BLE001 - shown, and in the server log
+        flash(f"Backup failed: {e}", "error")
+        return redirect(url_for("settings.index") + "#backups")
+    conn = get_connection()
+    try:
+        log_activity(conn, "settings", "Backed up the database", performed_by=current_username(),
+                     target=os.path.basename(result["path"]))
+        conn.commit()
+    finally:
+        conn.close()
+    flash(f"Backup saved: {result['path']} ({result['size'] / 1048576:.1f} MB).", "success")
+    return redirect(url_for("settings.index") + "#backups")
 
 
 @bp.route("/account/security-question", methods=["POST"])
@@ -164,6 +211,22 @@ def set_security_question_route():
     return redirect(url_for("settings.index") + "#my-account")
 
 
+# Folders of the PC running the app - meaningless on the central server
+# (import_data.py's folder import is off there too).
+SERVER_HIDDEN_SETTINGS = {"asset_reports_folder", "id_files_folder"}
+
+
+def _desktop_only():
+    """None on the PC running the app; on the central server the redirect
+    saying why not - its data folder is set in server.json, and nobody
+    sits at the server to see a folder opened."""
+    if not is_server_mode():
+        return None
+    flash("Not on the central server: its data folder is set in server.json on the server "
+          "(AssetManagementTool.exe init-server --data-dir ...).", "error")
+    return redirect(url_for("settings.index"))
+
+
 GENERAL_SETTINGS_FIELDS = [
     ("ict_rep_name", True),
     ("ict_rep_id", True),
@@ -179,6 +242,8 @@ def save_general():
     conn = get_connection()
     try:
         for key, uppercase in GENERAL_SETTINGS_FIELDS:
+            if is_server_mode() and key in SERVER_HIDDEN_SETTINGS:
+                continue  # not on the page there (a folder of the server, not of the person's PC)
             new_value = request.form.get(key, "").strip()
             if uppercase:
                 new_value = new_value.upper()
@@ -203,10 +268,13 @@ def save_cucm():
     performed_by = current_username()
     conn = get_connection()
     try:
+        old_ip = get_setting_on(conn, "cucm_ip", "") or ""
         for key in CUCM_SETTING_KEYS:
             new_value = request.form.get(key, "").strip()
             setting_key = f"cucm_{key}"
             old_value = get_setting_on(conn, setting_key, "")
+            if key == "axlpassword" and not new_value:
+                continue  # left blank = keep the saved password (the page never shows it)
             if new_value != old_value:
                 # Never write the actual AXL password into the audit trail -
                 # only that it changed, unlike every other setting here.
@@ -217,6 +285,12 @@ def save_cucm():
                 log_activity(conn, "settings", "Updated setting", performed_by=performed_by,
                              target=setting_key, field=setting_key, old_value=logged_old, new_value=logged_new)
             set_setting_on(conn, setting_key, new_value)
+        new_ip = request.form.get("ip", "").strip()
+        if request.form.get("forget_cert") or new_ip != old_ip:
+            if cert_pin()["sha256"]:
+                log_activity(conn, "settings", "Forgot CUCM's trusted certificate", performed_by=performed_by,
+                             target=new_ip, field="cucm_cert_sha256", old_value=cert_pin()["sha256"], new_value="")
+            forget_cert_pin(conn)  # the next scan trusts the certificate CUCM shows then
         conn.commit()
     finally:
         conn.close()
@@ -971,6 +1045,9 @@ def unmap_device_alias():
 @bp.route("/open-data-folder", methods=["POST"])
 @require_permission("manage_settings")
 def open_data_folder():
+    refused = _desktop_only()
+    if refused:
+        return refused
     path = get_app_data_dir()
     try:
         if sys.platform == "win32":
@@ -1018,6 +1095,9 @@ def _move_with_retry(src: str, dest: str, attempts: int = 5, delay: float = 0.3)
 @bp.route("/data-location", methods=["POST"])
 @require_permission("manage_settings")
 def change_data_location():
+    refused = _desktop_only()
+    if refused:
+        return refused
     new_dir = request.form.get("new_data_dir", "").strip()
     if not new_dir:
         flash("Enter a folder path.", "error")
@@ -1115,6 +1195,9 @@ def change_data_location():
 @bp.route("/data-location/reset", methods=["POST"])
 @require_permission("manage_settings")
 def reset_data_location():
+    refused = _desktop_only()
+    if refused:
+        return refused
     old_dir = get_app_data_dir()
     default_dir = get_default_app_data_dir()
     set_app_data_dir(default_dir)
@@ -1149,6 +1232,11 @@ RESET_IMPORTED_DATA_OPTIONS = {
 @bp.route("/reset-imported-data", methods=["POST"])
 @require_permission("manage_settings")
 def reset_imported_data():
+    from ..jobs import runner
+
+    if runner.active():
+        flash("An import is running or waiting (Import Data) - reset the data after it's done.", "error")
+        return redirect(url_for("settings.index"))
     selected = [key for key in RESET_IMPORTED_DATA_OPTIONS if request.form.get(key)]
     if not selected:
         flash("Select at least one type of data to reset.", "error")

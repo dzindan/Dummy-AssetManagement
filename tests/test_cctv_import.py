@@ -2,7 +2,7 @@
 """Multi-sheet asset-report import + CCTV ingest verification.
 
 Follows the same isolated-DB pattern as tests/test_auth.py: override
-%LOCALAPPDATA% to a fresh temp directory before create_app(), so this test's
+%LOCALAPPDATA% to a fresh temp directory before create_app(csrf=False), so this test's
 database is a disposable throwaway, never the real one.
 
 Regression target: a monthly branch report workbook that packs a regular
@@ -27,7 +27,7 @@ from app.importer import detect_equipment_sheets, import_asset_report, reresolve
 
 def _fresh_app():
     os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_cctvtest_")
-    return create_app()
+    return create_app(csrf=False)
 
 
 def _build_two_sheet_workbook(path: str) -> None:

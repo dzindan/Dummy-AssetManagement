@@ -23,7 +23,7 @@ from app.routes.cctv_edit import EDITABLE_FIELDS as CCTV_EDITABLE_FIELDS  # noqa
 
 def _fresh_app():
     os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_cctvsynctest_")
-    return create_app()
+    return create_app(csrf=False)
 
 
 def _build_workbook(path: str) -> None:

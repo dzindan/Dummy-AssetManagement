@@ -10,14 +10,27 @@
   Update on that row to write the live-scanned value into the database, or use Update All / Ignore All below once
   you've reviewed every mismatch. <a href="{{ url_for('network_check.log') }}">View Update Log</a>
 </p>
+{% if server_mode %}
+<p class="muted">
+  Scans run <b>from the central server</b>, as <code>{{ scan_identity }}</code> - that account needs admin rights on
+  the PCs, and the server must reach them (same LAN/VPN, WMI/RPC not blocked by firewall). The scan keeps running if
+  you close this page; open Network Check again (from any PC) to see it. One scan per person at a time.
+</p>
+{% if other_scans %}
+<div class="flash flash-info">Also scanning now:
+  {% for o in other_scans %}{{ o.label }} ({{ o.owner }}, {{ o.done }}/{{ o.total }}, since {{ o.started_at.strftime("%H:%M") }}){{ "; " if not loop.last }}{% endfor %}
+</div>
+{% endif %}
+{% else %}
 <p class="muted">
   This only works for machines this app's computer can actually reach on the network (same LAN/VPN, WMI/RPC not
   blocked by firewall, and an account with admin rights on the target machines). A branch that can't be reached
   will simply show every IP as "No response" - that's a network/permissions issue, not a data problem.
 </p>
+{% endif %}
 
 <div class="panel">
-  <form id="scan-form">
+  <form id="scan-form" data-last-scan="{{ last_scan_id }}">
     <div class="field-row">
       <div>
         <label>Scan target</label>

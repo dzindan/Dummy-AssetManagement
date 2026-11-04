@@ -1604,6 +1604,317 @@ scanned PDFs into folders, instead of having someone read every form.
 
 ## 7. Running it
 
+### Central server (client/server - the way it's meant to run, 2026-11-02)
+
+One server holds the only database; everyone else just opens its address
+in a browser (nothing installed on their PCs). Decided with the user:
+SQLite stays (on the server's local disk), sign-in will be with AD
+accounts, Network Check / CUCM scan run from the server, ~5 people.
+
+On the server (once, from an elevated command prompt):
+
+```
+AssetManagementTool.exe init-server --data-dir D:\AMData [--port 8737]
+AssetManagementTool.exe make-cert
+AssetManagementTool.exe install-task --user DOMAIN\svc-am
+schtasks /Run /TN "Asset Management Tool"
+```
+
+- `init-server` writes `%ProgramData%\AssetManagementTool\server.json`
+  (`app/server_config.py`): `data_dir` (must be a local disk - never a
+  share: SQLite's live files aren't safe over SMB), `host`, `port`,
+  `threads`, `tls_cert`/`tls_key`. `--config <file>` / `AM_SERVER_CONFIG`
+  point at another file.
+- `serve` (`app/server.py`) runs the app under **cheroot** (a production
+  WSGI server, 8 threads) instead of Flask's development server - no
+  browser, no console needed, log in `<data_dir>\logs\server.log`
+  (rotated). `--no-console` = log file only (what the task runs).
+- In server mode **everything** lives in `data_dir`: `data.db`, `logs.db`,
+  `settings.json`, `local_settings.json` (secret_key), handovers, exports,
+  uploads. `%LOCALAPPDATA%`, `data_location.json` and Settings > Data
+  Storage Location play no part (`paths.use_server_data_dir`); an
+  unreachable data_dir is an error page, never a silent fallback to an
+  empty database elsewhere.
+- `install-task` registers the scheduled task "Asset Management Tool" (at
+  the server's start, as the given account - a domain service account, so
+  Network Check / CUCM scan reach other PCs as it; no time limit, restarts
+  3 times on failure) and an inbound firewall rule for the port (domain +
+  private profiles). `remove-task` deletes both.
+- `GET /health` (no login): `{"status": "ok", "version": ...}`, 503 when the
+  database can't be opened - for a monitoring check.
+- Uploads over the 64 MB limit are drained before the 413 page, so the
+  browser shows the message instead of "connection reset".
+
+#### AD sign-in (`app/winauth.py`, Settings > Users & Roles > AD sign-in)
+
+Set on the server the first time it runs (nothing hard-coded): on/off,
+the domain used for a bare "username", **the AD group whose members may
+use the app** (access is granted by group membership, like AAL / SG), and
+the role a new AD account starts with (Viewer by default). The account is
+made on its first sign-in (`accounts.auth_source = 'ad'`, `ad_sid`, no
+password stored - `password_hash` is the `"!ad"` marker no password ever
+matches); its role is then changed in the table as before. Taken out of
+the group = refused at the next sign-in; deactivated here = refused too.
+The app's own accounts keep working - keep one Admin among them in case
+AD is down.
+
+- **Windows sign-in (SSO)**: `/login` first sends the browser to `/sso`
+  once per visit; it answers `401 WWW-Authenticate: Negotiate`, the browser
+  sends the logged-on Windows user's Kerberos ticket (or NTLM, 2 rounds on
+  the same keep-alive connection - the handshake is kept per client
+  address + port, `winauth.NegotiateServer`), SSPI on the server checks it
+  and gives the token: user SID / name + all group SIDs (nested expanded).
+  A browser that can't (not a domain PC, site not in the Local intranet
+  zone) gets the 401 body, which links / refreshes to the form. After a
+  sign-out the form shows (no Windows sign-in straight back in).
+  For it to be silent on the clients: the address must be in the browsers'
+  **Local intranet** zone (a dotless name like `http://amserver:8737` is by
+  default; an FQDN needs the GPO "Site to Zone Assignment List"); for
+  Kerberos rather than NTLM register the SPN to the service account:
+  `setspn -S HTTP/amserver DOMAIN\svc-am` and `setspn -S HTTP/amserver.corp.local DOMAIN\svc-am`.
+- **The form**: `DOMAIN\user`, `user@domain` or `user` (+ the default
+  domain) with the AD password -> `LogonUser` (network logon) on the
+  server. A name that's an app account with an app password signs in the
+  old way; anything else goes to AD when AD sign-in is on.
+- Forgot-password / Reset password don't apply to AD accounts (their
+  password is the Windows one).
+- Tested for real on a workgroup PC (local Windows account through the same
+  SSPI path, group "Everyone"); never on the bank's domain yet.
+
+#### Security: HTTPS, CSRF, lockout (P4b, 2026-11-03)
+
+- **HTTPS with a self-signed certificate**: `AssetManagementTool.exe make-cert
+  [--names amserver,amserver.corp.local,10.0.0.5]` (or `init-server --https`),
+  `app/tls.py` + `server_config.make_self_signed`. Without `--names` the
+  certificate names this server's short name, FQDN, IPv4 addresses,
+  localhost (RSA 2048, SHA-256, 5 years). It writes, in
+  `%ProgramData%\AssetManagementTool\tls\`: `server.crt` / `server.key`
+  (set as `tls_cert`/`tls_key` in server.json; the key's ACL = Administrators,
+  SYSTEM, whoever made it, + the service account at `install-task`) and
+  `AssetManagementTool.cer`, which goes into the clients' **Trusted Root
+  Certification Authorities** (GPO: Computer Configuration > Policies >
+  Windows Settings > Security Settings > Public Key Policies, or on each PC
+  as admin `certutil -addstore Root AssetManagementTool.cer`) - otherwise
+  every browser warns "Not secure". Running it again makes a new pair (the
+  old one kept as `*.old`): the clients then need the new .cer. Restart the
+  server after. The log names the certificate and its SHA-256 at each start;
+  plain HTTP logs a warning. Clients use `https://amserver:8737` - `http://`
+  to that port is just a connection error.
+- Session cookie: `HttpOnly`, `SameSite=Lax`, and `Secure` over HTTPS
+  (`create_server_app`). Every response: `X-Frame-Options: SAMEORIGIN`,
+  `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`.
+- **CSRF** (`app/csrf.py`, `static/csrf.js`): a per-session token in
+  `<meta name="csrf-token">` of every page (base.html + the 3 standalone
+  pages); csrf.js adds it to every POST form (`csrf_token` field - also
+  forms built by script and `.submit()`ted) and every same-site non-GET
+  `fetch()` (`X-CSRF-Token` header). Any POST without it -> 400 ("reload and
+  try again", JSON for fetch). New templates/scripts need nothing extra;
+  only XMLHttpRequest isn't covered (none in the app). Tests post without a
+  page, so they use `create_app(csrf=False)`.
+- **Lockout** (`app/throttle.py`, in memory): 5 failed sign-ins for one name
+  (`CORP\nva` = `nva@corp` = `nva`) or 20 from one address within 15 min ->
+  refused for 15 min, even the right password - and an AD name isn't
+  passed to `LogonUser` meanwhile, so guessing here can't lock the person's
+  Windows account. Forgot password: 5 wrong answers per name, 10 name
+  look-ups per address (the question text can't be harvested). Failures are
+  logged to server.log.
+- **Sessions end when the password changes**: the session keeps a mark of
+  the password hash (`auth.session_account`); an admin's Reset password or
+  a Forgot-password reset signs out that account's other sessions (one's
+  own reset keeps one's own session).
+- **2026-09-22 audit fixes**: the CUCM AXL password is never sent to the
+  browser (blank field = keep it); **CUCM's certificate is pinned** instead
+  of TLS checks switched off process-wide - trusted on the first scan
+  (SHA-256 in settings `cucm_cert_sha256`, shown in Settings > CUCM
+  Connection), any other certificate refused with a clear message; "Trust
+  CUCM's new certificate" (or a new CUCM IP) forgets it. The diff report's
+  file name keeps only `[0-9A-Za-z_-]` from the period.
+
+#### Server mode pages: uploads, no desktop-only parts (P2, 2026-11-03)
+
+`server_mode` (`paths.is_server_mode()`) is in every template. On the
+central server:
+- **Files only come in by upload.** "Import all from folder" and Settings >
+  Default Import Folders (folders of the PC running the app) are left out,
+  `/import/from-folder` is refused, and save_general doesn't touch those two
+  settings. Instead every multi-file input marked `data-folder-pick`
+  (monthly asset reports, HO report, and the new "Import ID Files" form
+  `/import/id-files` - branch + user files together, each kind detected
+  from its header like the folder import) gets a **"Choose a folder…"**
+  button (`app.js`): the browser uploads the Excel files directly in the
+  picked folder - not its subfolders (last months' folders), not `~$`
+  Office lock files. The server also drops any non-Excel file
+  (`_excel_uploads`). Desktop mode keeps both ways.
+- Settings > Data Storage Location only shows the server's data folder (set
+  in server.json); Open Data Folder / Change Location / Reset to Default
+  are left out and their routes refused (`settings._desktop_only`). Share
+  With Other Computers shows the server's address. The "can't reach the
+  data folder" banner and the database error page talk about server.json.
+- **Fixed (both modes):** the duplicate-file / period-conflict confirmation
+  pages used to send back raw file paths that were then read and - for an
+  upload - **deleted** (`os.remove`), so anyone allowed to import could make
+  the app delete any file the account running it can. Now every path sent
+  back goes through `import_data._checked_path`: an upload's copy only by
+  its own random name (`<32 hex>.<ext>`) inside the uploads folder, a folder
+  import's file only directly inside the configured folder (and folder
+  imports don't exist on the server). The saved upload's extension is
+  sanitized too.
+
+#### Imports one at a time, in the background (P3, 2026-11-03)
+
+Every import (branch codes, user IDs, ID files, monthly asset reports - by
+upload, after the duplicate / period-conflict pages, or from the folder -
+HO report, Total Asset history) is a **job** (`app/jobs.py`): the request
+saves the uploads, runs the quick checks (duplicate content, period
+conflicts - still in the request, they need an answer), then hands the
+import itself to `jobs.runner` and redirects to `/import/jobs/<id>`.
+- One at a time, in order (`JobRunner._run_lock`): nobody's import
+  interleaves with another's, and every diff compares against a finished
+  state. On the central server (`IMPORT_JOBS_BACKGROUND`, set by
+  `create_server_app`) a worker thread runs them; the job page says
+  "Waiting to import…" (whose import is running, how many before yours) or
+  "Importing…", polls `/import/jobs/<id>/status` and then shows the usual
+  result (Cleaning Report / ID import result). On the desktop the job runs
+  inline in the request - same pages, no waiting.
+- What an import used to `flash()` is `jobs.notify()`: kept on the job and
+  flashed when its owner opens the result. An exception fails only that
+  job ("The import failed: ..." + the trace in server.log); the next one
+  runs. Temp upload copies are removed either way.
+- Only the job's owner sees it (others get 404); Import Data lists the
+  imports in progress for everyone. Jobs live in memory: a server restart
+  forgets them (Import History still has every finished import). Settings
+  > Reset Imported Data is refused while an import runs or waits.
+- Tried for real (server mode, 3 real monthly reports -> 6 batches): the
+  upload answers in ~5 s (the checks read each workbook), the import then
+  runs in the background.
+
+#### Scans from the server (P5)
+
+Network Check and CUCM Phone Scan run on the server, so the PCs/phones are
+reached from there, as the scheduled task's account (shown on the Network
+Check page: `scan_identity()`; it needs admin rights on the PCs).
+
+- **Network Check** already scanned in its own threads while the page
+  polls; now each scan has an `owner` (someone else's scan id answers 404
+  on status / stop / apply / export), **one running scan per person**
+  (409) and **`MAX_RUNNING_SCANS` = 3** at once (429) - each scan runs 20
+  ping/quser/PowerShell probes of its own. Finished scans are kept
+  (`KEEP_FINISHED_SCANS` = 30, at most 12 h) and the page reopens the
+  person's latest one from any PC (`data-last-scan`, used when the tab has
+  no saved scan of its own). Closing the page doesn't stop a scan. Other
+  people's running scans are listed on the page.
+- **CUCM Phone Scan** is a job on `jobs.cucm_runner` (a second JobRunner,
+  separate from imports): one at a time across the server - RisPort allows
+  only a few requests a minute, two auto-split scans at once would both
+  hit that. On the server (`CUCM_SCAN_BACKGROUND`) the Scan button
+  redirects to `/cucm-scan/jobs/<id>` (the import job page with scan
+  wording), which shows the result when done; on the desktop it runs in
+  the request as before. Results kept for Export are the owner's only, 30
+  at most. A background scan's result is only on its job page, so the CUCM
+  page links back to it: "yours, open" next to a running / waiting scan,
+  and "Your last scan" (`JobRunner.latest_done`) once it's finished.
+- `network_check_log.applied_by` (added by ALTER) records who clicked
+  Update, on both pages; the Update Log shows it.
+- Scans live in memory - a server restart forgets them (the log keeps every
+  applied update).
+
+#### Backups and restore (P6)
+
+`app/backup.py`. A backup is one zip,
+`AssetManagementTool_BACKUP_<date>_<time>_<kind>.zip`, holding `data.db` and
+`logs.db` (snapshots from SQLite's online backup API - consistent while
+people keep working, rows still only in `-wal` included, each one
+`PRAGMA integrity_check`ed and saved as a plain non-WAL file),
+`settings.json`, the files the database points to (`KEPT_FOLDERS`:
+`handovers/`, `exports/diff_reports/` = saved Diff Reports,
+`uploads/disposal_*` = Disposal Check originals) and `backup.json`
+(version, host, time and every table's row count).
+- It never holds `local_settings.json` (the server's secret key), the rest
+  of `exports/` (one-off downloads), or the rest of `uploads/` (workbooks
+  waiting for an import to be confirmed).
+- It does hold password hashes and settings.json's CUCM AXL password, so
+  the backup folder should be readable only by admins and the service
+  account.
+- The source is opened read-only (`?mode=ro`). It falls back to a normal
+  connection for a hot journal and for UNC paths, since SQLite refuses a
+  `file://server/` URI.
+- Work folders (`.backup-*` / `.restore-*`) and `.zip.part` files left over
+  by a killed run are removed by the next backup once they are 6 h old.
+- Settings lists the backup folder at most once a minute
+  (`list_backups_cached`), because an unreachable share can take seconds to
+  answer.
+- `handover_records.docx_path` and `diff_reports.file_path` store full
+  paths. Downloads therefore fall back to the same file name in today's
+  folder (`paths.find_moved_file`), which matters after a move to the
+  server or a Data Storage Location change.
+
+- server.json: `backup_dir` (empty = `<data_dir>\backups`; Settings warns
+  that a dead disk then takes both, so set another disk or a share:
+  `init-server ... --backup-dir \\fs01\AMBackup`), `backup_time` (default
+  `02:00`), `backup_keep` (default 14, **per kind**: nightly / manual /
+  pre-restore / pre-import / desktop).
+- `serve` starts `backup.Nightly`. It backs up every night at `backup_time`,
+  and also 2 minutes after the start when the newest backup is over 24 h
+  old (the server was off, or this is its first start). It waits in steps
+  of at most 5 minutes, so sleep and clock changes don't throw it off.
+  `stop()` ends it.
+- The outcome goes to `<data_dir>\backup_status.json`. **Settings > Data &
+  System > Backups** (server only, `#backups`) shows the folder, the
+  schedule, the last backup or last error, the newest 15 zips and a
+  **Back up now** button (manage_settings, logged in the Activity Log).
+- CLI: `backup` (works while the server runs), `backup --desktop --to
+  <folder>` (this PC's own data, any Data Storage Location), `list-backups`,
+  `restore --from <zip>`.
+- **Restore** only runs with the server stopped: it refuses when the port
+  answers. It first makes a `pre-restore` backup of what it replaces. It
+  then unpacks and checks the zip; entries outside data.db / logs.db /
+  settings.json / backup.json / handovers/ are skipped, and so is any `..`
+  path. Next it removes the old `-wal`/`-shm`, swaps the files in, merges
+  `handovers/`, runs `init_db()` (this version's columns and fix-ups) and
+  prints the row-count comparison.
+- A damaged source is refused before anything changes. If the swap fails,
+  the message says whether anything was already replaced; when something
+  was, it names the `restore --from <pre-restore zip>` that undoes it.
+
+#### Moving the current database onto the server (P7)
+
+`import-desktop-data --from <source>`. The source is a backup zip (`backup
+--desktop`), an old `AssetManagementTool_DATA_*.zip` (the same files at the
+top; its instructions text is ignored), or a data folder
+(`%LOCALAPPDATA%\AssetManagementTool` or a copy of one, snapshotted the same
+way). It works like restore, with two differences:
+
+- It refuses when the server already has assets, CCTV rows, hand-overs or
+  imports, unless `--replace` is given. A `pre-import` backup is still made
+  first.
+- `backup.reconcile()` compares row counts table by table and must match,
+  except for the tables the app makes again by itself (`REBUILT_TABLES`:
+  roles/permissions, the `*_unmapped` lists, `branch_unresolved`,
+  `sqlite_sequence`). logs.db may only grow. A mismatch exits with code 3.
+- The server's own AD sign-in settings (`SERVER_SETTING_KEYS`, which live
+  in settings.json) are kept over the PC's. AD accounts the server made
+  before are replaced along with its old data and are made again at first
+  sign-in.
+
+Steps:
+1. On the PC, close the app and run `AssetManagementTool.exe backup
+   --desktop --to D:\Temp`.
+2. Copy the zip to the server; it holds the bank's data, so keep it where
+   the data folder may be.
+3. On the server, run `schtasks /End /TN "Asset Management Tool"`, then
+   `AssetManagementTool.exe import-desktop-data --from <zip>`, then
+   `schtasks /Run ...`.
+4. Sign in with the PC's local account; AD accounts are made on first
+   sign-in. Re-enter nothing: the folder settings are desktop-only.
+
+Tried 2026-11-03 with the real desktop data, into a temp server folder
+(deleted afterwards):
+- Every table matched: 140,120 asset rows, 957 CCTV rows, 7,947 users,
+  1,471 batches, 3,678 import-log rows. It took ~6 s.
+- The source data.db was unchanged (same md5).
+- `serve` then answered /health. A `backup` made while it ran gave 10.4 MB,
+  and `restore` was refused because the port answered.
+
 ### Single computer
 
 Just run `AssetManagementTool.exe` (or `python main.py` from source). It

@@ -16,7 +16,7 @@ from docx.shared import Mm, Pt
 from docxtpl import DocxTemplate
 
 from .db import get_connection, log_activity
-from .paths import get_handover_template_path, get_handovers_dir
+from .paths import find_moved_file, get_handover_template_path, get_handovers_dir
 
 # ASSIGNMENT/TEMP hand equipment OUT to the employee; RETURN gets it back IN.
 # The (Hand Over)/(Receive) suffixes make that direction explicit in the UI
@@ -118,6 +118,12 @@ def resolve_ho_date(ho_date: str | None) -> dt.date:
         except ValueError:
             pass
     return dt.date.today()
+
+
+def resolve_docx_path(stored: str | None) -> str | None:
+    """The saved form's file, or None - also after the data folder moved
+    (paths.find_moved_file)."""
+    return find_moved_file(stored, get_handovers_dir())
 
 
 def render_handover_docx(data: dict, record_id: int) -> str:

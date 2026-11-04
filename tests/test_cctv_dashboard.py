@@ -23,7 +23,7 @@ from app.importer import import_asset_report  # noqa: E402
 
 def _fresh_app():
     os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_cctvdashtest_")
-    return create_app()
+    return create_app(csrf=False)
 
 
 def _build_cctv_workbook(path: str, branch_name: str) -> None:

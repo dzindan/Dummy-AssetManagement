@@ -800,12 +800,27 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE accounts ADD COLUMN security_question_key TEXT")
     if "security_answer_hash" not in existing_account_cols:
         conn.execute("ALTER TABLE accounts ADD COLUMN security_answer_hash TEXT")
+    # AD sign-in (winauth.py, 2026-11-02): 'local' = this app's own password,
+    # 'ad' = Windows checks it (no password stored); ad_sid ties the account
+    # to the AD user even when their name changes.
+    if "auth_source" not in existing_account_cols:
+        conn.execute("ALTER TABLE accounts ADD COLUMN auth_source TEXT NOT NULL DEFAULT 'local'")
+    if "ad_sid" not in existing_account_cols:
+        conn.execute("ALTER TABLE accounts ADD COLUMN ad_sid TEXT")
 
     existing_import_log_cols = {
         row["name"] for row in conn.execute("PRAGMA logsdb.table_info(import_log)").fetchall()
     }
     if "imported_by" not in existing_import_log_cols:
         conn.execute("ALTER TABLE logsdb.import_log ADD COLUMN imported_by TEXT")
+    # Who clicked Update (Network Check / CUCM scan) - with several people on
+    # the central server the log has to say. Only by ALTER (not in the
+    # CREATE above), so the old app.db split's `SELECT *` copy still fits.
+    existing_nc_log_cols = {
+        row["name"] for row in conn.execute("PRAGMA logsdb.table_info(network_check_log)").fetchall()
+    }
+    if "applied_by" not in existing_nc_log_cols:
+        conn.execute("ALTER TABLE logsdb.network_check_log ADD COLUMN applied_by TEXT")
 
     existing_handover_cols = {row["name"] for row in conn.execute("PRAGMA table_info(handover_records)").fetchall()}
     if "created_by" not in existing_handover_cols:

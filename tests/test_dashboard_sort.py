@@ -43,7 +43,7 @@ class SortFunctionTests(unittest.TestCase):
 class DashboardSortRouteTests(unittest.TestCase):
     def setUp(self):
         os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_dashsort_")
-        self.app = create_app()
+        self.app = create_app(csrf=False)
         self.client = self.app.test_client()
         tmp = tempfile.mkdtemp(prefix="am_dashsort_files_")
         conn = get_connection()

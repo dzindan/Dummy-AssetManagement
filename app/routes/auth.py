@@ -1,20 +1,28 @@
-from flask import Blueprint, flash, redirect, render_template, request, session, url_for
+import logging
+
+from flask import Blueprint, Response, flash, redirect, render_template, request, session, url_for
 
 from ..auth import (
     SECURITY_QUESTIONS_BY_KEY,
+    SignInRefused,
+    ad_settings,
+    ad_sign_in_on,
+    sign_in_ad,
     accounts_table_is_empty,
     create_account,
     find_account_by_username,
     hash_password,
-    load_active_account,
     login_account,
     logout_account,
+    session_account,
     verify_password,
     verify_security_answer,
 )
+from .. import throttle
 from ..db import get_connection
 
 bp = Blueprint("auth", __name__)
+log = logging.getLogger(__name__)
 
 
 def _safe_next(next_url: str) -> str:
@@ -32,18 +40,100 @@ def login():
         return redirect(url_for("auth.setup"))
 
     next_url = request.values.get("next", "")
-    if load_active_account(session.get("account_id")) is not None:
+    if session_account() is not None:
         return redirect(_safe_next(next_url))
+    ad_on = ad_sign_in_on()
+    # Windows sign-in first, once per visit: a domain PC signs in with no typing
+    if (request.method == "GET" and ad_on and not request.args.get("form")
+            and not session.get("sso_tried")):
+        return redirect(url_for("auth.sso", next=next_url))
+
+    def form(status=200):
+        return render_template("login.html", next_url=next_url, ad=ad_settings(), ad_on=ad_on), status
+
     if request.method == "POST":
         username = request.form.get("username", "")
         password = request.form.get("password", "")
+        name, address = throttle.name_key(username), request.remote_addr or ""
+        wait = max(throttle.sign_in_by_name.wait_seconds(name), throttle.sign_in_by_address.wait_seconds(address))
+        if wait:
+            # not even checked: no guess counts, and an AD account isn't locked in Windows through here
+            flash(throttle.wait_message(wait), "error")
+            return form(429)
         account = find_account_by_username(username)
-        if account and account["is_active"] and verify_password(password, account["password_hash"]):
+        local = account is not None and (account["auth_source"] or "local") == "local"
+        if local and account["is_active"] and verify_password(password, account["password_hash"]):
+            throttle.sign_in_by_name.clear(name)
             login_account(account["id"])
             return redirect(_safe_next(next_url))
-        flash("Incorrect username or password.", "error")
+        message = "Incorrect username or password."
+        if ad_on and not local:
+            from .. import winauth
+            try:
+                identity = winauth.logon(username, password, ad_settings()["domain"])
+            except winauth.AuthError as e:
+                message = str(e)
+            else:
+                throttle.sign_in_by_name.clear(name)
+                try:
+                    login_account(sign_in_ad(identity))
+                    return redirect(_safe_next(next_url))
+                except SignInRefused as e:
+                    flash(str(e), "error")
+                    return form()
+        locked = throttle.sign_in_by_name.fail(name) | throttle.sign_in_by_address.fail(address)
+        log.warning("Failed sign-in as %r from %s%s", username, address, " - now locked for a while" if locked else "")
+        flash(throttle.wait_message(throttle.LOCK) if locked else message, "error")
+        return form(429 if locked else 200)
 
-    return render_template("login.html", next_url=next_url)
+    return form()
+
+
+@bp.route("/sso")
+def sso():
+    """Windows sign-in: answer the browser's Negotiate (Kerberos / NTLM)
+    handshake. A browser that can't (not a domain PC, the site not in its
+    Local intranet zone) lands back on the form."""
+    from .. import winauth
+
+    next_url = request.args.get("next", "")
+    session["sso_tried"] = True
+    form_url = url_for("auth.login", next=next_url, form=1)
+    if not ad_sign_in_on():
+        return redirect(form_url)
+    header = request.headers.get("Authorization", "")
+
+    def challenge(token: str = "", note: str = ""):
+        # the body only shows when the browser gives up (no Windows sign-in)
+        from markupsafe import escape
+
+        url = escape(form_url)
+        body = (f'<!doctype html><meta http-equiv="refresh" content="0;url={url}">'
+                f'<p>{escape(note or "Windows sign-in is not available here.")} '
+                f'<a href="{url}">Sign in with your AD username and password</a>.</p>')
+        resp = Response(body, status=401, mimetype="text/html")
+        resp.headers["WWW-Authenticate"] = f"Negotiate {token}".strip()
+        return resp
+
+    if not header.lower().startswith("negotiate "):
+        return challenge()
+    connection = (request.environ.get("REMOTE_ADDR"), request.environ.get("REMOTE_PORT"))
+    try:
+        identity, token = winauth.negotiate.step(connection, header)
+    except winauth.AuthError as e:
+        flash(f"{e} - sign in with your AD username and password.", "error")
+        return redirect(form_url)
+    if identity is None:
+        return challenge(token)  # NTLM: one more round on this connection
+    try:
+        login_account(sign_in_ad(identity))
+    except SignInRefused as e:
+        flash(str(e), "error")
+        return redirect(form_url)
+    resp = redirect(_safe_next(next_url))
+    if token:
+        resp.headers["WWW-Authenticate"] = f"Negotiate {token}"
+    return resp
 
 
 @bp.route("/forgot-password", methods=["GET", "POST"])
@@ -69,12 +159,26 @@ def forgot_password():
         confirm = request.form.get("confirm", "")
 
         account = find_account_by_username(username)
+        if account and (account["auth_source"] or "local") == "ad":
+            flash("This is an AD account: its password is your Windows password - change it in Windows.", "error")
+            return redirect(url_for("auth.login", form=1))
         # Same generic message whether the username doesn't exist, isn't
         # active, has no security question set, or the answer just doesn't
         # match - doesn't hint to an attacker which of those is true.
+        name = throttle.name_key(username)
+        wait = throttle.reset_by_name.wait_seconds(name)
+        if wait:
+            flash(throttle.wait_message(wait), "error")
+            return redirect(url_for("auth.login", form=1))
         error = "Username or answer is incorrect."
         if account and account["is_active"] and verify_security_answer(account, answer):
             error = None
+            throttle.reset_by_name.clear(name)
+        else:
+            if throttle.reset_by_name.fail(name):
+                log.warning("Forgot password: too many wrong answers for %r from %s", username, request.remote_addr)
+                flash(throttle.wait_message(throttle.LOCK), "error")
+                return redirect(url_for("auth.login", form=1))
         if error is None and password != confirm:
             error = "Passwords do not match."
         elif error is None and len(password) < 8:
@@ -102,6 +206,12 @@ def forgot_password():
     username = request.args.get("username", "").strip()
     question_text = None
     if username:
+        # which names exist (and their question) can't be listed by trying many
+        address = request.remote_addr or ""
+        wait = throttle.reset_lookups_by_address.wait_seconds(address)
+        if wait or throttle.reset_lookups_by_address.fail(address):
+            flash(throttle.wait_message(wait or throttle.LOCK), "error")
+            return render_template("forgot_password.html", username="", question_text=None), 429
         account = find_account_by_username(username)
         if account and account["is_active"] and account["security_question_key"]:
             question_text = SECURITY_QUESTIONS_BY_KEY.get(account["security_question_key"])
@@ -115,6 +225,8 @@ def forgot_password():
 @bp.route("/logout", methods=["POST"])
 def logout():
     logout_account()
+    # signed out on purpose: no Windows sign-in straight back in (another account may sign in)
+    session["sso_tried"] = True
     return redirect(url_for("auth.login"))
 
 

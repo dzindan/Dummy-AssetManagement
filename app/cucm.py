@@ -10,23 +10,29 @@ config file, so they're editable from Settings like everything else here.
 
 from __future__ import annotations
 
+import datetime as dt
+import hashlib
 import re
 import ssl
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from requests import Session
+from requests.adapters import HTTPAdapter
 from requests.auth import HTTPBasicAuth
-from urllib3 import disable_warnings
-from urllib3.exceptions import InsecureRequestWarning
 from zeep import Client
 from zeep.cache import SqliteCache
 from zeep.transports import Transport
 
-from .db import get_connection, get_setting_on
+from .db import get_connection, get_setting_on, log_activity, set_setting_on
 
-ssl._create_default_https_context = ssl._create_unverified_context
-disable_warnings(InsecureRequestWarning)
+CUCM_PORT = 8443
+# CUCM's own certificate, trusted on the first scan (CUCM's is usually
+# self-signed, so no CA can vouch for it): its SHA-256, checked on every
+# connection after - a different certificate (someone in the middle) is
+# refused. Settings > CUCM Connection shows it and can forget it (renewed).
+CERT_PIN_KEY = "cucm_cert_sha256"
+CERT_PIN_AT_KEY = "cucm_cert_trusted_at"
 
 # Fallback number-mask prefixes for the auto-split scan (see
 # scan_phones_autosplit) when nothing's configured yet - splitting by
@@ -71,6 +77,69 @@ class CucmNotConfigured(Exception):
     WSDL URL when nobody's filled in Settings > CUCM Connection yet."""
 
 
+class CucmCertificateChanged(Exception):
+    pass
+
+
+def server_cert_sha256(host: str, port: int = CUCM_PORT, timeout: float = 5) -> str:
+    """The SHA-256 of the certificate the server shows (not checked against any CA)."""
+    pem = ssl.get_server_certificate((host, port), timeout=timeout)
+    return hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest()
+
+
+class _PinnedAdapter(HTTPAdapter):
+    """HTTPS that accepts exactly one certificate, by its SHA-256 (no CA chain)."""
+
+    def __init__(self, sha256: str):
+        self._sha256 = sha256
+        super().__init__()
+
+    def init_poolmanager(self, *args, **kwargs):
+        kwargs["assert_fingerprint"] = self._sha256
+        return super().init_poolmanager(*args, **kwargs)
+
+    def send(self, request, **kwargs):
+        kwargs["verify"] = False  # the fingerprint is the check
+        return super().send(request, **kwargs)
+
+
+def cert_pin() -> dict:
+    conn = get_connection()
+    try:
+        return {"sha256": get_setting_on(conn, CERT_PIN_KEY, "") or "",
+                "trusted_at": get_setting_on(conn, CERT_PIN_AT_KEY, "") or ""}
+    finally:
+        conn.close()
+
+
+def forget_cert_pin(conn) -> None:
+    set_setting_on(conn, CERT_PIN_KEY, "")
+    set_setting_on(conn, CERT_PIN_AT_KEY, "")
+
+
+def pinned_session(host: str, port: int = CUCM_PORT) -> Session:
+    """A requests session for CUCM: its certificate trusted on first use, then pinned."""
+    pin = cert_pin()["sha256"]
+    if not pin:
+        pin = server_cert_sha256(host, port)
+        conn = get_connection()
+        try:
+            set_setting_on(conn, CERT_PIN_KEY, pin)
+            set_setting_on(conn, CERT_PIN_AT_KEY, dt.datetime.now().strftime("%Y-%m-%d %H:%M"))
+            log_activity(conn, "settings", "Trusted CUCM's certificate", performed_by="",
+                         target=host, field=CERT_PIN_KEY, old_value="", new_value=pin)
+            conn.commit()
+        finally:
+            conn.close()
+    session = Session()
+    session.mount(f"https://{host}:{port}/", _PinnedAdapter(pin))
+    return session
+
+
+def _cert_changed(exc: Exception) -> bool:
+    return "fingerprints did not match" in str(exc).lower()
+
+
 # Get phones info from cucm
 def cucm_rt_phones(model=255, name="", num="", ip="", max=1000):
     config = get_cucm_config()
@@ -101,18 +170,27 @@ def cucm_rt_phones(model=255, name="", num="", ip="", max=1000):
         "SelectBy": SelectBy,
         "SelectItems": SelectItems,
     }
-    session = Session()
-    session.verify = False
-    session.auth = HTTPBasicAuth(axluser, axlpassword)
-    transport = Transport(cache=SqliteCache(), session=session, timeout=5)
-    client = Client(wsdl=riswsdl, transport=transport)
-    client.service._binding_options["address"] = f"https://{cucmhost}:8443/realtimeservice2/services/RISService70"
+    try:
+        session = pinned_session(cucmhost)
+        session.auth = HTTPBasicAuth(axluser, axlpassword)
+        transport = Transport(cache=SqliteCache(), session=session, timeout=5)
+        client = Client(wsdl=riswsdl, transport=transport)
+        client.service._binding_options["address"] = (
+            f"https://{cucmhost}:{CUCM_PORT}/realtimeservice2/services/RISService70")
 
-    # A Fault here (bad credentials, wrong CUCM IP, unreachable server...)
-    # is left to propagate rather than swallowed into an empty list - the
-    # route layer (cucm_scan.py) turns it into a visible error message, so
-    # "wrong password" doesn't look identical to "no phones match".
-    resp = client.service.selectCmDevice(CmSelectionCriteria=CmSelectionCriteria, StateInfo=StateInfo)
+        # A Fault here (bad credentials, wrong CUCM IP, unreachable server...)
+        # is left to propagate rather than swallowed into an empty list - the
+        # route layer (cucm_scan.py) turns it into a visible error message, so
+        # "wrong password" doesn't look identical to "no phones match".
+        resp = client.service.selectCmDevice(CmSelectionCriteria=CmSelectionCriteria, StateInfo=StateInfo)
+    except requests.exceptions.SSLError as e:
+        if _cert_changed(e):
+            raise CucmCertificateChanged(
+                f"CUCM ({cucmhost}) showed a different certificate from the one trusted on "
+                f"{cert_pin()['trusted_at'] or 'the first scan'} - nothing was sent. If CUCM's certificate "
+                "was renewed, tick \"Trust CUCM's new certificate\" in Settings > CUCM Connection; "
+                "otherwise tell IT security (someone may be intercepting the connection).") from None
+        raise
     result = resp["SelectCmDeviceResult"]["CmNodes"]["item"]
     out = []
     for node in result:

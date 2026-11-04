@@ -9,6 +9,19 @@
   <a href="{{ url_for('asset_edit.duplicates') }}">Check Duplicates</a>
 </p>
 
+{% if active_jobs %}
+<div class="panel">
+  <h2>Imports in progress</h2>
+  <p class="muted">Imports run one at a time; a new one waits for these.</p>
+  <ul>
+    {% for j in active_jobs %}
+    <li>{{ "Importing" if j.status == "running" else "Waiting" }}: {{ j.label }} - {{ j.owner }}
+      {% if j.owner == current_account.username %}(<a href="{{ url_for('import_data.job', job_id=j.id) }}">yours - open</a>){% endif %}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
 <div class="grid grid-2">
   <div class="panel">
     <h2>1. Branch Codes</h2>
@@ -45,6 +58,15 @@
     <button type="submit" class="secondary">Import all ID files from folder: {{ id_files_folder }}</button>
   </form>
 </div>
+{% else %}
+<div class="panel">
+  <p class="muted">Or import branch &amp; user files together - e.g. the whole <code>IDFromAither</code> folder
+    (the kind of each file is detected from its header):</p>
+  <form method="post" action="{{ url_for('import_data.upload_id_files_auto') }}" enctype="multipart/form-data">
+    <input type="file" id="id-files" name="files" accept=".xlsx" multiple required data-folder-pick>
+    <button type="submit" class="secondary">Import ID Files</button>
+  </form>
+</div>
 {% endif %}
 
 <div class="grid grid-2">
@@ -54,7 +76,7 @@
       <a href="{{ url_for('import_data.template_asset_report') }}">Download Template</a></p>
     <form method="post" action="{{ url_for('import_data.upload_asset_reports') }}" enctype="multipart/form-data">
       <label for="asset-files">Excel files</label>
-      <input type="file" id="asset-files" name="files" accept=".xlsx" multiple required>
+      <input type="file" id="asset-files" name="files" accept=".xlsx" multiple required data-folder-pick>
       <label for="asset-period">Reporting month</label>
       <input type="month" id="asset-period" name="period" value="{{ current_month }}">
       <button type="submit">Import &amp; Compare</button>
@@ -74,7 +96,7 @@
     <p class="muted">The Head Office consolidated <code>Monthly Report ddmmyyyy.xlsx</code> ("Equipment list detail" sheet). Each row goes to the unit of its User ID (User IDs list), else its Dept / BRANCH / DEPT column; one batch per unit. Kept apart from the units' own monthly reports: neither ever replaces the other's data. Rows of a unit that sends its own monthly report are left out. Branch reports are refused here.</p>
     <form method="post" action="{{ url_for('import_data.upload_ho_reports') }}" enctype="multipart/form-data">
       <label for="ho-files">Excel file(s)</label>
-      <input type="file" id="ho-files" name="files" accept=".xlsx" multiple required>
+      <input type="file" id="ho-files" name="files" accept=".xlsx" multiple required data-folder-pick>
       <label for="ho-period">Reporting month <span class="muted">(blank = from the date in the file name)</span></label>
       <input type="month" id="ho-period" name="period">
       <button type="submit">Import HO Report</button>
@@ -94,5 +116,5 @@
   </div>
 </div>
 
-<p class="muted">Tip: set default import folders and manage device/branch name aliases on the <a href="{{ url_for('settings.index') }}">Settings</a> page.</p>
+<p class="muted">Tip: {% if not server_mode %}set default import folders and {% endif %}manage device/branch name aliases on the <a href="{{ url_for('settings.index') }}">Settings</a> page.</p>
 {% endblock %}

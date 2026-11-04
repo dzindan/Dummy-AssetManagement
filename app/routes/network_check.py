@@ -21,13 +21,16 @@ original standalone scanner.
 
 from __future__ import annotations
 
+import datetime as dt
+import getpass
+import os
 import re
 import threading
 import uuid
 
 from flask import Blueprint, jsonify, render_template, request
 
-from ..auth import require_permission
+from ..auth import current_username, require_permission
 from ..db import get_connection
 from ..exports import build_workbook, dated_download_name, match_text, send_workbook
 from ..paths import safe_filename
@@ -38,6 +41,69 @@ bp = Blueprint("network_check", __name__, url_prefix="/network-check")
 
 _SCANS: dict[str, dict] = {}
 _LOCK = threading.Lock()
+
+# On the central server several people scan from the one machine: each
+# scan is its owner's (someone else's scan id answers 404, like an import
+# job), one running scan per person, and a few at most at once - each one
+# runs DEFAULT_CONCURRENCY probes (ping/quser/PowerShell processes) of
+# its own. Finished scans are kept a while for their page / Export.
+MAX_RUNNING_SCANS = 3
+KEEP_FINISHED_SCANS = 30
+KEEP_FINISHED_FOR = dt.timedelta(hours=12)
+
+
+def reset_scans() -> None:
+    with _LOCK:
+        for state in _SCANS.values():
+            state["stop_requested"] = True
+        _SCANS.clear()
+
+
+def _running(state: dict) -> bool:
+    return not state["worker_done"]
+
+
+def _trim_scans() -> None:
+    """Forget the oldest finished scans (call with _LOCK held)."""
+    now = dt.datetime.now()
+    finished = [(sid, st) for sid, st in _SCANS.items() if not _running(st)]
+    finished.sort(key=lambda kv: kv[1]["finished_at"] or kv[1]["started_at"])
+    extra = max(0, len(finished) - KEEP_FINISHED_SCANS)
+    for i, (sid, st) in enumerate(finished):
+        if i < extra or now - (st["finished_at"] or st["started_at"]) > KEEP_FINISHED_FOR:
+            del _SCANS[sid]
+
+
+def _own_scan(scan_id: str) -> dict | None:
+    """This person's scan (call with _LOCK held), else None."""
+    state = _SCANS.get(scan_id)
+    if state is None or state["owner"] != current_username():
+        return None
+    return state
+
+
+def scan_identity() -> str:
+    """The Windows account the probes run as - on the server, the
+    scheduled task's service account; it needs admin rights on the PCs."""
+    domain = os.environ.get("USERDOMAIN", "")
+    user = getpass.getuser()
+    return f"{domain}\\{user}" if domain else user
+
+
+def running_scans() -> list[dict]:
+    with _LOCK:
+        return [{"owner": st["owner"], "label": st["branch_label"], "done": st["done"],
+                 "total": st["total"], "started_at": st["started_at"]}
+                for st in _SCANS.values() if _running(st)]
+
+
+def _latest_own_scan_id() -> str:
+    """This person's newest scan, so the page shows it again from any PC
+    (the tab's own saved scan wins - see network_check.js)."""
+    me = current_username()
+    with _LOCK:
+        mine = [(st["started_at"], sid) for sid, st in _SCANS.items() if st["owner"] == me]
+    return max(mine)[1] if mine else ""
 
 PC_DEVICE_NAMES = {"PC", "NOTEBOOK", "SERVER PC"}
 MONITOR_DEVICE_NAMES = {"LCD"}
@@ -207,7 +273,11 @@ def index():
         branches = get_branches_with_current_assets(conn)
     finally:
         conn.close()
-    return render_template("network_check.html", active_page="network_check", branches=branches)
+    me = current_username()
+    return render_template("network_check.html", active_page="network_check", branches=branches,
+                           scan_identity=scan_identity(),
+                           other_scans=[s for s in running_scans() if s["owner"] != me],
+                           last_scan_id=_latest_own_scan_id())
 
 
 @bp.route("/scan", methods=["POST"])
@@ -266,9 +336,22 @@ def start_scan():
         if not targets:
             return jsonify({"error": "This branch has no current assets with an IP address recorded."}), 400
 
+    owner = current_username()
     scan_id = uuid.uuid4().hex
     with _LOCK:
-        _SCANS[scan_id] = {
+        _trim_scans()
+        running = [st for st in _SCANS.values() if _running(st)]
+        if any(st["owner"] == owner for st in running):
+            return jsonify({"error": "You already have a scan running - stop it or wait for it to "
+                                     "finish first."}), 409
+        if len(running) >= MAX_RUNNING_SCANS:
+            return jsonify({"error": f"{len(running)} scans are already running on the server - "
+                                     "try again in a few minutes."}), 429
+        # the worker holds its own reference: still there once the scan is forgotten
+        state_ref = _SCANS[scan_id] = {
+            "owner": owner,
+            "started_at": dt.datetime.now(),
+            "finished_at": None,
             "total": len(targets),
             "done": 0,
             "results": [],
@@ -283,31 +366,33 @@ def start_scan():
 
     def should_stop() -> bool:
         with _LOCK:
-            return _SCANS[scan_id]["stop_requested"]
+            return state_ref["stop_requested"]
 
     def worker():
         def on_result(result: dict):
             with _LOCK:
-                state = _SCANS[scan_id]
-                state["results"].append(result)
-                state["done"] += 1
+                state_ref["results"].append(result)
+                state_ref["done"] += 1
 
-        run_scan(
-            targets,
-            on_result,
-            max_workers=DEFAULT_CONCURRENCY,
-            include_hardware=include_hardware,
-            should_stop=should_stop,
-        )
-        with _LOCK:
-            _SCANS[scan_id]["worker_done"] = True
+        try:
+            run_scan(
+                targets,
+                on_result,
+                max_workers=DEFAULT_CONCURRENCY,
+                include_hardware=include_hardware,
+                should_stop=should_stop,
+            )
+        finally:
+            with _LOCK:
+                state_ref["worker_done"] = True
+                state_ref["finished_at"] = dt.datetime.now()
 
-    threading.Thread(target=worker, daemon=True).start()
+    threading.Thread(target=worker, name=f"network-check-{scan_id[:8]}", daemon=True).start()
     return jsonify(
         {
             "scan_id": scan_id,
             "total": len(targets),
-            "branch_label": _SCANS[scan_id]["branch_label"],
+            "branch_label": branch_label,
             "include_hardware": include_hardware,
         }
     )
@@ -317,7 +402,7 @@ def start_scan():
 @require_permission("network_check")
 def stop_scan(scan_id: str):
     with _LOCK:
-        state = _SCANS.get(scan_id)
+        state = _own_scan(scan_id)
         if state is None:
             return jsonify({"error": "Scan session not found."}), 404
         state["stop_requested"] = True
@@ -333,7 +418,7 @@ def apply_updates(scan_id: str):
     change is logged to network_check_log for an audit trail; a value that
     already matches the current DB row is skipped (no-op, not logged)."""
     with _LOCK:
-        state = _SCANS.get(scan_id)
+        state = _own_scan(scan_id)
         if state is None:
             return jsonify({"error": "Scan session not found."}), 404
         snapshot = state["snapshot"]
@@ -362,9 +447,9 @@ def apply_updates(scan_id: str):
                 conn.execute(f"UPDATE asset_items SET {column} = ? WHERE id = ?", (new_value, asset_id))
                 conn.execute(
                     "INSERT INTO logsdb.network_check_log "
-                    "(applied_at, branch_no, ip, asset_id, field, old_value, new_value) "
-                    "VALUES (datetime('now'), ?, ?, ?, ?, ?, ?)",
-                    (branch_no, ip, asset_id, field, old_value, new_value),
+                    "(applied_at, branch_no, ip, asset_id, field, old_value, new_value, applied_by) "
+                    "VALUES (datetime('now'), ?, ?, ?, ?, ?, ?, ?)",
+                    (branch_no, ip, asset_id, field, old_value, new_value, current_username()),
                 )
                 applied.append({"ip": ip, "field": field, "asset_id": asset_id, "new_value": new_value})
 
@@ -392,7 +477,7 @@ def _augmented_results(state: dict) -> list[dict]:
 @bp.route("/scan/<scan_id>")
 def scan_status(scan_id: str):
     with _LOCK:
-        state = _SCANS.get(scan_id)
+        state = _own_scan(scan_id)
         if state is None:
             return jsonify({"error": "Scan session not found."}), 404
         results = _augmented_results(state)
@@ -436,7 +521,7 @@ NETWORK_CHECK_COLUMN_WIDTHS = [16, 8, 20, 18, 22, 22, 12, 22, 22, 14, 22, 22, 12
 @bp.route("/scan/<scan_id>/export.xlsx")
 def export_xlsx(scan_id: str):
     with _LOCK:
-        state = _SCANS.get(scan_id)
+        state = _own_scan(scan_id)
         if state is None:
             return jsonify({"error": "Scan session not found."}), 404
         results = _augmented_results(state)
@@ -462,6 +547,7 @@ NETWORK_CHECK_LOG_EXPORT_COLUMNS = [
     ("Field", "field"),
     ("Old Value", "old_value"),
     ("New Value", "new_value"),
+    ("By", lambda r: r["applied_by"] or ""),
 ]
 
 

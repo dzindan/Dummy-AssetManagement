@@ -6,6 +6,8 @@
   <title>Login - Asset Management Tool</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <link rel="icon" href="{{ url_for('static', filename='img/logo.png') }}">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <script src="{{ url_for('static', filename='csrf.js') }}"></script>
   <style>
     body { align-items: center; justify-content: center; min-height: 100vh; }
     .auth-card { width: 100%; max-width: 360px; margin: 0 1rem; }
@@ -38,7 +40,8 @@
         <input type="hidden" name="next" value="{{ next_url }}">
         <div>
           <label for="username">Username</label>
-          <input type="text" id="username" name="username" autofocus required>
+          <input type="text" id="username" name="username" autofocus required
+                 {% if ad_on %}placeholder="{{ ad.domain }}\username or an app account"{% endif %}>
         </div>
         <div>
           <label for="password">Password</label>
@@ -46,6 +49,11 @@
         </div>
         <button type="submit">Login</button>
       </form>
+      {% if ad_on %}
+      <p class="muted" style="margin-top:1rem;">AD accounts: your Windows username and password
+        ({{ ad.domain }}\username). Or <a href="{{ url_for('auth.sso', next=next_url) }}">sign in with this
+        Windows session</a>.</p>
+      {% endif %}
       <p class="muted" style="margin-top:1rem; margin-bottom:0;"><a href="{{ url_for('auth.forgot_password') }}">Forgot password?</a></p>
     </div>
   </div>

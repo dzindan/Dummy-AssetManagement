@@ -63,7 +63,7 @@ def _ho_report(rows) -> bytes:
 class ReportSourceTests(unittest.TestCase):
     def setUp(self):
         os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_reportsource_")
-        self.app = create_app()
+        self.app = create_app(csrf=False)
         self.files = tempfile.mkdtemp(prefix="am_reportsource_files_")
         conn = get_connection()
         try:

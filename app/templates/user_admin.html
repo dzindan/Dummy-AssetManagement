@@ -5,14 +5,48 @@
 <p class="muted"><a href="{{ url_for('settings.index') }}">&laquo; Back to Settings</a></p>
 
 <div class="panel">
+  <h2>AD sign-in</h2>
+  <p class="muted">Members of one AD group sign in with their Windows account - on a domain PC with no typing
+    (Windows sign-in), or with DOMAIN\username + their AD password. Their account here is made on the first
+    sign-in with the role below; change it in the table. Taken out of the group = refused at the next sign-in.
+    The accounts with an app password keep working (keep one Admin among them in case AD is down).</p>
+  {% if not ad_available %}<p class="flash flash-error">Not available on this computer (Windows + pywin32 only).</p>{% endif %}
+  <form method="post" action="{{ url_for('user_admin.save_ad') }}">
+    <div class="field-row">
+      <div style="flex:0 0 auto; align-self:flex-end;">
+        <label><input type="checkbox" name="ad_enabled" value="1" {{ 'checked' if ad.enabled }}> AD sign-in on</label>
+      </div>
+      <div>
+        <label for="ad_domain">Domain (for "username" alone)</label>
+        <input type="text" id="ad_domain" name="ad_domain" value="{{ ad.domain }}" placeholder="e.g. CORP">
+      </div>
+      <div>
+        <label for="ad_group">AD group that may use the app</label>
+        <input type="text" id="ad_group" name="ad_group" value="{{ ad.group }}" placeholder="e.g. CORP\AM Users">
+      </div>
+      <div>
+        <label for="ad_default_role">Role of a new AD account</label>
+        <select id="ad_default_role" name="ad_default_role">
+          {% for r in roles %}
+          <option value="{{ r['id'] }}" {{ 'selected' if (ad.default_role == r['id']|string) or (not ad.default_role and r['name'] == 'Viewer') }}>{{ r['name'] }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div style="flex: 0 0 auto; align-self: flex-end;"><button type="submit">Save</button></div>
+    </div>
+  </form>
+</div>
+
+<div class="panel">
   <h2>Accounts</h2>
   <div class="table-scroll">
   <table>
-    <thead><tr><th>Username</th><th>Role</th><th>Status</th><th>Last Login</th><th></th></tr></thead>
+    <thead><tr><th>Username</th><th>Sign-in</th><th>Role</th><th>Status</th><th>Last Login</th><th></th></tr></thead>
     <tbody>
       {% for a in accounts %}
       <tr>
         <td>{{ a['username'] }}</td>
+        <td>{{ 'AD' if a['auth_source'] == 'ad' else 'App password' }}</td>
         <td>
           <form method="post" action="{{ url_for('user_admin.set_account_role', account_id=a['id']) }}" style="margin:0; display:flex; gap:0.4rem; align-items:center;">
             <select name="role_id" onchange="this.form.submit()">
@@ -28,6 +62,7 @@
           <form method="post" action="{{ url_for('user_admin.toggle_active', account_id=a['id']) }}" style="display:inline; margin:0;">
             <button type="submit" class="{{ 'danger' if a['is_active'] else 'secondary' }}">{{ 'Deactivate' if a['is_active'] else 'Activate' }}</button>
           </form>
+          {% if a['auth_source'] != 'ad' %}
           <details style="display:inline-block;">
             <summary style="display:inline; cursor:pointer;">Reset password</summary>
             <form method="post" action="{{ url_for('user_admin.reset_password', account_id=a['id']) }}" style="margin-top:0.4rem; display:flex; gap:0.4rem;">
@@ -35,10 +70,11 @@
               <button type="submit">Set</button>
             </form>
           </details>
+          {% endif %}
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="5" class="muted">No accounts yet.</td></tr>
+      <tr><td colspan="6" class="muted">No accounts yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>

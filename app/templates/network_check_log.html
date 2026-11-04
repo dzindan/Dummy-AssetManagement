@@ -8,7 +8,7 @@
 <div class="panel">
   <div class="table-scroll">
   <table>
-    <thead><tr><th>When</th><th>Branch</th><th>IP</th><th>Asset ID</th><th>Field</th><th>Old Value</th><th>New Value</th></tr></thead>
+    <thead><tr><th>When</th><th>Branch</th><th>IP</th><th>Asset ID</th><th>Field</th><th>Old Value</th><th>New Value</th><th>By</th></tr></thead>
     <tbody>
       {% for r in rows %}
       <tr>
@@ -19,9 +19,10 @@
         <td>{{ r['field'] }}</td>
         <td>{{ r['old_value'] or '-' }}</td>
         <td>{{ r['new_value'] }}</td>
+        <td>{{ r['applied_by'] or '-' }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="7" class="muted">No updates applied yet.</td></tr>
+      <tr><td colspan="8" class="muted">No updates applied yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>

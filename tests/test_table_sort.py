@@ -58,7 +58,7 @@ class SortHelperTests(unittest.TestCase):
 class ServerSortTests(unittest.TestCase):
     def setUp(self):
         os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="am_sort_")
-        self.app = create_app()
+        self.app = create_app(csrf=False)
         self.client = self.app.test_client()
         tmp = tempfile.mkdtemp(prefix="am_sort_files_")
         conn = get_connection()

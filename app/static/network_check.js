@@ -347,6 +347,11 @@ async function restoreScan() {
   } catch {
     saved = null;
   }
+  // None saved in this tab (a new tab, another PC): this person's latest
+  // scan on the server, if it still has one - see _latest_own_scan_id().
+  if ((!saved || !saved.scanId) && form.dataset.lastScan) {
+    saved = { scanId: form.dataset.lastScan, mode: "branch", branchNo: "", targets: "", includeHardware: true };
+  }
   if (!saved || !saved.scanId) return;
 
   let resp;

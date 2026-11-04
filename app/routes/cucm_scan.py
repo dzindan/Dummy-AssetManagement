@@ -15,9 +15,10 @@ import re
 import threading
 import uuid
 
-from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, url_for
 
-from ..auth import require_permission
+from .. import jobs
+from ..auth import current_username, require_permission
 from ..cucm import (
     MODEL_NAMES,
     CucmNotConfigured,
@@ -40,7 +41,20 @@ bp = Blueprint("cucm_scan", __name__, url_prefix="/cucm-scan")
 # without the polling/progress fields this page's synchronous form-POST scan
 # doesn't need.
 _LAST_SCANS: dict[str, list[dict]] = {}
+_SCAN_OWNERS: dict[str, str] = {}
 _LOCK = threading.Lock()
+KEEP_SCANS = 30  # results kept for Export / Update (oldest dropped first)
+
+
+def _keep_scan(devices: list[dict], owner: str) -> str:
+    scan_id = uuid.uuid4().hex
+    with _LOCK:
+        _LAST_SCANS[scan_id] = devices
+        _SCAN_OWNERS[scan_id] = owner
+        for old in list(_LAST_SCANS)[:max(0, len(_LAST_SCANS) - KEEP_SCANS)]:
+            _LAST_SCANS.pop(old, None)
+            _SCAN_OWNERS.pop(old, None)
+    return scan_id
 
 # 255 is excluded from the sorted, dict-derived part - CUCM's own enum
 # already defines it as "Unknown" (used as the API's wildcard/no-filter
@@ -133,7 +147,9 @@ def _with_import_crosscheck(devices: list[dict]) -> list[dict]:
     return devices
 
 
-def _render(devices=None, error=None, filters=None, scan_id=None):
+def _render(devices=None, error=None, filters=None, scan_id=None, fresh=False):
+    """fresh: a new scan's result (cucm_scan.js keeps it, rather than
+    restoring the tab's previous one) - a POST, or a finished job's page."""
     filters = filters or {"num": "*", "ip": "", "model": "255", "autosplit": False}
     return render_template(
         "cucm_scan.html",
@@ -144,7 +160,22 @@ def _render(devices=None, error=None, filters=None, scan_id=None):
         model_options=MODEL_OPTIONS,
         configured=_is_configured(),
         scan_id=scan_id,
+        fresh=fresh or request.method == "POST",
+        active_scans=jobs.cucm_runner.active(),
+        # a background scan's result is only on its job page: a way back to it
+        my_last_scan=jobs.cucm_runner.latest_done(current_username()),
     )
+
+
+def _filters_label(filters: dict) -> str:
+    if filters["autosplit"]:
+        what = "auto-split, all phones"
+    elif filters["ip"]:
+        what = f"IP {filters['ip']}"
+    else:
+        what = f"number {filters['num']}"
+    model = dict(MODEL_OPTIONS).get(filters["model"], filters["model"])
+    return f"CUCM phones ({what}, model {model})"
 
 
 @bp.route("/")
@@ -160,33 +191,79 @@ def scan():
     model = request.form.get("model", "255").strip()
     autosplit = request.form.get("autosplit") == "on"
     filters = {"num": num or "*", "ip": ip, "model": model, "autosplit": autosplit}
+    owner = current_username()
 
-    devices: list[dict] = []
-    error = None
-    try:
-        if autosplit:
-            devices = scan_phones_autosplit(model=model, ip="", name="")
-        elif ip:
-            # IP mask takes priority over Number mask when both are filled
-            # in - cucm_rt_phones only ever searches by one of name/num/ip
-            # per call, whichever is non-empty, checked in that order.
-            devices = scan_phones(model=model, num="", ip=ip, name="")
-        else:
-            devices = scan_phones(model=model, num=(num or "*"), ip="", name="")
-    except CucmNotConfigured as exc:
-        error = str(exc)
-    except Exception as exc:  # noqa: BLE001 - surfaced to the user as-is, matches importer.py's own guards
-        error = f"Scan failed: {exc}"
+    def run():
+        devices: list[dict] = []
+        error = None
+        try:
+            if autosplit:
+                devices = scan_phones_autosplit(model=model, ip="", name="")
+            elif ip:
+                # IP mask takes priority over Number mask when both are filled
+                # in - cucm_rt_phones only ever searches by one of name/num/ip
+                # per call, whichever is non-empty, checked in that order.
+                devices = scan_phones(model=model, num="", ip=ip, name="")
+            else:
+                devices = scan_phones(model=model, num=(num or "*"), ip="", name="")
+        except CucmNotConfigured as exc:
+            error = str(exc)
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user as-is, matches importer.py's own guards
+            error = f"Scan failed: {exc}"
 
-    devices = _with_import_crosscheck(devices)
+        devices = _with_import_crosscheck(devices)
+        scan_id = None if error else _keep_scan(devices, owner)
+        return {"devices": devices, "error": error, "filters": filters, "scan_id": scan_id}
 
-    scan_id = None
-    if not error:
-        scan_id = uuid.uuid4().hex
-        with _LOCK:
-            _LAST_SCANS[scan_id] = devices
+    # On the central server a scan (auto-split over 1000+ phones takes
+    # minutes) runs in the CUCM scan worker, one at a time, and the page
+    # waits for it; on the desktop it runs right here, as before.
+    job = jobs.cucm_runner.submit(current_app._get_current_object(), "cucm_scan", _filters_label(filters),
+                                  owner, run, background=current_app.config.get("CUCM_SCAN_BACKGROUND", False))
+    if not job.done:
+        return redirect(url_for("cucm_scan.job", job_id=job.id))
+    return _job_result(job)
 
-    return _render(devices=devices, error=error, filters=filters, scan_id=scan_id)
+
+def _job_result(job):
+    if job.status == "error":
+        return _render(error=f"Scan failed: {job.error}", filters=job.outcome.get("filters"), fresh=True)
+    out = job.outcome
+    return _render(devices=out["devices"], error=out["error"], filters=out["filters"],
+                   scan_id=out["scan_id"], fresh=True)
+
+
+@bp.route("/jobs/<int:job_id>")
+@require_permission("network_check")
+def job(job_id):
+    """A background scan's page: waiting / scanning (refreshes itself),
+    then the result. Only the person who started it sees it."""
+    job = jobs.cucm_runner.get(job_id)
+    if job is None:
+        flash("That scan's result isn't kept any more (the server was restarted) - run the scan again.", "info")
+        return redirect(url_for("cucm_scan.index"))
+    if job.owner != current_username():
+        abort(404)
+    if not job.done:
+        running = next((j for j in jobs.cucm_runner.active() if j.status == "running"), None)
+        return render_template(
+            "import_job.html", active_page="cucm_scan", job=job, running=running,
+            ahead=jobs.cucm_runner.ahead_of(job), noun="scan", running_title="Scanning CUCM…",
+            waiting_title="Waiting to scan…",
+            status_url=url_for("cucm_scan.job_status", job_id=job.id),
+            job_url=url_for("cucm_scan.job", job_id=job.id),
+            back_name="CUCM Phone Scan",
+            why_one_at_a_time="CUCM allows only a few scan requests a minute, so scans run one at a time.")
+    return _job_result(job)
+
+
+@bp.route("/jobs/<int:job_id>/status")
+@require_permission("network_check")
+def job_status(job_id):
+    job = jobs.cucm_runner.get(job_id)
+    if job is None or job.owner != current_username():
+        return {"error": "not found"}, 404
+    return {"status": job.status, "ahead": jobs.cucm_runner.ahead_of(job)}
 
 
 def _cucm_match_text(d: dict, match_key: str) -> str:
@@ -216,6 +293,8 @@ CUCM_SCAN_COLUMN_WIDTHS = [12, 16, 20, 20, 14, 20, 20, 14, 22, 18, 12, 20]
 def export_xlsx(scan_id: str):
     with _LOCK:
         devices = _LAST_SCANS.get(scan_id)
+        if _SCAN_OWNERS.get(scan_id) != current_username():
+            devices = None
     if devices is None:
         flash("That scan result has expired - run the scan again to export.", "error")
         return redirect(url_for("cucm_scan.index"))
@@ -269,9 +348,9 @@ def apply_updates():
             conn.execute(f"UPDATE asset_items SET {column} = ? WHERE id = ?", (new_value, asset_id))
             conn.execute(
                 "INSERT INTO logsdb.network_check_log "
-                "(applied_at, branch_no, ip, asset_id, field, old_value, new_value) "
-                "VALUES (datetime('now'), ?, ?, ?, ?, ?, ?)",
-                (row["branch_no"], ip, asset_id, field, old_value, new_value),
+                "(applied_at, branch_no, ip, asset_id, field, old_value, new_value, applied_by) "
+                "VALUES (datetime('now'), ?, ?, ?, ?, ?, ?, ?)",
+                (row["branch_no"], ip, asset_id, field, old_value, new_value, current_username()),
             )
             applied.append({"asset_id": asset_id, "field": field, "new_value": new_value})
 
