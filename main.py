@@ -170,6 +170,13 @@ def _make_cert(config_file, names: str) -> int:
         print(f"Certificate not made: {e}")
         return 1
     print(f"HTTPS on: certificate for {', '.join(made['names'])}, valid until {made['not_after']}")
+    # a new key after install-task: the task's account must still read it,
+    # or the server can't start HTTPS at its next start
+    from app import server, tls
+    user = server.task_user()
+    if user:
+        print(f"  {user} (the server's task) may read the new key" if tls.grant_key(made["key"], user)
+              else f"  Couldn't let {user} read {made['key']} - grant it: icacls \"{made['key']}\" /grant {user}:R")
     print(f"  SHA-256 {made['sha256']}")
     print("  For the clients' Trusted Root Certification Authorities (GPO, or on each PC as admin:")
     print(f"  certutil -addstore Root AssetManagementTool.cer):\n  {made['cer']}")

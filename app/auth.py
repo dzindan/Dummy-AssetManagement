@@ -1,5 +1,6 @@
 import functools
 import hashlib
+import sqlite3
 from datetime import timedelta
 
 from flask import flash, g, jsonify, redirect, request, session, url_for
@@ -82,8 +83,11 @@ def sign_in_ad(identity) -> int:
     conn = get_connection()
     try:
         row = conn.execute("SELECT * FROM accounts WHERE ad_sid = ?", (identity.sid,)).fetchone() or \
-            conn.execute("SELECT * FROM accounts WHERE username_norm = ? AND auth_source = 'ad'",
+            conn.execute("SELECT * FROM accounts WHERE username_norm = ? AND auth_source = 'ad' AND ad_sid IS NULL",
                          (normalize_username(identity.username),)).fetchone()
+        # By name only when no SID is kept yet: an AD name given to someone
+        # else later (the old account deleted in AD) is another SID - that
+        # person must not take over the old account and its role.
         if row is None:
             if conn.execute("SELECT 1 FROM accounts WHERE username_norm = ?",
                             (normalize_username(identity.username),)).fetchone():
@@ -106,12 +110,28 @@ def sign_in_ad(identity) -> int:
         if not row["is_active"]:
             raise SignInRefused("Your account is deactivated in this app - ask an administrator.")
         if row["username"] != identity.username or row["ad_sid"] != identity.sid:  # renamed in AD
-            conn.execute("UPDATE accounts SET username = ?, username_norm = ?, ad_sid = ? WHERE id = ?",
-                         (identity.username, normalize_username(identity.username), identity.sid, row["id"]))
-            conn.commit()
+            try:
+                conn.execute("UPDATE accounts SET username = ?, username_norm = ?, ad_sid = ? WHERE id = ?",
+                             (identity.username, normalize_username(identity.username), identity.sid, row["id"]))
+                conn.commit()
+            except sqlite3.IntegrityError:
+                raise SignInRefused(f"Your AD name is now {identity.username}, but an account of this app "
+                                    "already has that name - ask an administrator to rename it.") from None
         return row["id"]
     finally:
         conn.close()
+
+
+def safe_next(next_url: str, fallback: str) -> str:
+    """A ?next= / "next" form value to redirect to - only ever a path of
+    this app (it's user-supplied: a link can carry any value), else fallback.
+    Browsers read "/\\evil.com" (and "/<tab>/evil.com", tabs and newlines
+    removed) as "//evil.com" - another site; so no backslash or control
+    character either."""
+    if (next_url and next_url.startswith("/") and not next_url.startswith("//")
+            and "\\" not in next_url and not any(ord(c) < 32 or ord(c) == 127 for c in next_url)):
+        return next_url
+    return fallback
 
 
 def normalize_username(username: str) -> str:

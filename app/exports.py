@@ -11,6 +11,7 @@ from typing import Any, Iterable, Sequence
 
 import openpyxl
 from flask import Response, send_file
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.chart import LineChart, Reference
 from openpyxl.styles import Font
 from openpyxl.worksheet.worksheet import Worksheet
@@ -51,6 +52,20 @@ def match_text(value: bool | None) -> str:
 ColumnSpec = tuple[str, "str | Callable[[Any], Any]"]
 
 
+def _append(ws: Worksheet, values) -> None:
+    """ws.append() for data that came from outside (imported reports, AD,
+    typed by users): openpyxl writes a string starting with "=" as a
+    FORMULA - a remark "=HYPERLINK(...)" in a branch's report would run
+    when the export is opened - so such cells are kept as text; and the
+    control characters an xlsx can't hold (openpyxl would fail the whole
+    export on one) are dropped."""
+    values = [ILLEGAL_CHARACTERS_RE.sub("", v) if isinstance(v, str) else v for v in values]
+    ws.append(values)
+    for cell, value in zip(ws[ws.max_row], values):
+        if isinstance(value, str) and value.startswith("="):
+            cell.data_type = "s"
+
+
 def _cell_value(row: Any, key_or_getter) -> Any:
     if callable(key_or_getter):
         return key_or_getter(row)
@@ -74,9 +89,9 @@ def write_sheet(
 ) -> None:
     """Append a header row (column labels) then one row per item, then style
     the header - the one place row-shaped data becomes Excel cells."""
-    ws.append([c[0] for c in columns])
+    _append(ws, [c[0] for c in columns])
     for row in rows:
-        ws.append([_cell_value(row, c[1]) for c in columns])
+        _append(ws, [_cell_value(row, c[1]) for c in columns])
     style_header_row(ws, widths)
 
 
@@ -119,9 +134,9 @@ def write_trend_matrix_sheet(
     LineChart's Reference can point at directly (openpyxl charts reference
     cell ranges, not raw Python values)."""
     ws = wb.create_sheet(sheet_title)
-    ws.append(["Period", *items])
+    _append(ws, ["Period", *items])
     for period in periods:
-        ws.append([period, *[matrix[item].get(period, 0) for item in items]])
+        _append(ws, [period, *[matrix[item].get(period, 0) for item in items]])
     style_header_row(ws)
     return ws
 
@@ -220,9 +235,9 @@ def build_import_template_workbook(headers: Sequence[str], example_row: Sequence
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Template"
-    ws.append(list(headers))
+    _append(ws, list(headers))
     if example_row is not None:
-        ws.append(list(example_row))
+        _append(ws, list(example_row))
     style_header_row(ws)
     return wb
 
@@ -268,9 +283,9 @@ def build_diff_workbook(all_diffs) -> openpyxl.Workbook:
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Diff Summary"
-    ws.append(["Branch", "Added", "Removed", "Changed", "Unchanged"])
+    _append(ws, ["Branch", "Added", "Removed", "Changed", "Unchanged"])
     for d in all_diffs:
-        ws.append([d.branch_label, len(d.added), len(d.removed), len(d.changed), d.unchanged_count])
+        _append(ws, [d.branch_label, len(d.added), len(d.removed), len(d.changed), d.unchanged_count])
     style_header_row(ws)
 
     detail_ws = wb.create_sheet("Details")
@@ -284,7 +299,7 @@ def build_diff_workbook(all_diffs) -> openpyxl.Workbook:
         "Position", "Handover Date",
         "Change Type", "Field Changed", "Old Value", "New Value",
     ]
-    detail_ws.append(header)
+    _append(detail_ws, header)
 
     def _row_columns(branch_label: str, row) -> list:
         return [
@@ -295,14 +310,14 @@ def build_diff_workbook(all_diffs) -> openpyxl.Workbook:
 
     for d in all_diffs:
         for row in d.added:
-            detail_ws.append([*_row_columns(d.branch_label, row), "ADDED", "", "", ""])
+            _append(detail_ws, [*_row_columns(d.branch_label, row), "ADDED", "", "", ""])
         for row in d.removed:
-            detail_ws.append([*_row_columns(d.branch_label, row), "REMOVED", "", "", ""])
+            _append(detail_ws, [*_row_columns(d.branch_label, row), "REMOVED", "", "", ""])
         for c in d.changed:
             for f in COMPARE_FIELDS:
                 if f in c["diffs"]:
                     old_val, new_val = c["diffs"][f]
-                    detail_ws.append(
+                    _append(detail_ws, 
                         [*_row_columns(d.branch_label, c["new"]), "CHANGED", FIELD_LABELS[f], old_val, new_val]
                     )
     style_header_row(detail_ws)

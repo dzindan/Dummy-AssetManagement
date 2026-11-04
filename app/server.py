@@ -195,13 +195,25 @@ def install_task(user: str, password: str, config_file: str | None = None) -> li
     proc = subprocess.run(args, capture_output=True, text=True, creationflags=_NO_WINDOW)
     if proc.returncode:
         raise RuntimeError((proc.stderr or proc.stdout).strip() or f"schtasks failed ({proc.returncode})")
-    # the task's default 72 h time limit would stop the server after 3 days
-    subprocess.run(["powershell", "-NoProfile", "-Command",
-                    f"$s = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) "
-                    f"-RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries "
-                    f"-DontStopIfGoingOnBatteries; Set-ScheduledTask -TaskName '{TASK_NAME}' -Settings $s"],
-                   capture_output=True, text=True, creationflags=_NO_WINDOW)
     done.append(f"Task '{TASK_NAME}' runs at the server's start as {user}: {cmd}")
+    # The task's default 72 h time limit would stop the server after 3 days.
+    # Changing a task stored with a password takes the account + password
+    # again (else "The user name or password is incorrect") - the password
+    # goes in by environment, never on a command line.
+    credentials = "-User $env:AM_TASK_USER -Password $env:AM_TASK_PASSWORD " if password else ""
+    proc = subprocess.run(["powershell", "-NoProfile", "-Command",
+                           "$ErrorActionPreference = 'Stop'; "
+                           "$s = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) "
+                           "-RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries "
+                           f"-DontStopIfGoingOnBatteries; Set-ScheduledTask -TaskName '{TASK_NAME}' {credentials}"
+                           "-Settings $s | Out-Null"],
+                          capture_output=True, text=True, creationflags=_NO_WINDOW,
+                          env={**os.environ, "AM_TASK_USER": user, "AM_TASK_PASSWORD": password or ""})
+    done.append("No time limit on the task (it would stop the server after 3 days), restarted if it fails"
+                if proc.returncode == 0 else
+                "WARNING: the task keeps Windows' 3-day time limit - the server would stop after 3 days. "
+                "Task Scheduler > the task > Settings: untick \"Stop the task if it runs longer than\". "
+                f"({(proc.stderr or proc.stdout).strip()[:300]})")
     if config["tls_key"]:
         from . import tls
         done.append(f"{user} may read the HTTPS key" if tls.grant_key(config["tls_key"], user)
@@ -214,6 +226,18 @@ def install_task(user: str, password: str, config_file: str | None = None) -> li
     done.append(f"Firewall: TCP {config['port']} allowed in (domain / private networks)" if proc.returncode == 0
                 else f"Firewall rule not added: {(proc.stdout or proc.stderr).strip()}")
     return done
+
+
+def task_user() -> str:
+    """The account the scheduled task runs the server as ('' when there's
+    no task) - from its XML, so a non-English Windows reads the same."""
+    import re
+    proc = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME, "/XML"], capture_output=True, text=True,
+                          creationflags=_NO_WINDOW)
+    if proc.returncode:
+        return ""
+    m = re.search(r"<UserId>\s*([^<]+?)\s*</UserId>", proc.stdout or "")
+    return m.group(1) if m else ""
 
 
 def remove_task() -> list[str]:

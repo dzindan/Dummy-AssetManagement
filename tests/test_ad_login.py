@@ -115,6 +115,35 @@ class AdLoginTests(AdLoginBase):
         self.assertIsNone(_account("CORP\\NVA"))
         self.assertEqual(_account("CORP\\NVA2")["ad_sid"], "S-1-5-21-9-9-9-1105")
 
+    def test_same_ad_name_other_person_doesnt_take_the_old_account(self):
+        # CORP\\nva deleted in AD, the name given to someone else (another SID)
+        self.turn_on()
+        with mock.patch.object(winauth, "logon", return_value=_identity()):
+            self.client.post("/login?form=1", data={"username": "CORP\\nva", "password": "x"})
+        conn = get_connection()
+        conn.execute("UPDATE accounts SET role_id = ? WHERE username_norm = 'CORP\\NVA'", (_role_id("Admin"),))
+        conn.commit()
+        conn.close()
+        self.client.post("/logout")
+        with mock.patch.object(winauth, "logon", return_value=_identity(sid="S-1-5-21-9-9-9-2222")):
+            resp = self.client.post("/login?form=1", data={"username": "CORP\\nva", "password": "x"})
+        self.assertIn("already named", resp.get_data(as_text=True))
+        self.assertEqual(_account("CORP\\NVA")["ad_sid"], "S-1-5-21-9-9-9-1105")  # untouched
+        self.assertNotEqual(self.client.get("/").status_code, 200)  # not signed in
+
+    def test_renamed_in_ad_onto_a_taken_name_is_refused_not_an_error(self):
+        self.turn_on()
+        create_account("CORP\\NVA2", "localpass1", _role_id("Viewer"))
+        with mock.patch.object(winauth, "logon", return_value=_identity()):
+            self.client.post("/login?form=1", data={"username": "CORP\\nva", "password": "x"})
+        # the form would check CORP\NVA2 as the app's own account; Windows
+        # sign-in (/sso) hands the AD identity straight to sign_in_ad
+        from app.auth import SignInRefused, sign_in_ad
+        with self.app.app_context(), self.assertRaises(SignInRefused) as refused:
+            sign_in_ad(_identity(sam="NVA2"))
+        self.assertIn("already has that name", str(refused.exception))
+        self.assertEqual(_account("CORP\\NVA")["ad_sid"], "S-1-5-21-9-9-9-1105")
+
     def test_local_accounts_still_sign_in_and_ad_accounts_have_no_app_password(self):
         self.turn_on()
         self.assertEqual(self.login_local().status_code, 302)

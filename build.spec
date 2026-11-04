@@ -26,6 +26,7 @@ a = Analysis(
         "win32security",
         "win32api",
         "win32con",
+        "win32net",
         "pywintypes",
         "docxtpl",
         "docxcompose",

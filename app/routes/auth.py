@@ -14,6 +14,7 @@ from ..auth import (
     hash_password,
     login_account,
     logout_account,
+    safe_next,
     session_account,
     verify_password,
     verify_security_answer,
@@ -26,12 +27,7 @@ log = logging.getLogger(__name__)
 
 
 def _safe_next(next_url: str) -> str:
-    """Only ever redirect to a same-site path - a bare '/' fallback refuses
-    anything that could send someone off this app (a bad ?next= value is
-    user-supplied input)."""
-    if next_url and next_url.startswith("/") and not next_url.startswith("//"):
-        return next_url
-    return url_for("dashboard.index")
+    return safe_next(next_url, url_for("dashboard.index"))
 
 
 @bp.route("/login", methods=["GET", "POST"])

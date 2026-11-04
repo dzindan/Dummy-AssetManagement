@@ -1915,6 +1915,53 @@ Tried 2026-11-03 with the real desktop data, into a temp server folder
 - `serve` then answered /health. A `backup` made while it ran gave 10.4 MB,
   and `restore` was refused because the port answered.
 
+#### Review fixes (2026-11-04)
+
+- **AD default domain** (Users & Roles > AD sign-in, "Domain" left blank):
+  `winauth.computer_domain()` is the workstation's NetBIOS domain
+  (`NetWkstaGetInfo` langroup), not the first label of the DNS domain -
+  they often differ (shinhan.com.vn vs SHBVN), and LogonUser with a wrong
+  domain only says "incorrect password". Off a domain: the computer name.
+- **An AD name given to someone else** (old account deleted in AD, same
+  sAMAccountName, another SID) no longer takes over the old account and its
+  role: an account is matched by SID; by name only while it has no SID yet.
+  A clash is refused ("already named ... rename it"); a rename in AD onto a
+  name another account has is refused too, not a 500.
+- **install-task**: lifting the task's 72 h time limit (else the server
+  stops after 3 days) needs the account + password again for a task stored
+  with a password - passed by environment, never on a command line; its
+  result is checked and a failure printed as a WARNING with what to untick.
+- **make-cert after install-task**: the new key is granted to the task's
+  account (`server.task_user()`, from the task XML), or the server couldn't
+  read it at its next start. The key file is locked down before anything is
+  written to it (ProgramData lets Users read by inheritance).
+- **Redirects** after sign-in and after saving an asset / CCTV row
+  (`?next=` / the form's "next") go only to a path of this app
+  (`auth.safe_next`): no `//`, no backslash (`/\evil.com` is another site
+  to a browser), no control characters. Pages send `request.full_path`,
+  not the full URL.
+- **Network Check targets: plain IPs only.** `ipaddress` accepts an IPv6
+  scope id - `fe80::1%x'; <command>; '` passed `_validate_ip`, and the
+  uptime / hardware scripts put the IP inside '...': any user allowed to
+  scan could run commands on the central server as its service account.
+  `scanner._PLAIN_IP_TEXT` (hex digits, `.`, `:` only) now in both
+  `parse_targets` and `_validate_ip` (tests/test_scanner_targets.py). The
+  same scanner code lives in IP Scanner (IS) - it needs the same fix.
+- **Excel exports keep text as text** (`exports._append`, every sheet
+  write): openpyxl writes a string starting with "=" as a formula - a
+  remark / name "=HYPERLINK(...)" in an imported report ran when the export
+  was opened; such cells are typed as text, and the control characters an
+  xlsx can't hold (they failed the whole export) dropped
+  (tests/test_export_text.py).
+- **Files the database names are served only from their own folder.**
+  `paths.find_moved_file` (hand-over docx_path, diff report file_path)
+  gives a stored path only when it is in that folder, else the same file
+  name in it; `paths.file_in` (Disposal Check's stored_name) takes a plain
+  file name only. A database brought in by import-desktop-data / restore
+  could name any file of the server (`..\..\tls\server.key`, or a full
+  path) and History / Disposal Check would have handed it out
+  (tests/test_stored_paths.py).
+
 ### Single computer
 
 Just run `AssetManagementTool.exe` (or `python main.py` from source). It

@@ -29,6 +29,9 @@ class TargetParseError(ValueError):
     pass
 
 
+_PLAIN_IP_TEXT = re.compile(r"[0-9A-Fa-f.:]{2,45}")
+
+
 def parse_targets(raw: str) -> list[str]:
     """Parse user input into a flat, de-duplicated list of IP strings (order preserved).
 
@@ -51,6 +54,10 @@ def parse_targets(raw: str) -> list[str]:
             ips.append(ip_str)
 
     for entry in entries:
+        # an IPv6 scope id ("fe80::1%anything") passes ipaddress but can carry
+        # quotes into the PowerShell the scans build - IPs only
+        if not _PLAIN_IP_TEXT.fullmatch(entry.replace("/", "").replace("-", "").replace(" ", "")):
+            raise TargetParseError(f"Invalid IP or range: '{entry}'")
         try:
             if "/" in entry:
                 network = ipaddress.ip_network(entry, strict=False)
@@ -216,9 +223,13 @@ def _validate_ip(ip: str) -> Optional[str]:
     semicolon characters needed to do that."""
     try:
         ipaddress.ip_address(ip)
-        return None
     except ValueError:
         return f"Invalid IP address: {ip!r}"
+    # ipaddress also takes an IPv6 scope id - "fe80::1%x'; <any command>; '" -
+    # so the text itself must be digits / hex / . / : only
+    if not _PLAIN_IP_TEXT.fullmatch(ip):
+        return f"Invalid IP address: {ip!r}"
+    return None
 
 
 def get_uptime(ip: str) -> dict:

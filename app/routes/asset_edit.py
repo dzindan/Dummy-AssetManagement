@@ -2,7 +2,7 @@ from urllib.parse import urlencode
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 
-from ..auth import current_username, require_permission
+from ..auth import current_username, require_permission, safe_next
 from ..db import (apply_hand_fix, delete_asset_rows, delete_summary, get_connection, log_activity,
                   prune_stale_unmapped, sync_cctv_asset_link)
 from ..importer import branch_for_edited_dept
@@ -247,7 +247,7 @@ def bulk_delete():
                                                          if counts["cctv_items"] else "."), "success")
         finally:
             conn.close()
-    next_url = request.form.get("next") or url_for("dashboard.index")
+    next_url = safe_next(request.form.get("next", ""), url_for("dashboard.index"))
     return redirect(next_url)
 
 
@@ -272,7 +272,7 @@ def delete(asset_id):
                   "success")
     finally:
         conn.close()
-    next_url = request.form.get("next") or url_for("dashboard.index")
+    next_url = safe_next(request.form.get("next", ""), url_for("dashboard.index"))
     return redirect(next_url)
 
 
@@ -377,7 +377,7 @@ def edit(asset_id):
                 flash(message, category)
             conn.commit()
             flash(f"Asset #{asset_id} updated.", "success")
-            next_url = request.form.get("next") or url_for("dashboard.index")
+            next_url = safe_next(request.form.get("next", ""), url_for("dashboard.index"))
             return redirect(next_url)
 
         asset = conn.execute("SELECT * FROM asset_items WHERE id = ?", (asset_id,)).fetchone()

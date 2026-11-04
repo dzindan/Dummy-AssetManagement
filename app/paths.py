@@ -238,16 +238,32 @@ def find_moved_file(stored: str | None, folder: str) -> str | None:
     docx_path, a saved diff report's file_path), or None. After the data
     folder moved (Settings > Data Storage Location, or the data brought onto
     the central server) that path is gone, but the file is in today's
-    `folder` under the same name."""
+    `folder` under the same name.
+
+    Only ever a file IN `folder`: the path comes from the database, and a
+    database brought in (import-desktop-data, restore) could name any file
+    of the server - "C:\\ProgramData\\...\\tls\\server.key" would be handed
+    to anyone who may open History."""
     if not stored:
         return None
-    if os.path.isfile(stored):
+    base = os.path.normcase(os.path.realpath(folder))
+    real = os.path.normcase(os.path.realpath(stored))
+    if os.path.dirname(real) == base and os.path.isfile(stored):
         return stored
     name = stored.replace("\\", "/").rsplit("/", 1)[-1]
-    if name in ("", ".", ".."):
+    if name in ("", ".", "..") or ":" in name:
         return None
     moved = os.path.join(folder, name)
     return moved if os.path.isfile(moved) else None
+
+
+def file_in(folder: str, name: str | None) -> str | None:
+    """folder\\name when `name` is a plain file name there (from the
+    database: no folders, no "..", no drive) and the file exists, else None."""
+    if not name or name in (".", "..") or any(ch in name for ch in "\\/:"):
+        return None
+    path = os.path.join(folder, name)
+    return path if os.path.isfile(path) else None
 
 
 def get_handover_template_path() -> str:

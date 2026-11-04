@@ -95,10 +95,14 @@ def make_cert(out_dir: str, names: list[str] | None = None, days: int = VALID_DA
     for path in paths.values():
         if os.path.exists(path):
             os.replace(path, path + ".old")
+    # the file is made empty and locked down first: written with the
+    # folder's inherited rights (ProgramData: Users may read) and restricted
+    # afterwards, the key would be readable by anyone for a moment
+    open(paths["key"], "wb").close()
+    restrict_key(paths["key"])
     with open(paths["key"], "wb") as f:
         f.write(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                                   serialization.NoEncryption()))
-    restrict_key(paths["key"])
     with open(paths["cert"], "wb") as f:
         f.write(cert.public_bytes(serialization.Encoding.PEM))
     with open(paths["cer"], "wb") as f:
@@ -130,6 +134,8 @@ def restrict_key(path: str) -> bool:
 
 def grant_key(path: str, user: str) -> bool:
     """install-task: the account the server runs as may read the key."""
+    if user.upper().startswith("S-1-"):
+        user = "*" + user  # the task may store its account as a SID
     return bool(path) and os.path.exists(path) and _icacls(path, "/grant", f"{user}:R")
 
 

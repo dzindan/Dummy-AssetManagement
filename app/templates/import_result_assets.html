@@ -57,7 +57,7 @@
       <button type="button" class="danger" data-bulk-delete-trigger
         data-bulk-delete-url="{{ url_for(edit_bp + '.bulk_delete') }}"
         data-bulk-delete-checkbox-class="dupe-row-checkbox-{{ r.batch_id }}"
-        data-bulk-delete-next="{{ request.url }}">Delete Selected</button>
+        data-bulk-delete-next="{{ request.full_path }}">Delete Selected</button>
       <label style="font-weight:normal;"><input type="checkbox" data-select-all="dupe-row-checkbox-{{ r.batch_id }}"> Select all</label>
     </div>
     {% for d in r.duplicate_serials %}
@@ -87,9 +87,9 @@
           {% endif %}
           <td>{{ row['status'] }}</td>
           <td>
-            <a class="btn secondary" href="{{ url_for(edit_bp + '.edit', asset_id=row['id'], next=request.url) }}">Edit #{{ row['id'] }}</a>
+            <a class="btn secondary" href="{{ url_for(edit_bp + '.edit', asset_id=row['id'], next=request.full_path) }}">Edit #{{ row['id'] }}</a>
             <form method="post" action="{{ url_for(edit_bp + '.delete', asset_id=row['id']) }}" style="display:inline;" onsubmit="return confirm('Delete #{{ row['id'] }} ({{ row['device_name'] }}, {{ d.serial }})? This cannot be undone.');">
-              <input type="hidden" name="next" value="{{ request.url }}">
+              <input type="hidden" name="next" value="{{ request.full_path }}">
               <button type="submit" class="danger">Delete</button>
             </form>
           </td>

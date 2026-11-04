@@ -81,6 +81,63 @@ class ServerAppTests(ServerTestBase):
         self.assertEqual(paths.get_local_settings_path(), os.path.join(self.data_dir, "local_settings.json"))
 
 
+class InstallTaskTests(ServerTestBase):
+    """install-task: schtasks + the PowerShell that lifts the 72 h limit
+    (subprocess mocked - nothing is registered)."""
+
+    def _run(self, ps_returncode=0):
+        from unittest import mock
+        server_config.write(self.data_dir, 8800, self.config_file)
+        calls = []
+
+        def fake_run(args, **kwargs):
+            calls.append((args, kwargs))
+            rc = ps_returncode if args[0] == "powershell" else 0
+            return mock.Mock(returncode=rc, stdout="", stderr="Access is denied." if rc else "")
+
+        with mock.patch.object(server.subprocess, "run", side_effect=fake_run):
+            done = server.install_task("CORP\svc-am", "S3cret'pw", self.config_file)
+        return calls, done
+
+    def test_password_never_on_a_command_line(self):
+        calls, done = self._run()
+        ps = [kw for args, kw in calls if args[0] == "powershell"]
+        self.assertEqual(len(ps), 1)
+        self.assertEqual(ps[0]["env"]["AM_TASK_PASSWORD"], "S3cret'pw")
+        self.assertEqual(ps[0]["env"]["AM_TASK_USER"], "CORP\svc-am")
+        ps_args = [args for args, kw in calls if args[0] == "powershell"][0]
+        self.assertNotIn("S3cret", " ".join(ps_args))
+        self.assertIn("-Password $env:AM_TASK_PASSWORD", " ".join(ps_args))
+        self.assertTrue(any("No time limit" in line for line in done), done)
+
+    def test_a_failed_time_limit_change_is_reported(self):
+        _calls, done = self._run(ps_returncode=1)
+        warning = [line for line in done if line.startswith("WARNING")]
+        self.assertEqual(len(warning), 1, done)
+        self.assertIn("3 days", warning[0])
+        self.assertIn("Access is denied", warning[0])
+
+
+class TaskUserTests(unittest.TestCase):
+    def test_reads_the_account_from_the_task_xml(self):
+        from unittest import mock
+        xml = "<Task><Principals><Principal id=\"Author\"><UserId>CORP\svc-am</UserId></Principal></Principals></Task>"
+        with mock.patch.object(server.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=xml)):
+            self.assertEqual(server.task_user(), "CORP\svc-am")
+        with mock.patch.object(server.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="")):
+            self.assertEqual(server.task_user(), "")
+
+    def test_grant_key_takes_a_sid_as_star_sid(self):
+        from unittest import mock
+        from app import tls
+        key = tempfile.NamedTemporaryFile(delete=False)
+        key.close()
+        with mock.patch.object(tls, "_icacls", return_value=True) as icacls:
+            self.assertTrue(tls.grant_key(key.name, "S-1-5-21-1-2-3-1105"))
+        icacls.assert_called_once_with(key.name, "/grant", "*S-1-5-21-1-2-3-1105:R")
+        os.unlink(key.name)
+
+
 class RealServerTests(ServerTestBase):
     def test_serve_answers_over_the_network_and_stops(self):
         port = _free_port()

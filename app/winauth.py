@@ -112,12 +112,20 @@ def group_sid(name: str) -> str:
 
 
 def computer_domain() -> str:
-    """The server's own domain (NetBIOS name) - the default for 'user' alone."""
+    """The server's own domain (NetBIOS name) - the default for 'user' alone.
+
+    The NetBIOS name is the workstation's LAN group, not the first label of
+    the DNS domain: they often differ (shinhan.com.vn vs SHBVN), and
+    LogonUser with a wrong domain says only "incorrect password". Off a
+    domain (no DNS domain): the computer's own name, for its local accounts."""
     try:
         import win32api
         import win32con
-        return win32api.GetComputerNameEx(win32con.ComputerNamePhysicalDnsDomain).split(".")[0].upper() \
-            or win32api.GetDomainName().upper()
+        import win32net
+        if win32api.GetComputerNameEx(win32con.ComputerNamePhysicalDnsDomain):
+            return (win32net.NetWkstaGetInfo(None, 100)["langroup"] or "").upper() \
+                or win32api.GetDomainName().upper()
+        return win32api.GetDomainName().upper()
     except Exception:  # noqa: BLE001 - not on a domain / no pywin32
         import os
         return os.environ.get("USERDOMAIN", "").upper()

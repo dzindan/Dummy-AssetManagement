@@ -20,7 +20,7 @@ from ..auth import current_username
 from ..db import get_connection
 from ..disposal import RESULTS, check_items, list_checks, load_check, read_disposal_list, save_check
 from ..exports import build_workbook, dated_download_name, send_workbook
-from ..paths import get_uploads_dir, safe_filename
+from ..paths import get_uploads_dir, safe_filename, file_in
 
 bp = Blueprint("disposal_check", __name__, url_prefix="/disposal-check")
 
@@ -93,15 +93,16 @@ def result(check_id):
         "disposal_check.html", active_page="disposal_check", check=check, items=rows, counts=counts,
         total=len(shown), total_all=len(items), only_marked=only_marked, picked=picked,
         notes=json.loads(check["notes_json"] or "[]"), results=RESULTS, history=None,
-        has_file=bool(check["stored_name"]) and os.path.exists(os.path.join(get_uploads_dir(), check["stored_name"])),
+        has_file=file_in(get_uploads_dir(), check["stored_name"]) is not None,
     )
 
 
 @bp.route("/<int:check_id>/original")
 def original(check_id):
     check, _ = _load(check_id)
-    path = os.path.join(get_uploads_dir(), check["stored_name"] or "")
-    if not check["stored_name"] or not os.path.exists(path):
+    # a plain file name of the uploads folder only - the name comes from the database
+    path = file_in(get_uploads_dir(), check["stored_name"])
+    if not path:
         abort(404)
     return send_file(path, as_attachment=True, download_name=check["file_name"] or os.path.basename(path))
 
