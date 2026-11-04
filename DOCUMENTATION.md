@@ -1962,6 +1962,10 @@ Tried 2026-11-03 with the real desktop data, into a temp server folder
   path) and History / Disposal Check would have handed it out
   (tests/test_stored_paths.py).
 
+#### Security updates
+
+Dependencies pinned in requirements.txt, indirect ones with security fixes too (2026-11-04: built on Python 3.14.10, OpenSSL 3.5.9, Expat 2.9.0; Flask 3.1.3, Werkzeug 3.1.9, cryptography 50.0.2, urllib3 2.8.0, certifi 2026.10.23). Check before a release: `pip-audit -r requirements.txt` and python.org for a newer 3.14.x - the exe carries the interpreter and its OpenSSL, so a new build is what delivers their fixes. defusedxml is installed so openpyxl refuses XML bombs (Expat alone stops them too, slower).
+
 ### Single computer
 
 Just run `AssetManagementTool.exe` (or `python main.py` from source). It

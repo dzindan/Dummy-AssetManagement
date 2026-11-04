@@ -1,20 +1,31 @@
-Flask==3.0.3
+Flask==3.1.3
 # the central server (`serve`): a production WSGI server, TLS built in
 cheroot==11.1.2
 # AD sign-in (app/winauth.py): SSPI Negotiate + LogonUser on the domain-joined server
-pywin32==311
+pywin32==312
 # HTTPS: the self-signed certificate `make-cert` makes (app/tls.py)
-cryptography==46.0.3
+cryptography==50.0.2
 openpyxl==3.1.5
 xlrd==2.0.2
-docxtpl==0.18.0
-python-docx==1.1.2
+docxtpl==0.20.2
+python-docx==1.2.0
 # QR code on each generated hand-over form (pure Python, writes PNG itself)
 segno==1.6.6
 Unidecode==1.3.8
-pyinstaller==6.21.0
-zeep
+pyinstaller==6.22.3
+zeep==4.3.3
 # zeep still imports the stdlib `cgi` module, removed in Python 3.13 - this
 # shim restores it. Harmless/unneeded (marker keeps it uninstalled) on older
 # interpreters.
 legacy-cgi; python_version >= "3.13"
+# pinned too (not imported directly): security fixes must reach every build
+Werkzeug==3.1.9
+Jinja2==3.1.6
+MarkupSafe==3.0.4
+itsdangerous==2.2.0
+# openpyxl uses it when installed: guards against XML bombs in an uploaded workbook
+defusedxml==0.7.1
+urllib3==2.8.0
+certifi==2026.10.23
+requests==2.34.2
+lxml==6.1.3
