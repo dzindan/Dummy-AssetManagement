@@ -6,10 +6,12 @@
 
 <div class="panel">
   <h2>AD sign-in</h2>
-  <p class="muted">Members of one AD group sign in with their Windows account - on a domain PC with no typing
-    (Windows sign-in), or with DOMAIN\username + their AD password. Their account here is made on the first
-    sign-in with the role below; change it in the table. Taken out of the group = refused at the next sign-in.
-    The accounts with an app password keep working (keep one Admin among them in case AD is down).</p>
+  <p class="muted">Choose who signs in with AD, one by one, in Accounts below: Add Account with Sign-in = AD, or
+    "Use AD" on an existing account. They sign in with their Windows account - on a domain PC with no typing
+    (Windows sign-in), or with DOMAIN\username + their AD password.
+    The AD group is optional: leave it empty and only those accounts get in. With a group, its members may also
+    sign in; their account is made on the first sign-in with the role below, and out of the group = refused at
+    the next sign-in. The accounts with an app password keep working (one Admin stays among them in case AD is down).</p>
   {% if not ad_available %}<p class="flash flash-error">Not available on this computer (Windows + pywin32 only).</p>{% endif %}
   <form method="post" action="{{ url_for('user_admin.save_ad') }}">
     <div class="field-row">
@@ -21,7 +23,7 @@
         <input type="text" id="ad_domain" name="ad_domain" value="{{ ad.domain }}" placeholder="e.g. CORP">
       </div>
       <div>
-        <label for="ad_group">AD group that may use the app</label>
+        <label for="ad_group">AD group that may use the app (optional)</label>
         <input type="text" id="ad_group" name="ad_group" value="{{ ad.group }}" placeholder="e.g. CORP\AM Users">
       </div>
       <div>
@@ -46,7 +48,7 @@
       {% for a in accounts %}
       <tr>
         <td>{{ a['username'] }}</td>
-        <td>{{ 'AD' if a['auth_source'] == 'ad' else 'App password' }}</td>
+        <td>{% if a['auth_source'] == 'ad' %}AD{% if not a['ad_listed'] %} <span class="muted">(by group)</span>{% endif %}{% else %}App password{% endif %}</td>
         <td>
           <form method="post" action="{{ url_for('user_admin.set_account_role', account_id=a['id']) }}" style="margin:0; display:flex; gap:0.4rem; align-items:center;">
             <select name="role_id" onchange="this.form.submit()">
@@ -62,6 +64,19 @@
           <form method="post" action="{{ url_for('user_admin.toggle_active', account_id=a['id']) }}" style="display:inline; margin:0;">
             <button type="submit" class="{{ 'danger' if a['is_active'] else 'secondary' }}">{{ 'Deactivate' if a['is_active'] else 'Activate' }}</button>
           </form>
+          <details style="display:inline-block;">
+            <summary style="display:inline; cursor:pointer;">{{ 'Use app password' if a['auth_source'] == 'ad' else 'Use AD' }}</summary>
+            <form method="post" action="{{ url_for('user_admin.set_sign_in', account_id=a['id']) }}" style="margin-top:0.4rem; display:flex; gap:0.4rem;">
+              {% if a['auth_source'] == 'ad' %}
+              <input type="hidden" name="sign_in" value="local">
+              <input type="password" name="password" placeholder="New password (min 8 chars)" minlength="8" required>
+              {% else %}
+              <input type="hidden" name="sign_in" value="ad">
+              <input type="text" name="ad_name" placeholder="{{ ad.domain or 'DOMAIN' }}\username" required>
+              {% endif %}
+              <button type="submit">Set</button>
+            </form>
+          </details>
           {% if a['auth_source'] != 'ad' %}
           <details style="display:inline-block;">
             <summary style="display:inline; cursor:pointer;">Reset password</summary>
@@ -84,10 +99,18 @@
   <form method="post" action="{{ url_for('user_admin.add_account') }}">
     <div class="field-row">
       <div>
-        <label for="new_username">Username</label>
-        <input type="text" id="new_username" name="username" required>
+        <label for="new_sign_in">Sign-in</label>
+        <select id="new_sign_in" name="sign_in"
+                onchange="var ad = this.value === 'ad'; var p = document.getElementById('new_password'); p.disabled = ad; p.required = !ad; document.getElementById('new_password_box').style.display = ad ? 'none' : ''; document.getElementById('new_username_label').textContent = ad ? 'AD account (DOMAIN\\username)' : 'Username';">
+          <option value="local">App password</option>
+          <option value="ad">AD</option>
+        </select>
       </div>
       <div>
+        <label for="new_username" id="new_username_label">Username</label>
+        <input type="text" id="new_username" name="username" required>
+      </div>
+      <div id="new_password_box">
         <label for="new_password">Password (min 8 chars)</label>
         <input type="password" id="new_password" name="password" minlength="8" required>
       </div>

@@ -807,6 +807,11 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE accounts ADD COLUMN auth_source TEXT NOT NULL DEFAULT 'local'")
     if "ad_sid" not in existing_account_cols:
         conn.execute("ALTER TABLE accounts ADD COLUMN ad_sid TEXT")
+    # 1 = an administrator set this account to AD by hand (2026-11-05): it may
+    # sign in whether or not it's in the access group. 0 = made by the group's
+    # first sign-in: out of the group, refused.
+    if "ad_listed" not in existing_account_cols:
+        conn.execute("ALTER TABLE accounts ADD COLUMN ad_listed INTEGER NOT NULL DEFAULT 0")
 
     existing_import_log_cols = {
         row["name"] for row in conn.execute("PRAGMA logsdb.table_info(import_log)").fetchall()

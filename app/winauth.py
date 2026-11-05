@@ -111,6 +111,24 @@ def group_sid(name: str) -> str:
     return win32security.ConvertSidToStringSid(sid)
 
 
+def on_domain() -> bool:
+    """This computer is joined to a domain, so AD can be asked about a name."""
+    try:
+        import win32api
+        import win32con
+        return bool(win32api.GetComputerNameEx(win32con.ComputerNamePhysicalDnsDomain))
+    except Exception:  # noqa: BLE001 - no pywin32
+        return False
+
+
+def user_sid(name: str) -> str:
+    """'CORP\\nva' -> its SID string (AuthError when AD doesn't know it)."""
+    try:
+        return group_sid(name)
+    except AuthError:
+        raise AuthError(f"AD account not found: {name}") from None
+
+
 def computer_domain() -> str:
     """The server's own domain (NetBIOS name) - the default for 'user' alone.
 

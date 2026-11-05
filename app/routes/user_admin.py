@@ -3,13 +3,20 @@ import sqlite3
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
 from ..auth import (
+    AD_PASSWORD_HASH,
     AD_SETTING_KEYS,
+    ad_account_name,
     ad_settings,
+    ad_sid_of,
+    ad_sign_in_on,
     create_account,
+    create_ad_account,
     current_account,
     current_permissions,
     current_username,
     hash_password,
+    is_last_local_admin,
+    normalize_username,
     refresh_session_password,
     would_orphan_manage_users,
 )
@@ -35,7 +42,7 @@ def index():
     conn = get_connection()
     try:
         accounts = conn.execute(
-            "SELECT a.id, a.username, a.is_active, a.last_login_at, a.created_at, a.auth_source, "
+            "SELECT a.id, a.username, a.is_active, a.last_login_at, a.created_at, a.auth_source, a.ad_listed, "
             "r.id AS role_id, r.name AS role_name "
             "FROM accounts a JOIN roles r ON r.id = a.role_id "
             "ORDER BY a.username"
@@ -64,8 +71,54 @@ def index():
     )
 
 
+def _checked_ad_name(text: str) -> tuple[str | None, str | None, str]:
+    """-> (DOMAIN\\USER, SID, a note); name None after flashing the problem."""
+    from ..winauth import AuthError
+
+    name = ad_account_name(text)
+    if not name:
+        flash("Enter the AD account as DOMAIN\\username.", "error")
+        return None, None, ""
+    try:
+        sid, note = ad_sid_of(name)
+    except AuthError as e:
+        flash(str(e), "error")
+        return None, None, ""
+    if not ad_sign_in_on():
+        note = (note + " AD sign-in is off: turn it on above before this account can sign in.").strip()
+    return name, sid, note
+
+
+def _add_ad_account(username: str, role_id: str):
+    if not role_id:
+        flash("Please choose a role.", "error")
+        return redirect(url_for("user_admin.index"))
+    name, sid, note = _checked_ad_name(username)
+    if not name:
+        return redirect(url_for("user_admin.index"))
+    try:
+        create_ad_account(name, int(role_id), sid)
+    except sqlite3.IntegrityError:
+        flash(f'Username "{name}" is already taken.', "error")
+        return redirect(url_for("user_admin.index"))
+    conn = get_connection()
+    try:
+        role = conn.execute("SELECT name FROM roles WHERE id = ?", (role_id,)).fetchone()
+        log_activity(conn, "user_admin", "Created AD account", performed_by=current_username(),
+                     target=name, new_value=role["name"] if role else "")
+        conn.commit()
+    finally:
+        conn.close()
+    flash(f'AD account "{name}" added.', "success")
+    if note:
+        flash(note, "info")
+    return redirect(url_for("user_admin.index"))
+
+
 @bp.route("/accounts/add", methods=["POST"])
 def add_account():
+    if request.form.get("sign_in") == "ad":
+        return _add_ad_account(request.form.get("username", ""), request.form.get("role_id", ""))
     username = request.form.get("username", "").strip()
     password = request.form.get("password", "")
     role_id = request.form.get("role_id", "")
@@ -150,15 +203,13 @@ def save_ad():
     group = request.form.get("ad_group", "").strip()
     domain = request.form.get("ad_domain", "").strip().upper()
     role = request.form.get("ad_default_role", "").strip()
-    if enabled and not group:
-        flash("Enter the AD group whose members may use the app (e.g. CORP\\AM Users).", "error")
-        return redirect(url_for("user_admin.index"))
     if enabled:
         if not winauth.available():
             flash("AD sign-in needs Windows (pywin32) - not available here.", "error")
             return redirect(url_for("user_admin.index"))
         try:
-            winauth.group_sid(group)
+            if group:
+                winauth.group_sid(group)
         except winauth.AuthError as e:
             flash(str(e), "error")
             return redirect(url_for("user_admin.index"))
@@ -173,9 +224,59 @@ def save_ad():
         conn.commit()
     finally:
         conn.close()
-    flash("AD sign-in saved." + (" Members of that group can now sign in with their Windows account."
-                                 if enabled else " Only the accounts of this app can sign in."), "success")
+    if not enabled:
+        done = " Only the accounts of this app can sign in."
+    elif group:
+        done = " Members of that group, and the AD accounts in the table, can sign in with Windows."
+    else:
+        done = " The AD accounts in the table can sign in with Windows."
+    flash("AD sign-in saved." + done, "success")
     return redirect(url_for("user_admin.index"))
+
+
+@bp.route("/accounts/<int:account_id>/sign-in", methods=["POST"])
+def set_sign_in(account_id):
+    """One account's way of signing in: its AD account, or an app password.
+    Its open sessions end (auth.session_account watches the password hash)."""
+    back = redirect(url_for("user_admin.index"))
+    conn = get_connection()
+    try:
+        account = conn.execute("SELECT username, auth_source FROM accounts WHERE id = ?", (account_id,)).fetchone()
+        if not account:
+            flash("Account not found.", "error")
+            return back
+        if request.form.get("sign_in") == "ad":
+            if is_last_local_admin(account_id) and account["auth_source"] != "ad":
+                flash("Cannot switch - keep one active Admin with an app password, the way in when AD is down.",
+                      "error")
+                return back
+            name, sid, note = _checked_ad_name(request.form.get("ad_name", ""))
+            if not name:
+                return back
+            values, event = (name, normalize_username(name), AD_PASSWORD_HASH, "ad", sid, 1), "AD"
+        else:
+            password = request.form.get("password", "")
+            if len(password) < 8:
+                flash("Password must be at least 8 characters.", "error")
+                return back
+            note = ""
+            values, event = (account["username"], normalize_username(account["username"]), hash_password(password),
+                             "local", None, 0), "app password"
+        try:
+            conn.execute("UPDATE accounts SET username = ?, username_norm = ?, password_hash = ?, auth_source = ?, "
+                         "ad_sid = ?, ad_listed = ? WHERE id = ?", (*values, account_id))
+        except sqlite3.IntegrityError:
+            flash(f'Username "{values[0]}" is already taken.', "error")
+            return back
+        log_activity(conn, "user_admin", "Changed account sign-in", performed_by=current_username(),
+                     target=account["username"], old_value=account["auth_source"], new_value=f"{event}: {values[0]}")
+        conn.commit()
+    finally:
+        conn.close()
+    flash(f'"{values[0]}" now signs in with {event}.', "success")
+    if note:
+        flash(note, "info")
+    return back
 
 
 @bp.route("/accounts/<int:account_id>/reset-password", methods=["POST"])

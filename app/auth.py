@@ -1,5 +1,6 @@
 import functools
 import hashlib
+import re
 import sqlite3
 from datetime import timedelta
 
@@ -55,8 +56,7 @@ def ad_settings() -> dict:
 def ad_sign_in_on() -> bool:
     from .winauth import available
 
-    s = ad_settings()
-    return s["enabled"] and bool(s["group"]) and available()
+    return ad_settings()["enabled"] and available()
 
 
 def apply_server_ad(config: dict) -> str:
@@ -86,27 +86,33 @@ class SignInRefused(Exception):
 
 
 def sign_in_ad(identity) -> int:
-    """An AD user Windows vouched for -> their account id (made on the first
-    sign-in, with the default role). Refused (SignInRefused) when they
-    aren't in the access group, or their account here is deactivated."""
+    """An AD user Windows vouched for -> their account id. An account an
+    administrator set to AD may sign in as it is. Anyone else must be in the
+    access group, if there is one (their account is made on the first sign-in,
+    with the default role). Refused (SignInRefused) otherwise, or when their
+    account here is deactivated."""
     from . import winauth
     from .db import log_activity
 
     s = ad_settings()
     if not ad_sign_in_on():
         raise SignInRefused("AD sign-in is off - use an account of this app.")
-    try:
-        allowed = winauth.group_sid(s["group"])
-    except winauth.AuthError as e:
-        raise SignInRefused(f"{e} - check Settings > Users & Roles > AD sign-in.") from None
-    if allowed not in identity.group_sids:
-        raise SignInRefused(f"{identity.username} isn't a member of {s['group']} - ask an administrator "
-                            "to add you to that AD group.")
     conn = get_connection()
     try:
         row = conn.execute("SELECT * FROM accounts WHERE ad_sid = ?", (identity.sid,)).fetchone() or \
             conn.execute("SELECT * FROM accounts WHERE username_norm = ? AND auth_source = 'ad' AND ad_sid IS NULL",
                          (normalize_username(identity.username),)).fetchone()
+        if not (row is not None and row["ad_listed"]):
+            if not s["group"]:
+                raise SignInRefused(f"{identity.username} has no account here - ask an administrator "
+                                    "to add it in Users & Roles.")
+            try:
+                allowed = winauth.group_sid(s["group"])
+            except winauth.AuthError as e:
+                raise SignInRefused(f"{e} - check Settings > Users & Roles > AD sign-in.") from None
+            if allowed not in identity.group_sids:
+                raise SignInRefused(f"{identity.username} isn't a member of {s['group']} - ask an administrator "
+                                    "to add you to that AD group, or to add your account in Users & Roles.")
         # By name only when no SID is kept yet: an AD name given to someone
         # else later (the old account deleted in AD) is another SID - that
         # person must not take over the old account and its role.
@@ -273,6 +279,55 @@ def verify_security_answer(account, answer: str) -> bool:
     if not answer_hash or not answer:
         return False
     return check_password_hash(answer_hash, _normalize_answer(answer))
+
+
+def ad_account_name(text: str) -> str | None:
+    """What an administrator typed -> DOMAIN\\USER as Windows gives it at
+    sign-in, None when it can't be one. 'nva' takes the default domain."""
+    from .winauth import split_name
+
+    domain, user = split_name(text, ad_settings()["domain"])
+    if not domain or not user or re.search(r'[\\/@:*?"<>|\s]', domain + user):
+        return None
+    return f"{domain}\\{user}".upper()
+
+
+def ad_sid_of(name: str) -> tuple[str | None, str]:
+    """-> (the account's SID, a note when it couldn't be looked up). Without
+    an answer from AD the account is still set: the name ties it to the person
+    at their first sign-in. AD saying "no such account" is an AuthError."""
+    from . import winauth
+
+    if not winauth.on_domain():
+        return None, "This computer isn't on a domain, so the name wasn't checked with AD."
+    return winauth.user_sid(name), ""
+
+
+def create_ad_account(name: str, role_id: int, sid: str | None) -> int:
+    """Raises sqlite3.IntegrityError if the name is already taken."""
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            "INSERT INTO accounts (username, username_norm, password_hash, role_id, is_active, created_at, "
+            "auth_source, ad_sid, ad_listed) VALUES (?, ?, ?, ?, 1, datetime('now'), 'ad', ?, 1)",
+            (name, normalize_username(name), AD_PASSWORD_HASH, role_id, sid))
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def is_last_local_admin(account_id: int) -> bool:
+    """True if no other active account with an app password holds
+    manage_users: with AD down nobody could sign in to manage the app."""
+    conn = get_connection()
+    try:
+        return conn.execute(
+            "SELECT COUNT(*) AS c FROM accounts a "
+            "JOIN role_permissions rp ON rp.role_id = a.role_id AND rp.permission_key = 'manage_users' "
+            "WHERE a.is_active = 1 AND a.auth_source = 'local' AND a.id != ?", (account_id,)).fetchone()["c"] == 0
+    finally:
+        conn.close()
 
 
 def would_orphan_manage_users(exclude_account_id: int | None = None, exclude_role_id: int | None = None) -> bool:

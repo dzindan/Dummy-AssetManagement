@@ -1658,6 +1658,16 @@ schtasks /Run /TN "Asset Management Tool"
 
 #### AD sign-in (`app/winauth.py`, Settings > Users & Roles > AD sign-in)
 
+**Set per account (2026-11-05).** Users & Roles > Accounts: Add Account with
+Sign-in = AD (`DOMAIN\username`, no password), or "Use AD" / "Use app password"
+on an account. Such an account has `ad_listed = 1` and signs in whether or not
+it is in the access group, which is now optional: empty = only these accounts.
+An account the group's first sign-in made has `ad_listed = 0` and is refused
+once out of the group. The name is checked with AD when the server is on a
+domain; the SID binds it, or the first sign-in does. The last active Admin with
+an app password can't be switched: it is the way in when AD is down.
+
+
 Set on the server the first time it runs (nothing hard-coded): on/off,
 the domain used for a bare "username", **the AD group whose members may
 use the app** (access is granted by group membership, like AAL / SG), and

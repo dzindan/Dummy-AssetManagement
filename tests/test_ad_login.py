@@ -15,7 +15,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import create_app, winauth  # noqa: E402
-from app.auth import create_account  # noqa: E402
+from app.auth import create_account, verify_password  # noqa: E402
 from app.db import get_connection, set_setting  # noqa: E402
 
 EVERYONE = "S-1-1-0"
@@ -48,6 +48,9 @@ class AdLoginBase(unittest.TestCase):
         self.app = create_app(csrf=False)
         self.client = self.app.test_client()
         create_account("admin", "adminpass1", _role_id("Admin"))
+        patcher = mock.patch.object(winauth, "on_domain", return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def turn_on(self, group="Everyone", role=""):
         for k, v in (("ad_enabled", "1"), ("ad_domain", "CORP"), ("ad_group", group), ("ad_default_role", role)):
@@ -158,6 +161,113 @@ class AdLoginTests(AdLoginBase):
         resp = self.client.post("/forgot-password", data={"username": "CORP\\nva", "answer": "a", "password": "x" * 9,
                                                           "confirm": "x" * 9}, follow_redirects=True)
         self.assertIn("This is an AD account", resp.get_data(as_text=True))
+
+    def add_ad(self, name="corp\\nvb", role="Editor"):
+        self.login_local()
+        with mock.patch.object(winauth, "user_sid", return_value="S-1-5-21-9-9-9-2000"):
+            return self.client.post("/settings/users/accounts/add", data={
+                "sign_in": "ad", "username": name, "role_id": _role_id(role)}, follow_redirects=True)
+
+    def test_an_account_set_by_hand_needs_no_group(self):
+        self.turn_on(group="")
+        self.assertIn("added", self.add_ad().get_data(as_text=True))
+        acc = _account("CORP\\NVB")
+        self.assertEqual((acc["auth_source"], acc["ad_listed"], acc["role_name"], acc["ad_sid"]),
+                         ("ad", 1, "Editor", "S-1-5-21-9-9-9-2000"))
+        self.client.post("/logout")
+        with mock.patch.object(winauth, "logon", return_value=_identity("NVB", groups=(), sid="S-1-5-21-9-9-9-2000")):
+            resp = self.client.post("/login", data={"username": "CORP\\nvb", "password": "x"})
+        self.assertEqual(resp.status_code, 302)
+        self.assertNotIn("/login", resp.headers["Location"])
+
+    def test_with_a_group_a_listed_account_still_gets_in_outside_it(self):
+        self.turn_on(group="Domain Admins")
+        self.add_ad()
+        self.client.post("/logout")
+        with mock.patch.object(winauth, "group_sid", return_value="S-1-5-32-544"), \
+                mock.patch.object(winauth, "logon", return_value=_identity("NVB", groups=(), sid="S-1-5-21-9-9-9-2000")):
+            resp = self.client.post("/login", data={"username": "CORP\\nvb", "password": "x"})
+        self.assertEqual(resp.status_code, 302)
+
+    def test_no_group_and_not_listed_is_refused(self):
+        self.turn_on(group="")
+        with mock.patch.object(winauth, "logon", return_value=_identity("NVC", sid="S-1-5-21-9-9-9-3000")):
+            html = self.client.post("/login", data={"username": "CORP\\nvc", "password": "x"}).get_data(as_text=True)
+        self.assertIn("has no account here", html)
+        self.assertIsNone(_account("CORP\\NVC"))
+
+    def test_an_account_made_by_the_group_is_refused_once_out_of_it(self):
+        self.turn_on()
+        with mock.patch.object(winauth, "logon", return_value=_identity()):
+            self.client.post("/login", data={"username": "CORP\\nva", "password": "x"})
+        self.client.post("/logout")
+        with mock.patch.object(winauth, "logon", return_value=_identity(groups=())):
+            html = self.client.post("/login", data={"username": "CORP\\nva", "password": "x"}).get_data(as_text=True)
+        self.assertIn("isn&#39;t a member", html)
+
+    def test_listed_account_deactivated_is_refused(self):
+        self.turn_on(group="")
+        self.add_ad()
+        conn = get_connection()
+        conn.execute("UPDATE accounts SET is_active = 0 WHERE username_norm = 'CORP\\NVB'")
+        conn.commit()
+        conn.close()
+        self.client.post("/logout")
+        with mock.patch.object(winauth, "logon", return_value=_identity("NVB", groups=(), sid="S-1-5-21-9-9-9-2000")):
+            html = self.client.post("/login", data={"username": "CORP\\nvb", "password": "x"}).get_data(as_text=True)
+        self.assertIn("deactivated", html)
+
+    def test_add_refuses_a_bad_name_and_one_ad_doesnt_know(self):
+        self.turn_on(group="")
+        self.login_local()
+        html = self.client.post("/settings/users/accounts/add", data={
+            "sign_in": "ad", "username": "a b@x", "role_id": _role_id("Viewer")}, follow_redirects=True).get_data(as_text=True)
+        self.assertIn("DOMAIN\\username", html)
+        with mock.patch.object(winauth, "user_sid", side_effect=winauth.AuthError("AD account not found: CORP\\X")):
+            html = self.client.post("/settings/users/accounts/add", data={
+                "sign_in": "ad", "username": "corp\\x", "role_id": _role_id("Viewer")}, follow_redirects=True).get_data(as_text=True)
+        self.assertIn("AD account not found", html)
+        self.assertIsNone(_account("CORP\\X"))
+
+    def test_plain_name_takes_the_default_domain(self):
+        self.turn_on(group="")
+        self.add_ad("nvb")
+        self.assertIsNotNone(_account("CORP\\NVB"))
+
+    def test_switching_an_account_both_ways(self):
+        self.turn_on(group="")
+        create_account("staff", "staffpass1", _role_id("Viewer"))
+        self.login_local()
+        acc = _account("staff")
+        with mock.patch.object(winauth, "user_sid", return_value="S-1-5-21-9-9-9-4000"):
+            self.client.post(f"/settings/users/accounts/{acc['id']}/sign-in", data={"sign_in": "ad", "ad_name": "corp\\nvd"})
+        now = _account("CORP\\NVD")
+        self.assertEqual((now["id"], now["auth_source"], now["ad_listed"], now["ad_sid"]),
+                         (acc["id"], "ad", 1, "S-1-5-21-9-9-9-4000"))
+        self.client.post(f"/settings/users/accounts/{acc['id']}/sign-in", data={"sign_in": "local", "password": "newpass123"})
+        back = _account("CORP\\NVD")
+        self.assertEqual((back["auth_source"], back["ad_listed"], back["ad_sid"]), ("local", 0, None))
+        self.assertTrue(verify_password("newpass123", back["password_hash"]))
+
+    def test_the_last_local_admin_stays_local(self):
+        self.turn_on(group="")
+        self.login_local()
+        acc = _account("admin")
+        with mock.patch.object(winauth, "user_sid", return_value="S-1-5-21-9-9-9-5000"):
+            html = self.client.post(f"/settings/users/accounts/{acc['id']}/sign-in", data={
+                "sign_in": "ad", "ad_name": "corp\\boss"}, follow_redirects=True).get_data(as_text=True)
+        self.assertIn("keep one active Admin", html)
+        self.assertEqual(_account("admin")["auth_source"], "local")
+
+    def test_off_a_domain_the_name_is_kept_unchecked_with_a_note(self):
+        self.turn_on(group="")
+        self.login_local()
+        with mock.patch.object(winauth, "on_domain", return_value=False):
+            html = self.client.post("/settings/users/accounts/add", data={
+                "sign_in": "ad", "username": "corp\\nve", "role_id": _role_id("Viewer")},
+                follow_redirects=True).get_data(as_text=True)
+        self.assertIn("isn&#39;t on a domain", html)
+        self.assertIsNone(_account("CORP\\NVE")["ad_sid"])
 
     def test_settings_panel_saves_and_checks_the_group(self):
         self.login_local()
