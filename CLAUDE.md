@@ -14,7 +14,9 @@ scratch by reading routes/queries alone.
 ## Commands
 
 - Dev server: `python main_devserver.py` (localhost, fixed port 8737)
-- Prod entrypoint: `python main.py` (binds 0.0.0.0, for LAN-shared mode)
+- Prod entrypoint: `python main.py` (binds 0.0.0.0, for LAN-shared mode).
+  The exe has no console window (2026-11-05): `app/lifecycle.py`, Quit button,
+  `stop` for the central server.
 - All tests: `python -m unittest discover -s tests -p "test_*.py"`
 - Single test file: `python tests/test_auth.py`
 - Single test case: `python -m unittest tests.test_auth.<ClassName>.<test_method>`

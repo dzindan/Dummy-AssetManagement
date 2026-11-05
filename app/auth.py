@@ -59,6 +59,28 @@ def ad_sign_in_on() -> bool:
     return s["enabled"] and bool(s["group"]) and available()
 
 
+def apply_server_ad(config: dict) -> str:
+    """The server's first start with init-server's --ad-group: AD sign-in on.
+    Only while nobody has set it: Users & Roles > AD sign-in decides after
+    that. -> a line for the log, '' when there was nothing to do."""
+    from .db import get_setting, set_setting
+    from .winauth import AuthError, available, group_sid
+
+    group = config.get("ad_group", "")
+    if not group or get_setting("ad_enabled", None) is not None:
+        return ""
+    if not available():
+        return "AD sign-in stays off: it needs Windows (pywin32)"
+    try:
+        group_sid(group)
+    except AuthError as e:
+        return f"AD sign-in stays off: {e}"
+    set_setting("ad_group", group)
+    set_setting("ad_default_role", config.get("ad_default_role", ""))
+    set_setting("ad_enabled", "1")
+    return f"AD sign-in on for members of {group}"
+
+
 class SignInRefused(Exception):
     pass
 

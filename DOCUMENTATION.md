@@ -1627,8 +1627,19 @@ schtasks /Run /TN "Asset Management Tool"
   point at another file.
 - `serve` (`app/server.py`) runs the app under **cheroot** (a production
   WSGI server, 8 threads) instead of Flask's development server - no
-  browser, no console needed, log in `<data_dir>\logs\server.log`
-  (rotated). `--no-console` = log file only (what the task runs).
+  browser, log in `<data_dir>\logs\server.log` (rotated). **The exe has
+  no console window** (`build.spec` `console=False`, 2026-11-05): commands
+  print into the command prompt that started them (`main._attach_console`;
+  cmd doesn't wait for them, so the prompt comes back first). `serve` says
+  where its log is, lets go of that prompt and carries on in the background.
+  `stop` ends it (`server.stop_server`: the pid in `<data_dir>\server.pid`,
+  checked to still be this app, then taskkill; elevated when it runs as
+  another account). `install-task` asks the password in Windows' own box.
+- AD sign-in from the first start: `init-server --ad-group "CORP\AM Users"
+  [--ad-role Viewer]` saves them in server.json and the first `serve` copies
+  them into the app's settings (`auth.apply_server_ad`), once: Users & Roles
+  > AD sign-in decides after that. The local admin made on `/setup` stays
+  as the way in when AD is down.
 - In server mode **everything** lives in `data_dir`: `data.db`, `logs.db`,
   `settings.json`, `local_settings.json` (secret_key), handovers, exports,
   uploads. `%LOCALAPPDATA%`, `data_location.json` and Settings > Data
@@ -1976,10 +1987,11 @@ prints a `127.0.0.1` URL and opens it in your default browser automatically.
 Pick **one** computer to act as the server (any of them; it just needs to
 stay on and keep the app open while others are using it):
 
-1. Run the exe there as normal. Its console window prints **two** addresses:
-   a `127.0.0.1` one (for that computer) and a LAN one, e.g.
-   `http://192.168.1.50:8737` (for everyone else). The LAN address is also
-   shown any time on the Settings page under "Share With Other Computers".
+1. Run the exe there as normal. It has no window: the browser opens on the
+   `127.0.0.1` address, and the LAN one, e.g. `http://192.168.1.50:8737`
+   (for everyone else), is on the Settings page under "Share With Other
+   Computers". Running it again opens the browser on the same copy
+   (`app/lifecycle.py`).
 2. If Windows Firewall prompts to allow the app, allow it on **Private
    networks** — otherwise other computers can't reach it.
 3. On every other computer: just open that LAN address in any browser. No
@@ -1988,7 +2000,7 @@ stay on and keep the app open while others are using it):
 All data (branches, assets, hand-over history) is now genuinely shared —
 everyone is reading and writing the same database on the server machine.
 The server computer must stay powered on and keep the app running for
-others to use it; closing that console window stops it for everyone.
+others to use it; **Quit** next to Logout stops it for everyone.
 
 This uses SQLite in WAL mode with a 30-second lock-wait timeout
 (`app/db.py`), which comfortably handles a handful of people browsing/
@@ -2066,7 +2078,7 @@ Two footguns to know about if you ever rebuild the exe yourself:
    pyinstaller build.spec --noconfirm --clean
    ```
 2. **A running process is unaffected by rebuilding the exe on disk.** If a
-   copy of the app is already running (its console window still open),
+   copy of the app is already running (it has no window: Quit, or Task Manager),
    rebuilding `AssetManagementTool.exe` does nothing for that already-running
    process — it keeps whatever code it loaded at startup. Always fully close
    every running instance (check Task Manager for `AssetManagementTool.exe`)

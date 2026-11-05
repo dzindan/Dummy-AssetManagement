@@ -18,6 +18,7 @@ from logging.handlers import RotatingFileHandler
 from . import paths, server_config
 
 log = logging.getLogger(__name__)
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 APP_NAME = "Asset Management Tool"
 TASK_NAME = "Asset Management Tool"
@@ -29,6 +30,10 @@ def log_dir() -> str:
     path = os.path.join(paths.get_app_data_dir(), "logs")
     os.makedirs(path, exist_ok=True)
     return path
+
+
+def log_path(config: dict) -> str:
+    return os.path.join(config["data_dir"], "logs", "server.log")
 
 
 def setup_logging(console: bool = True) -> None:
@@ -129,6 +134,14 @@ def serve(config_file: str | None = None, console: bool = True) -> int:
     app, error = create_server_app(config)
     if error:
         log.error("The database can't be opened: %s - every page shows the error until this is fixed", error)
+    else:
+        from .auth import ad_sign_in_on, apply_server_ad
+        note = apply_server_ad(config)
+        if note:
+            log.info(note)
+        if not ad_sign_in_on():
+            log.warning("AD sign-in is off: only the app's own accounts can sign in - "
+                        "set it in Users & Roles > AD sign-in")
     from .version import APP_VERSION
     log.info("%s %s serving %s on %s (data: %s)", APP_NAME, APP_VERSION, app.config["LAN_URL"],
              f"{config['host']}:{config['port']}", config["data_dir"])
@@ -156,19 +169,89 @@ def serve(config_file: str | None = None, console: bool = True) -> int:
     for sig in (signal.SIGINT, signal.SIGTERM, getattr(signal, "SIGBREAK", None)):
         if sig is not None:
             signal.signal(sig, stop)
+    _write_pid(config)
     try:
         server.start()  # blocks until stop()
     except OSError as e:
         log.error("Can't listen on %s:%s - %s (is another copy running? is the port free?)",
                   config["host"], config["port"], e)
         return 1
+    finally:
+        _forget_pid(config)
     log.info("Stopped")
     return 0
 
 
-# --- the scheduled task that runs it at the server's start ------------------------
+# --- stopping it: there is no window to close -------------------------------------
 
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+def _pid_path(config: dict) -> str:
+    return os.path.join(config["data_dir"], "server.pid")
+
+
+def _write_pid(config: dict) -> None:
+    with open(_pid_path(config), "w", encoding="ascii") as f:
+        f.write(str(os.getpid()))
+
+
+def _forget_pid(config: dict) -> None:
+    try:
+        with open(_pid_path(config), encoding="ascii") as f:
+            ours = f.read().strip() == str(os.getpid())
+        if ours:  # a second copy that couldn't start must not forget the running one
+            os.remove(_pid_path(config))
+    except OSError:
+        pass
+
+
+def _is_server_process(pid: str) -> bool:
+    """The pid file can be old and the number reused by something else."""
+    if not pid.isdigit():
+        return False
+    proc = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"], capture_output=True, text=True,
+                          creationflags=_NO_WINDOW)
+    first = (proc.stdout or "").split(",")[0].lower()
+    return "assetmanagementtool" in first or "python" in first
+
+
+def stop_server(config_file: str | None = None) -> str:
+    """`stop`: end the server, whether the task or `serve` started it. The
+    database is safe (SQLite); a request in progress is cut. -> what happened."""
+    config = server_config.load(config_file)
+    try:
+        with open(_pid_path(config), encoding="ascii") as f:
+            pid = f.read().strip()
+    except OSError:
+        return "The server isn't running."
+    if not _is_server_process(pid):
+        os.remove(_pid_path(config))
+        return "The server isn't running."
+    proc = subprocess.run(["taskkill", "/PID", pid, "/T", "/F"], capture_output=True, text=True,
+                          creationflags=_NO_WINDOW)
+    if proc.returncode:
+        raise RuntimeError(f"{(proc.stderr or proc.stdout).strip()} - run this from an elevated command prompt")
+    os.remove(_pid_path(config))
+    return "The server is stopped."
+
+
+def ask_password(user: str) -> str:
+    """The service account's password. The exe has no console to type it in,
+    so it's Windows' own box (a console when run from source)."""
+    if not paths.is_frozen():
+        import getpass
+        return getpass.getpass(f"Password of {user}: ")
+    proc = subprocess.run(["powershell", "-NoProfile", "-Command",
+                           "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+                           "$c = Get-Credential -UserName $env:AM_TASK_USER "
+                           "-Message 'The account the Asset Management server runs as'; "
+                           "if ($c) { [Console]::Out.Write($c.GetNetworkCredential().Password) }"],
+                          capture_output=True, encoding="utf-8", creationflags=_NO_WINDOW,
+                          env={**os.environ, "AM_TASK_USER": user})
+    if not proc.stdout:
+        raise RuntimeError("no password given")
+    return proc.stdout
+
+
+# --- the scheduled task that runs it at the server's start ------------------------
 
 
 def _exe_command(config_file: str | None) -> list[str]:

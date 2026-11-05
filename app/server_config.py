@@ -32,7 +32,9 @@ DEFAULTS = {"data_dir": "", "host": "0.0.0.0", "port": DEFAULT_PORT, "threads": 
             "tls_cert": "", "tls_key": "",
             # nightly backup (app/backup.py): "" = <data_dir>\backups; better
             # another disk or a share, so a dead disk doesn't take both
-            "backup_dir": "", "backup_time": DEFAULT_BACKUP_TIME, "backup_keep": DEFAULT_BACKUP_KEEP}
+            "backup_dir": "", "backup_time": DEFAULT_BACKUP_TIME, "backup_keep": DEFAULT_BACKUP_KEEP,
+            # AD sign-in from the start: copied into the app's settings once (auth.apply_server_ad)
+            "ad_group": "", "ad_default_role": ""}
 _TIME_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 _LOCAL_DIR_RE = re.compile(r"^[A-Za-z]:\\")
 

@@ -1,12 +1,13 @@
 import logging
 
-from flask import Blueprint, Response, flash, redirect, render_template, request, session, url_for
+from flask import Blueprint, Response, abort, current_app, flash, redirect, render_template, request, session, url_for
 
 from ..auth import (
     SECURITY_QUESTIONS_BY_KEY,
     SignInRefused,
     ad_settings,
     ad_sign_in_on,
+    require_permission,
     sign_in_ad,
     accounts_table_is_empty,
     create_account,
@@ -83,6 +84,19 @@ def login():
         return form(429 if locked else 200)
 
     return form()
+
+
+@bp.route("/quit", methods=["POST"], endpoint="quit")
+@require_permission("manage_settings")
+def quit_app():
+    """The Quit button of the app on a PC alone (it has no window to close)."""
+    from .. import lifecycle
+
+    if not current_app.config.get("QUIT_ENABLED"):
+        abort(404)
+    lifecycle.quit_after_requests()
+    return ("<!doctype html><title>Asset Management Tool</title>"
+            "<p>Asset Management Tool has stopped. You can close this tab.</p>")
 
 
 @bp.route("/sso")

@@ -47,6 +47,12 @@
       {% if current_account %}
       <div class="user-box">
         <span>{{ current_account.username }} <span class="muted">({{ current_account.role_name }})</span></span>
+        {% if quit_enabled and 'manage_settings' in current_permissions %}
+        <form method="post" action="{{ url_for('auth.quit') }}"
+              onsubmit="return confirm('Quit Asset Management Tool? It stops for everyone using this PC\'s address.')">
+          <button type="submit" class="link-button" title="Stop the app on this PC (start it again with AssetManagementTool.exe)">Quit</button>
+        </form>
+        {% endif %}
         <form method="post" action="{{ url_for('auth.logout') }}">
           <button type="submit" class="link-button">Logout</button>
         </form>

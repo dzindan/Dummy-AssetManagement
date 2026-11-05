@@ -106,6 +106,9 @@ def create_app(csrf: bool = True) -> Flask:
         set_setting("secret_key", secret)
     app.secret_key = secret
 
+    from . import lifecycle
+    lifecycle.track_requests(app)
+
     from .routes.auth import bp as auth_bp
     from .routes.dashboard import bp as dashboard_bp
     from .routes.import_data import bp as import_bp
@@ -180,7 +183,8 @@ def create_app(csrf: bool = True) -> Flask:
     def inject_app_version():
         # server_mode: the central server - pages leave out what only makes
         # sense on the PC running the app (its folders, moving its data)
-        return {"app_version": APP_VERSION, "server_mode": is_server_mode()}
+        return {"app_version": APP_VERSION, "server_mode": is_server_mode(),
+                "quit_enabled": bool(app.config.get("QUIT_ENABLED"))}
 
     @app.context_processor
     def inject_data_dir_status():
