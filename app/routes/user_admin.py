@@ -279,6 +279,43 @@ def set_sign_in(account_id):
     return back
 
 
+@bp.route("/accounts/<int:account_id>/delete", methods=["POST"])
+def delete_account(account_id):
+    """Remove an account so the name can be made again. What it did stays in
+    the logs under its name. An open session ends at its next page."""
+    back = redirect(url_for("user_admin.index"))
+    me = current_account()
+    if me and me["id"] == account_id:
+        flash("You can't delete the account you are signed in with.", "error")
+        return back
+    conn = get_connection()
+    try:
+        account = conn.execute(
+            "SELECT a.username, a.auth_source, a.is_active, a.ad_listed, r.id AS role_id, r.name AS role_name "
+            "FROM accounts a JOIN roles r ON r.id = a.role_id WHERE a.id = ?", (account_id,)).fetchone()
+        if not account:
+            flash("Account not found.", "error")
+            return back
+        manager = account["is_active"] and _role_has_manage_users(conn, account["role_id"])
+        if manager and would_orphan_manage_users(exclude_account_id=account_id):
+            flash("Cannot delete - this is the last account with Manage Users permission.", "error")
+            return back
+        if manager and account["auth_source"] == "local" and is_last_local_admin(account_id):
+            flash("Cannot delete - keep one active Admin with an app password, the way in when AD is down.", "error")
+            return back
+        conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+        log_activity(conn, "user_admin", "Deleted account", performed_by=current_username(),
+                     target=account["username"], old_value=account["role_name"])
+        conn.commit()
+    finally:
+        conn.close()
+    flash(f'Account "{account["username"]}" deleted. Its name can be used again.', "success")
+    if account["auth_source"] == "ad" and not account["ad_listed"]:
+        flash("It came from the AD group: while the person stays in the group, their next sign-in makes it again.",
+              "info")
+    return back
+
+
 @bp.route("/accounts/<int:account_id>/reset-password", methods=["POST"])
 def reset_password(account_id):
     password = request.form.get("password", "")

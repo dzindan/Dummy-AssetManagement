@@ -64,6 +64,12 @@
           <form method="post" action="{{ url_for('user_admin.toggle_active', account_id=a['id']) }}" style="display:inline; margin:0;">
             <button type="submit" class="{{ 'danger' if a['is_active'] else 'secondary' }}">{{ 'Deactivate' if a['is_active'] else 'Activate' }}</button>
           </form>
+          {% if not (current_account and current_account.id == a['id']) %}
+          <form method="post" action="{{ url_for('user_admin.delete_account', account_id=a['id']) }}" style="display:inline; margin:0;"
+                data-name="{{ a['username'] }}" onsubmit="return confirm('Delete account ' + this.dataset.name + '? Its name can then be used again. What it did stays in the logs.');">
+            <button type="submit" class="danger">Delete</button>
+          </form>
+          {% endif %}
           <details style="display:inline-block;">
             <summary style="display:inline; cursor:pointer;">{{ 'Use app password' if a['auth_source'] == 'ad' else 'Use AD' }}</summary>
             <form method="post" action="{{ url_for('user_admin.set_sign_in', account_id=a['id']) }}" style="margin-top:0.4rem; display:flex; gap:0.4rem;">

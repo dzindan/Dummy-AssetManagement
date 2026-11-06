@@ -1658,6 +1658,12 @@ schtasks /Run /TN "Asset Management Tool"
 
 #### AD sign-in (`app/winauth.py`, Settings > Users & Roles > AD sign-in)
 
+**Deleting an account (2026-11-06).** Users & Roles > Accounts > Delete frees
+the name so it can be made again. Refused for your own account, the last
+account with Manage Users, and the last active Admin with an app password.
+Logs keep its name: nothing refers to `accounts.id`. An account made by the AD
+group comes back at its next sign-in while the person stays in the group.
+
 **Set per account (2026-11-05).** Users & Roles > Accounts: Add Account with
 Sign-in = AD (`DOMAIN\username`, no password), or "Use AD" / "Use app password"
 on an account. Such an account has `ad_listed = 1` and signs in whether or not
