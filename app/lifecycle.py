@@ -28,6 +28,22 @@ _quitting = False
 _mutex = None
 
 
+def serve_local(app, host: str, port: int, threads: int = 8) -> None:
+    """The desktop app's web server: the central server's (cheroot, with its
+    oversized-upload drain and logging - server.make_server), not werkzeug's
+    app.run - werkzeug closes the connection after every answer, and Windows
+    sign-in by NTLM sends its 2nd round on the same connection
+    (winauth.NegotiateServer keys it by client address + port), so it failed
+    with "the token supplied to the function is invalid". Blocks until stopped."""
+    from .server import make_server
+
+    server = make_server({"host": host, "port": port, "threads": threads, "tls_cert": "", "tls_key": ""}, app)
+    try:
+        server.start()
+    finally:
+        server.stop()
+
+
 def track_requests(app) -> None:
     """Count requests in progress. Registered before every other
     before_request, so each one counted is also uncounted (teardown runs for

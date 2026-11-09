@@ -52,8 +52,9 @@ class AdLoginBase(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def turn_on(self, group="Everyone", role=""):
-        for k, v in (("ad_enabled", "1"), ("ad_domain", "CORP"), ("ad_group", group), ("ad_default_role", role)):
+    def turn_on(self, group="Everyone", role="", open_="1"):
+        for k, v in (("ad_enabled", "1"), ("ad_domain", "CORP"), ("ad_group", group), ("ad_default_role", role),
+                     ("ad_open", open_)):
             set_setting(k, v)
 
     def login_local(self):
@@ -62,13 +63,28 @@ class AdLoginBase(unittest.TestCase):
 
 @unittest.skipUnless(winauth.available(), "Windows + pywin32 only")
 class AdLoginTests(AdLoginBase):
-    def test_off_by_default_the_form_is_as_before(self):
+    def test_on_by_default_windows_sign_in_first(self):
+        resp = self.client.get("/login")
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/sso", resp.headers["Location"])
+
+    def test_turned_off_the_form_is_as_before(self):
+        set_setting("ad_enabled", "0")
         resp = self.client.get("/login")
         self.assertEqual(resp.status_code, 200)
         self.assertNotIn("Windows session", resp.get_data(as_text=True))
         with mock.patch.object(winauth, "logon") as logon:
             self.client.post("/login", data={"username": "CORP\\nva", "password": "x"})
         logon.assert_not_called()
+
+    def test_by_default_anyone_gets_a_viewer_account_and_is_told(self):
+        set_setting("ad_domain", "CORP")
+        with mock.patch.object(winauth, "logon", return_value=_identity("NVD", groups=(), sid="S-1-5-21-9-9-9-4000")):
+            resp = self.client.post("/login?form=1", data={"username": "CORP\\nvd", "password": "x"},
+                                    follow_redirects=True)
+        acc = _account("CORP\\NVD")
+        self.assertEqual((acc["role_name"], acc["auth_source"], acc["ad_listed"]), ("Viewer", "ad", 0))
+        self.assertIn("made with the Viewer role", resp.get_data(as_text=True))
 
     def test_ad_name_and_password_first_sign_in_makes_the_account(self):
         self.turn_on()
@@ -190,7 +206,7 @@ class AdLoginTests(AdLoginBase):
         self.assertEqual(resp.status_code, 302)
 
     def test_no_group_and_not_listed_is_refused(self):
-        self.turn_on(group="")
+        self.turn_on(group="", open_="0")
         with mock.patch.object(winauth, "logon", return_value=_identity("NVC", sid="S-1-5-21-9-9-9-3000")):
             html = self.client.post("/login", data={"username": "CORP\\nvc", "password": "x"}).get_data(as_text=True)
         self.assertIn("has no account here", html)
@@ -330,6 +346,12 @@ class WindowsSignInTests(AdLoginBase):
         self.assertIsNotNone(acc, me)
         self.assertEqual(acc["auth_source"], "ad")
         self.assertEqual(self.client.get("/").status_code, 200)
+
+    def test_windows_sign_in_with_the_defaults_makes_a_viewer(self):
+        resp = self.handshake(self.client, "/lookup/")
+        self.assertEqual((resp.status_code, resp.headers["Location"]), (302, "/lookup/"))
+        me = f"{os.environ.get('USERDOMAIN', '')}\\{os.environ.get('USERNAME', '')}".upper()
+        self.assertEqual(_account(me)["role_name"], "Viewer")
 
     def test_windows_sign_in_not_in_the_group(self):
         self.turn_on(group="Guests")  # this PC's user isn't a Guest

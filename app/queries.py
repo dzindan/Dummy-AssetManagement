@@ -452,6 +452,64 @@ CCTV_SORTS = {
 }
 
 
+def _search_current(conn, cte: str, filters: dict, in_filters: list[tuple[str, str, bool]], q_columns: list[str],
+                    page: int, per_page: int | None, sort: str, sorts: dict):
+    """The filter / count / page / sort shared by search_assets and search_cctv
+    over the current rows (`cte`). `in_filters`: (filters key, column, compare
+    upper-cased) for the multi-select filters, in order; `q_columns`: the
+    columns the free-text box searches. -> (rows, total)."""
+    where = []
+    params: list = []
+
+    branch_filters = filters.get("branch_no") or []
+    real_branches = [b for b in branch_filters if b != UNRESOLVED_BRANCH_FILTER]
+    branch_conditions = []
+    if UNRESOLVED_BRANCH_FILTER in branch_filters:
+        branch_conditions.append("bk.branch_no = ''")
+    if real_branches:
+        branch_conditions.append(f"bk.branch_no IN ({','.join('?' * len(real_branches))})")
+    if branch_conditions:
+        where.append("(" + " OR ".join(branch_conditions) + ")")
+        params.extend(real_branches)
+
+    for key, column, upper in in_filters:
+        values = filters.get(key) or []
+        if values:
+            target = f"UPPER({column})" if upper else column
+            where.append(f"{target} IN ({','.join('?' * len(values))})")
+            params.extend([v.strip().upper() for v in values] if upper else values)
+
+    if filters.get("q"):
+        like = f"%{filters['q'].strip().upper()}%"
+        where.append("(" + " OR ".join(f"UPPER({c}) LIKE ?" for c in q_columns) + ")")
+        params.extend([like] * len(q_columns))
+
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    from_sql = f"""
+    FROM ({cte}) bk
+    LEFT JOIN branches b ON b.branch_no = bk.branch_no
+    LEFT JOIN import_batches ib ON ib.id = bk.batch_id
+    {where_sql}
+    """
+
+    total = conn.execute(f"SELECT COUNT(*) AS c {from_sql}", params).fetchone()["c"]
+    limit_sql = ""
+    query_params = list(params)
+    if per_page is not None:
+        limit_sql = "LIMIT ? OFFSET ?"
+        query_params += [per_page, max(page - 1, 0) * per_page]
+    rows = conn.execute(
+        f"""
+        SELECT bk.*, b.eng_name AS branch_eng_name, ib.period AS period
+        {from_sql}
+        ORDER BY {order_by_sql(sort, sorts, _DEFAULT_LIST_ORDER)}
+        {limit_sql}
+        """,
+        query_params,
+    ).fetchall()
+    return rows, total
+
+
 def search_assets(conn, filters: dict, page: int = 1, per_page: int | None = None, sort: str = ""):
     """Filterable view over *current* assets (see CURRENT_ASSETS_CTE
     docstring) for the standalone Manage Assets page - deliberately scoped
@@ -471,73 +529,13 @@ def search_assets(conn, filters: dict, page: int = 1, per_page: int | None = Non
     `sort` is an ASSET_SORTS key (optionally "-" for descending); empty or
     unknown keeps the default branch, device order.
     """
-    where = []
-    params: list = []
-
-    branch_filters = filters.get("branch_no") or []
-    real_branches = [b for b in branch_filters if b != UNRESOLVED_BRANCH_FILTER]
-    branch_conditions = []
-    if UNRESOLVED_BRANCH_FILTER in branch_filters:
-        branch_conditions.append("bk.branch_no = ''")
-    if real_branches:
-        branch_conditions.append(f"bk.branch_no IN ({','.join('?' * len(real_branches))})")
-    if branch_conditions:
-        where.append("(" + " OR ".join(branch_conditions) + ")")
-        params.extend(real_branches)
-
-    device_filters = filters.get("device_name") or []
-    if device_filters:
-        where.append(f"bk.device_name IN ({','.join('?' * len(device_filters))})")
-        params.extend(device_filters)
-
-    model_filters = filters.get("model_device") or []
-    if model_filters:
-        where.append(f"bk.model_device IN ({','.join('?' * len(model_filters))})")
-        params.extend(model_filters)
-
-    status_filters = filters.get("status") or []
-    if status_filters:
-        where.append(f"UPPER(bk.status) IN ({','.join('?' * len(status_filters))})")
-        params.extend([s.strip().upper() for s in status_filters])
-
-    period_filters = filters.get("period") or []
-    if period_filters:
-        where.append(f"ib.period IN ({','.join('?' * len(period_filters))})")
-        params.extend(period_filters)
-
-    if filters.get("q"):
-        like = f"%{filters['q'].strip().upper()}%"
-        where.append(
-            "(UPPER(bk.serial_tag) LIKE ? OR UPPER(bk.model_device) LIKE ? OR "
-            "UPPER(bk.full_name) LIKE ? OR UPPER(bk.user_id_raw) LIKE ? OR UPPER(bk.branch_dept) LIKE ? OR "
-            "UPPER(bk.remark) LIKE ? OR UPPER(bk.position) LIKE ?)"
-        )
-        params.extend([like, like, like, like, like, like, like])
-
-    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
-    from_sql = f"""
-    FROM ({CURRENT_ASSETS_CTE}) bk
-    LEFT JOIN branches b ON b.branch_no = bk.branch_no
-    LEFT JOIN import_batches ib ON ib.id = bk.batch_id
-    {where_sql}
-    """
-
-    total = conn.execute(f"SELECT COUNT(*) AS c {from_sql}", params).fetchone()["c"]
-    limit_sql = ""
-    query_params = list(params)
-    if per_page is not None:
-        limit_sql = "LIMIT ? OFFSET ?"
-        query_params += [per_page, max(page - 1, 0) * per_page]
-    rows = conn.execute(
-        f"""
-        SELECT bk.*, b.eng_name AS branch_eng_name, ib.period AS period
-        {from_sql}
-        ORDER BY {order_by_sql(sort, ASSET_SORTS, _DEFAULT_LIST_ORDER)}
-        {limit_sql}
-        """,
-        query_params,
-    ).fetchall()
-    return rows, total
+    return _search_current(
+        conn, CURRENT_ASSETS_CTE, filters,
+        [("device_name", "bk.device_name", False), ("model_device", "bk.model_device", False),
+         ("status", "bk.status", True), ("period", "ib.period", False)],
+        ["bk.serial_tag", "bk.model_device", "bk.full_name", "bk.user_id_raw", "bk.branch_dept", "bk.remark",
+         "bk.position"],
+        page, per_page, sort, ASSET_SORTS)
 
 
 def get_branches_with_current_cctv(conn):
@@ -562,63 +560,11 @@ def search_cctv(conn, filters: dict, page: int = 1, per_page: int | None = None,
     CCTV gear isn't assigned to anyone). `per_page=None` returns every
     matching row unpaginated, used by the Excel export. `sort` is a
     CCTV_SORTS key, like search_assets'."""
-    where = []
-    params: list = []
-
-    branch_filters = filters.get("branch_no") or []
-    real_branches = [b for b in branch_filters if b != UNRESOLVED_BRANCH_FILTER]
-    branch_conditions = []
-    if UNRESOLVED_BRANCH_FILTER in branch_filters:
-        branch_conditions.append("bk.branch_no = ''")
-    if real_branches:
-        branch_conditions.append(f"bk.branch_no IN ({','.join('?' * len(real_branches))})")
-    if branch_conditions:
-        where.append("(" + " OR ".join(branch_conditions) + ")")
-        params.extend(real_branches)
-
-    device_filters = filters.get("device_name") or []
-    if device_filters:
-        where.append(f"bk.device_name IN ({','.join('?' * len(device_filters))})")
-        params.extend(device_filters)
-
-    status_filters = filters.get("status") or []
-    if status_filters:
-        where.append(f"UPPER(bk.status) IN ({','.join('?' * len(status_filters))})")
-        params.extend([s.strip().upper() for s in status_filters])
-
-    if filters.get("q"):
-        like = f"%{filters['q'].strip().upper()}%"
-        where.append(
-            "(UPPER(bk.serial_tag) LIKE ? OR UPPER(bk.model_device) LIKE ? OR "
-            "UPPER(bk.location) LIKE ? OR UPPER(bk.manufacturer) LIKE ? OR "
-            "UPPER(bk.branch_dept) LIKE ? OR UPPER(bk.remark) LIKE ?)"
-        )
-        params.extend([like, like, like, like, like, like])
-
-    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
-    from_sql = f"""
-    FROM ({CURRENT_CCTV_CTE}) bk
-    LEFT JOIN branches b ON b.branch_no = bk.branch_no
-    LEFT JOIN import_batches ib ON ib.id = bk.batch_id
-    {where_sql}
-    """
-
-    total = conn.execute(f"SELECT COUNT(*) AS c {from_sql}", params).fetchone()["c"]
-    limit_sql = ""
-    query_params = list(params)
-    if per_page is not None:
-        limit_sql = "LIMIT ? OFFSET ?"
-        query_params += [per_page, max(page - 1, 0) * per_page]
-    rows = conn.execute(
-        f"""
-        SELECT bk.*, b.eng_name AS branch_eng_name, ib.period AS period
-        {from_sql}
-        ORDER BY {order_by_sql(sort, CCTV_SORTS, _DEFAULT_LIST_ORDER)}
-        {limit_sql}
-        """,
-        query_params,
-    ).fetchall()
-    return rows, total
+    return _search_current(
+        conn, CURRENT_CCTV_CTE, filters,
+        [("device_name", "bk.device_name", False), ("status", "bk.status", True)],
+        ["bk.serial_tag", "bk.model_device", "bk.location", "bk.manufacturer", "bk.branch_dept", "bk.remark"],
+        page, per_page, sort, CCTV_SORTS)
 
 
 def find_duplicate_serials_in_batch(conn, batch_id: int, table: str = "asset_items"):

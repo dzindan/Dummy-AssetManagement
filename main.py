@@ -103,7 +103,7 @@ def main() -> None:
     lifecycle.write_running(port)
     threading.Timer(1.0, lambda: webbrowser.open(local_url)).start()
     try:
-        app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+        lifecycle.serve_local(app, "0.0.0.0", port)
     except OSError as e:
         _message(f"Asset Management Tool can't start: {e}")
     finally:
@@ -368,6 +368,4 @@ def cli(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    import sys
-
     sys.exit(cli(sys.argv[1:]))

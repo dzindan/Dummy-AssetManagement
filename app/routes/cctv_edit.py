@@ -1,7 +1,6 @@
-from urllib.parse import urlencode
-
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 
+from . import listing
 from ..auth import current_username, require_permission, safe_next
 from ..db import (apply_hand_fix, delete_asset_rows, delete_summary, get_connection, log_activity, prune_stale_unmapped,
                   sync_cctv_asset_link)
@@ -11,38 +10,12 @@ from ..exports import CCTV_ROW_COLUMNS, build_cctv_rows_workbook, dated_download
 from ..queries import (
     CCTV_SORTS,
     UNRESOLVED_BRANCH_FILTER,
-    get_branch,
     get_branches_with_current_cctv,
     inline_edit_suggestions,
     search_cctv,
 )
 
 bp = Blueprint("cctv_edit", __name__, url_prefix="/cctv")
-
-# Same pagination shape as asset_edit.py's Manage Assets page.
-PER_PAGE_OPTIONS = [100, 200, 300, 400, 500, 1000, 2000, 3000, 4000, 5000]
-DEFAULT_PER_PAGE = 200
-
-
-def _parse_per_page() -> int:
-    try:
-        value = int(request.args.get("per_page", DEFAULT_PER_PAGE))
-    except (TypeError, ValueError):
-        return DEFAULT_PER_PAGE
-    return value if value in PER_PAGE_OPTIONS else DEFAULT_PER_PAGE
-
-
-def _parse_page() -> int:
-    try:
-        value = int(request.args.get("page", 1))
-    except (TypeError, ValueError):
-        return 1
-    return max(value, 1)
-
-
-def _pagination_qs() -> str:
-    pairs = [(k, v) for k in request.args if k != "page" for v in request.args.getlist(k)]
-    return urlencode(pairs)
 
 
 # Free-text fields a user can correct by hand - no user_id/full_name/
@@ -78,8 +51,8 @@ def _filters_from_args() -> dict:
 @bp.route("/")
 def index():
     filters = _filters_from_args()
-    per_page = _parse_per_page()
-    page = _parse_page()
+    per_page = listing.parse_per_page()
+    page = listing.parse_page()
     sort = current_sort(CCTV_SORTS)
 
     conn = get_connection()
@@ -104,13 +77,7 @@ def index():
             r["name"] for r in conn.execute("SELECT name FROM status_standard_names").fetchall()
         }
         status_options = sorted(current_statuses | standard_statuses)
-        selected_branch = None
-        if len(filters["branch_no"]) == 1:
-            only_branch = filters["branch_no"][0]
-            if only_branch == UNRESOLVED_BRANCH_FILTER:
-                selected_branch = {"branch_no": "", "eng_name": "Unresolved / unmatched branch"}
-            else:
-                selected_branch = get_branch(conn, only_branch)
+        selected_branch = listing.selected_branch(conn, filters)
         suggestions = inline_edit_suggestions(conn)
     finally:
         conn.close()
@@ -129,9 +96,9 @@ def index():
         selected_branch=selected_branch,
         page=page,
         per_page=per_page,
-        per_page_options=PER_PAGE_OPTIONS,
+        per_page_options=listing.PER_PAGE_OPTIONS,
         total_pages=total_pages,
-        pagination_qs=_pagination_qs(),
+        pagination_qs=listing.pagination_qs(),
         sort=sort,
     )
 
@@ -301,12 +268,7 @@ def edit(asset_id):
         batch = conn.execute(
             "SELECT * FROM import_batches WHERE id = ?", (item["batch_id"],)
         ).fetchone()
-        standard_names = [
-            r["name"] for r in conn.execute("SELECT name FROM device_standard_names ORDER BY name").fetchall()
-        ]
-        standard_statuses = [
-            r["name"] for r in conn.execute("SELECT name FROM status_standard_names ORDER BY name").fetchall()
-        ]
+        standard_names, standard_statuses = listing.standard_lists(conn)
     finally:
         conn.close()
 

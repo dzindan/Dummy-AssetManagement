@@ -39,18 +39,22 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 # --- AD sign-in (winauth.py) --------------------------------------------------------
 
-AD_SETTING_KEYS = ("ad_enabled", "ad_domain", "ad_group", "ad_default_role")
+AD_SETTING_KEYS = ("ad_enabled", "ad_domain", "ad_group", "ad_default_role", "ad_open")
 
 
 def ad_settings() -> dict:
-    """Users & Roles > AD sign-in, set on the server the first time it runs."""
+    """Users & Roles > AD sign-in. On by default (2026-11-09): once there is an
+    Admin, whoever opens the app is signed in with their Windows session, and
+    "open" makes their account on that first sign-in with the default role
+    (Viewer) - an Admin gives more. Off only when an administrator turns it off."""
     from .db import get_setting
     from .winauth import computer_domain
 
-    return {"enabled": get_setting("ad_enabled", "0") == "1",
+    return {"enabled": get_setting("ad_enabled", "1") == "1",
             "domain": (get_setting("ad_domain", "") or "").strip() or computer_domain(),
             "group": (get_setting("ad_group", "") or "").strip(),
-            "default_role": (get_setting("ad_default_role", "") or "").strip()}
+            "default_role": (get_setting("ad_default_role", "") or "").strip(),
+            "open": get_setting("ad_open", "1") == "1"}
 
 
 def ad_sign_in_on() -> bool:
@@ -88,9 +92,10 @@ class SignInRefused(Exception):
 def sign_in_ad(identity) -> int:
     """An AD user Windows vouched for -> their account id. An account an
     administrator set to AD may sign in as it is. Anyone else must be in the
-    access group, if there is one (their account is made on the first sign-in,
-    with the default role). Refused (SignInRefused) otherwise, or when their
-    account here is deactivated."""
+    access group when there is one, or - with no group - "open" must be on.
+    Their account is made on the first sign-in, with the default role.
+    Refused (SignInRefused) otherwise, or when their account here is
+    deactivated."""
     from . import winauth
     from .db import log_activity
 
@@ -102,10 +107,11 @@ def sign_in_ad(identity) -> int:
         row = conn.execute("SELECT * FROM accounts WHERE ad_sid = ?", (identity.sid,)).fetchone() or \
             conn.execute("SELECT * FROM accounts WHERE username_norm = ? AND auth_source = 'ad' AND ad_sid IS NULL",
                          (normalize_username(identity.username),)).fetchone()
-        if not (row is not None and row["ad_listed"]):
-            if not s["group"]:
-                raise SignInRefused(f"{identity.username} has no account here - ask an administrator "
-                                    "to add it in Users & Roles.")
+        listed = row is not None and row["ad_listed"]
+        if not listed and not s["group"] and not s["open"]:
+            raise SignInRefused(f"{identity.username} has no account here - ask an administrator "
+                                "to add it in Users & Roles.")
+        if not listed and s["group"]:
             try:
                 allowed = winauth.group_sid(s["group"])
             except winauth.AuthError as e:
@@ -134,6 +140,12 @@ def sign_in_ad(identity) -> int:
             log_activity(conn, "user_admin", "AD account created on its first sign-in",
                          performed_by=identity.username, target=identity.username)
             conn.commit()
+            try:  # said after login_account (it starts a fresh session) - see tell_new_ad_account
+                from flask import g
+                g.new_ad_account = (identity.username,
+                                    conn.execute("SELECT name FROM roles WHERE id = ?", (role["id"],)).fetchone()["name"])
+            except RuntimeError:  # outside a request
+                pass
             return cursor.lastrowid
         if not row["is_active"]:
             raise SignInRefused("Your account is deactivated in this app - ask an administrator.")
@@ -148,6 +160,17 @@ def sign_in_ad(identity) -> int:
         return row["id"]
     finally:
         conn.close()
+
+
+def tell_new_ad_account() -> None:
+    """After login_account: tell someone whose account sign_in_ad just made
+    which role they got, and who gives more."""
+    from flask import flash, g
+
+    made = g.pop("new_ad_account", None)
+    if made:
+        flash(f"Signed in with Windows as {made[0]}. Your account was made with the {made[1]} role - "
+              "ask an administrator if you need other access.", "success")
 
 
 def safe_next(next_url: str, fallback: str) -> str:

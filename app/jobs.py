@@ -51,11 +51,6 @@ class Job:
     def done(self) -> bool:
         return self.status in ("done", "error")
 
-    def as_dict(self) -> dict:
-        return {"id": self.id, "kind": self.kind, "label": self.label, "owner": self.owner,
-                "status": self.status, "created": self.created, "started": self.started,
-                "finished": self.finished}
-
 
 _current = threading.local()
 

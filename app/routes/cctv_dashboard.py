@@ -96,7 +96,7 @@ def index():
         cctv_count = get_current_cctv_count(conn, scope=scope)
         latest_cctv_batch = get_latest_batch(conn, kind="cctv_report")
 
-        all_periods, all_items, all_matrix = get_all_branches_item_trend(conn, table=TABLE, scope=scope)
+        all_periods, _items, all_matrix = get_all_branches_item_trend(conn, table=TABLE, scope=scope)
         # Item Count Trend counts DVR/recorder *units* per device-name
         # series above - that's a different question from "how many cameras
         # are attached account-wide", which is a best-effort sum of each

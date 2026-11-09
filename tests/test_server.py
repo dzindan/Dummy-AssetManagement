@@ -96,7 +96,7 @@ class InstallTaskTests(ServerTestBase):
             return mock.Mock(returncode=rc, stdout="", stderr="Access is denied." if rc else "")
 
         with mock.patch.object(server.subprocess, "run", side_effect=fake_run):
-            done = server.install_task("CORP\svc-am", "S3cret'pw", self.config_file)
+            done = server.install_task(r"CORP\svc-am", "S3cret'pw", self.config_file)
         return calls, done
 
     def test_password_never_on_a_command_line(self):
@@ -104,7 +104,7 @@ class InstallTaskTests(ServerTestBase):
         ps = [kw for args, kw in calls if args[0] == "powershell"]
         self.assertEqual(len(ps), 1)
         self.assertEqual(ps[0]["env"]["AM_TASK_PASSWORD"], "S3cret'pw")
-        self.assertEqual(ps[0]["env"]["AM_TASK_USER"], "CORP\svc-am")
+        self.assertEqual(ps[0]["env"]["AM_TASK_USER"], r"CORP\svc-am")
         ps_args = [args for args, kw in calls if args[0] == "powershell"][0]
         self.assertNotIn("S3cret", " ".join(ps_args))
         self.assertIn("-Password $env:AM_TASK_PASSWORD", " ".join(ps_args))
@@ -121,9 +121,9 @@ class InstallTaskTests(ServerTestBase):
 class TaskUserTests(unittest.TestCase):
     def test_reads_the_account_from_the_task_xml(self):
         from unittest import mock
-        xml = "<Task><Principals><Principal id=\"Author\"><UserId>CORP\svc-am</UserId></Principal></Principals></Task>"
+        xml = "<Task><Principals><Principal id=\"Author\"><UserId>CORP\\svc-am</UserId></Principal></Principals></Task>"
         with mock.patch.object(server.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=xml)):
-            self.assertEqual(server.task_user(), "CORP\svc-am")
+            self.assertEqual(server.task_user(), r"CORP\svc-am")
         with mock.patch.object(server.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="")):
             self.assertEqual(server.task_user(), "")
 

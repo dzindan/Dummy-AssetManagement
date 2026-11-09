@@ -1,6 +1,6 @@
 import sqlite3
 
-from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask import Blueprint, Response, current_app, flash, redirect, render_template, request, url_for
 
 from ..auth import (
     AD_PASSWORD_HASH,
@@ -64,11 +64,45 @@ def index():
         active_page="settings",
         ad=ad_settings(),
         ad_available=winauth.available(),
+        sso=_sso_client_info(),
         accounts=accounts,
         roles=roles,
         role_permissions=role_permissions,
         permissions=PERMISSIONS,
     )
+
+
+def _sso_client_info() -> dict | None:
+    """What the client PCs need for Windows sign-in with no password box
+    (app/sso_client.py) - central server only."""
+    config = current_app.config.get("SERVER_CONFIG")
+    if not current_app.config.get("SERVER_MODE") or not config:
+        return None
+    from .. import sso_client
+
+    cert_names = current_app.config.get("CERT_NAMES")
+    names = sso_client.host_names(cert_names if config.get("tls_cert") else None)
+    scheme = "https" if config.get("tls_cert") else "http"
+    return {
+        "address": current_app.config.get("LAN_URL", ""),
+        "names": names,
+        "zone_sites": [f"{scheme}://{n}" for n in names],
+        "short_name_missing": not any("." not in n for n in names),
+    }
+
+
+@bp.route("/sso-client.reg")
+def sso_client_reg():
+    """For one PC: puts this server in the user's Local intranet zone."""
+    from .. import sso_client
+
+    info = _sso_client_info()
+    if not info or not info["names"]:
+        return redirect(url_for("user_admin.index"))
+    scheme = info["address"].split(":", 1)[0]
+    body = sso_client.reg_file(info["names"], scheme)
+    return Response(body.encode("utf-16"), mimetype="application/octet-stream",
+                    headers={"Content-Disposition": 'attachment; filename="AssetManagementTool-WindowsSignIn.reg"'})
 
 
 def _checked_ad_name(text: str) -> tuple[str | None, str | None, str]:
@@ -203,6 +237,7 @@ def save_ad():
     group = request.form.get("ad_group", "").strip()
     domain = request.form.get("ad_domain", "").strip().upper()
     role = request.form.get("ad_default_role", "").strip()
+    open_ = request.form.get("ad_open") == "1"
     if enabled:
         if not winauth.available():
             flash("AD sign-in needs Windows (pywin32) - not available here.", "error")
@@ -216,7 +251,7 @@ def save_ad():
     conn = get_connection()
     try:
         values = {"ad_enabled": "1" if enabled else "0", "ad_domain": domain, "ad_group": group,
-                  "ad_default_role": role}
+                  "ad_default_role": role, "ad_open": "1" if open_ else "0"}
         for key in AD_SETTING_KEYS:
             set_setting(key, values[key])
         log_activity(conn, "user_admin", "AD sign-in settings saved", performed_by=current_username(),
@@ -228,6 +263,8 @@ def save_ad():
         done = " Only the accounts of this app can sign in."
     elif group:
         done = " Members of that group, and the AD accounts in the table, can sign in with Windows."
+    elif open_:
+        done = " Anyone with a Windows account can sign in; a new one gets the role chosen."
     else:
         done = " The AD accounts in the table can sign in with Windows."
     flash("AD sign-in saved." + done, "success")

@@ -627,6 +627,92 @@ class CleaningReport:
     kind: str = "asset_report"
 
 
+class _RowCleaner:
+    """What both row importers (assets and CCTV) do to every row the same
+    way: the device / status / model through their alias tables (an unknown
+    value is queued for Settings, see _normalize_via_alias_table), the
+    branch, the IP, and which serials repeat within the batch."""
+
+    _KNOWN = {
+        "device": ("device_aliases", "device_standard_names", record_unmapped_device, normalize_device_name),
+        "status": ("status_aliases", "status_standard_names", record_unmapped_status, normalize_status),
+        "model": ("model_aliases", "model_standard_names", record_unmapped_model, normalize_model_device),
+    }
+
+    def __init__(self, conn, col_map: dict[str, int], fixed_branch_no: str | None):
+        self.conn = conn
+        self.col_map = col_map
+        self.fixed_branch_no = fixed_branch_no
+        self.known: dict[str, set[str]] = {}
+        self.unrecognized: dict[str, set[str]] = {}
+        self.caches: dict[str, dict] = {}
+        for kind, (aliases, standards, _record, _normalize) in self._KNOWN.items():
+            self.known[kind] = {r["alias"] for r in conn.execute(f"SELECT alias FROM {aliases}").fetchall()} | \
+                {r["name"] for r in conn.execute(f"SELECT name FROM {standards}").fetchall()}
+            self.unrecognized[kind] = set()
+            self.caches[kind] = {}
+        self.branch_cache: dict = {}
+        self.invalid_ips: set[str] = set()
+        self.seen_keys: dict[str, int] = {}  # asset_key -> first row id seen
+        self.duplicate_ids: dict[str, list[int]] = {}  # asset_key -> [row ids], only for repeated serials
+        self.serial_display: dict[str, str] = {}  # asset_key -> serial text as first seen (for display)
+
+    def get(self, row, field_name):
+        idx = self.col_map.get(field_name)
+        return row[idx] if idx is not None and idx < len(row) else None
+
+    def normalized(self, kind: str, raw: str) -> str:
+        """The standard device name / status / model for a raw cell."""
+        _aliases, _standards, record, normalize = self._KNOWN[kind]
+        clean = raw.upper()
+        if clean and clean not in self.known[kind]:
+            self.unrecognized[kind].add(clean)
+            record(self.conn, clean)
+        return normalize(self.conn, raw, cache=self.caches[kind])
+
+    def branch_no(self, branch_dept_cell: str) -> str:
+        if self.fixed_branch_no is not None:
+            return self.fixed_branch_no
+        branch_no, _ = resolve_branch(self.conn, branch_dept_cell, cache=self.branch_cache)
+        if not branch_no:
+            record_unresolved_branch(self.conn, branch_dept_cell)
+        return branch_no
+
+    def ip(self, row) -> str:
+        ip_raw = _clean_str(self.get(row, "ip"))
+        ip = clean_ip(ip_raw)
+        if ip_raw and not ip:
+            self.invalid_ips.add(ip_raw)
+        return ip
+
+    def note_serial(self, asset_key: str, serial_tag: str, new_id: int) -> None:
+        if not serial_tag:
+            return
+        if asset_key in self.seen_keys:
+            self.duplicate_ids.setdefault(asset_key, [self.seen_keys[asset_key]]).append(new_id)
+        else:
+            self.seen_keys[asset_key] = new_id
+            self.serial_display[asset_key] = serial_tag
+
+    def finish(self, report: CleaningReport, table: str) -> None:
+        """The report's lists of unmapped values, bad IPs and repeated serials."""
+        report.unrecognized_devices = sorted(self.unrecognized["device"])
+        report.unrecognized_statuses = sorted(self.unrecognized["status"])
+        report.unrecognized_models = sorted(self.unrecognized["model"])
+        report.invalid_ips = sorted(self.invalid_ips)
+        report.duplicate_serials = []
+        for key, ids in sorted(self.duplicate_ids.items()):
+            placeholders = ",".join("?" * len(ids))
+            # Full row details (not just the serial + ids) so the Cleaning
+            # Report can show exactly what's duplicated - same device handed to
+            # two different people, a copy-pasted row, etc. - instead of making
+            # the user open each Edit link just to see what they're comparing.
+            detail_rows = self.conn.execute(f"SELECT * FROM {table} WHERE id IN ({placeholders})", ids).fetchall()
+            report.duplicate_serials.append(
+                {"serial": self.serial_display.get(key, key), "asset_ids": ids, "rows": detail_rows}
+            )
+
+
 def _ingest_asset_rows(
     conn,
     batch_id: int,
@@ -650,36 +736,9 @@ def _ingest_asset_rows(
     multi-branch Total Asset history import, where there is no such
     file-level label and each row genuinely can be a different branch.
     """
-    seen_keys: dict[str, int] = {}  # asset_key -> first asset_item id seen
-    duplicate_ids: dict[str, list[int]] = {}  # asset_key -> [asset_item ids], only for repeated serials
-    serial_display: dict[str, str] = {}  # asset_key -> serial text as first seen (for display)
-    branch_cache: dict = {}
-    device_cache: dict = {}
-    status_cache: dict = {}
-    model_cache: dict = {}
-    unrecognized_devices: set[str] = set()
-    unrecognized_statuses: set[str] = set()
-    unrecognized_models: set[str] = set()
-    invalid_ips: set[str] = set()
+    clean = _RowCleaner(conn, col_map, fixed_branch_no)
+    get = clean.get
 
-    known_device_aliases = {
-        row["alias"] for row in conn.execute("SELECT alias FROM device_aliases").fetchall()
-    }
-    known_standard_names = {
-        row["name"] for row in conn.execute("SELECT name FROM device_standard_names").fetchall()
-    }
-    known_status_aliases = {
-        row["alias"] for row in conn.execute("SELECT alias FROM status_aliases").fetchall()
-    }
-    known_standard_statuses = {
-        row["name"] for row in conn.execute("SELECT name FROM status_standard_names").fetchall()
-    }
-    known_model_aliases = {
-        row["alias"] for row in conn.execute("SELECT alias FROM model_aliases").fetchall()
-    }
-    known_standard_models = {
-        row["name"] for row in conn.execute("SELECT name FROM model_standard_names").fetchall()
-    }
     # Same idea as device-name mapping, but for people: an asset report's
     # free-text "FULL NAME" column is whatever the branch typed (spacing,
     # diacritics, capitalization all vary), while the IDFromAither user list
@@ -691,10 +750,6 @@ def _ingest_asset_rows(
         _, u_norm = normalize_user_id(u["user_no"])
         if u_norm and u["user_name"]:
             user_names_by_norm[u_norm] = u["user_name"].strip().upper()
-
-    def get(row, field_name):
-        idx = col_map.get(field_name)
-        return row[idx] if idx is not None and idx < len(row) else None
 
     for row in rows:
         if row is None or all(c is None or _clean_str(c) == "" for c in row):
@@ -712,43 +767,20 @@ def _ingest_asset_rows(
             report.rows_skipped_header_repeat += 1
             continue
 
-        device_clean = device_name_raw.upper()
-        if device_clean and device_clean not in known_device_aliases and device_clean not in known_standard_names:
-            unrecognized_devices.add(device_clean)
-            record_unmapped_device(conn, device_clean)
-
-        device_name = normalize_device_name(conn, device_name_raw, cache=device_cache)
-
+        device_name = clean.normalized("device", device_name_raw)
         status_raw = _clean_str(get(row, "status"))
-        status_clean = status_raw.upper()
-        if status_clean and status_clean not in known_status_aliases and status_clean not in known_standard_statuses:
-            unrecognized_statuses.add(status_clean)
-            record_unmapped_status(conn, status_clean)
-        status = normalize_status(conn, status_raw, cache=status_cache)
-
+        status = clean.normalized("status", status_raw)
         model_device_raw = _clean_str(get(row, "model_device"))
-        model_clean = model_device_raw.upper()
-        if model_clean and model_clean not in known_model_aliases and model_clean not in known_standard_models:
-            unrecognized_models.add(model_clean)
-            record_unmapped_model(conn, model_clean)
-        model_device = normalize_model_device(conn, model_device_raw, cache=model_cache)
+        model_device = clean.normalized("model", model_device_raw)
 
         user_id_raw, user_id_norm = normalize_user_id(get(row, "user_id"))
         asset_key = _asset_key(branch_dept_cell, device_name, model_device, serial_tag, user_id_norm)
-        if fixed_branch_no is not None:
-            branch_no = fixed_branch_no
-        else:
-            branch_no, _ = resolve_branch(conn, branch_dept_cell, cache=branch_cache)
-            if not branch_no:
-                record_unresolved_branch(conn, branch_dept_cell)
+        branch_no = clean.branch_no(branch_dept_cell)
 
         full_name_raw = _clean_str(get(row, "full_name"))
         full_name = user_names_by_norm.get(user_id_norm, full_name_raw.upper())
 
-        ip_raw = _clean_str(get(row, "ip"))
-        ip = clean_ip(ip_raw)
-        if ip_raw and not ip:
-            invalid_ips.add(ip_raw)
+        ip = clean.ip(row)
 
         cursor = conn.execute(
             """
@@ -785,32 +817,10 @@ def _ingest_asset_rows(
         new_id = cursor.lastrowid
         report.rows_imported += 1
 
-        if serial_tag:
-            if asset_key in seen_keys:
-                ids = duplicate_ids.setdefault(asset_key, [seen_keys[asset_key]])
-                ids.append(new_id)
-            else:
-                seen_keys[asset_key] = new_id
-                serial_display[asset_key] = serial_tag
+        clean.note_serial(asset_key, serial_tag, new_id)
 
     apply_hand_fixes_to_batch(conn, "asset_items", batch_id)
-    report.unrecognized_devices = sorted(unrecognized_devices)
-    report.unrecognized_statuses = sorted(unrecognized_statuses)
-    report.unrecognized_models = sorted(unrecognized_models)
-    report.invalid_ips = sorted(invalid_ips)
-    report.duplicate_serials = []
-    for key, ids in sorted(duplicate_ids.items()):
-        placeholders = ",".join("?" * len(ids))
-        # Full row details (not just the serial + ids) so the Cleaning
-        # Report can show exactly what's duplicated - same device handed to
-        # two different people, a copy-pasted row, etc. - instead of making
-        # the user open each Edit link just to see what they're comparing.
-        detail_rows = conn.execute(
-            f"SELECT * FROM asset_items WHERE id IN ({placeholders})", ids
-        ).fetchall()
-        report.duplicate_serials.append(
-            {"serial": serial_display.get(key, key), "asset_ids": ids, "rows": detail_rows}
-        )
+    clean.finish(report, "asset_items")
 
 
 def _ingest_cctv_rows(
@@ -847,40 +857,8 @@ def _ingest_cctv_rows(
     id, seeded by the caller and grown here as rows get mirrored. Every
     CCTV row gets its cctv_items.asset_item_id set to the mirror row it
     created, or to the existing row it was deduped against."""
-    seen_keys: dict[str, int] = {}
-    duplicate_ids: dict[str, list[int]] = {}
-    serial_display: dict[str, str] = {}
-    branch_cache: dict = {}
-    device_cache: dict = {}
-    status_cache: dict = {}
-    model_cache: dict = {}
-    unrecognized_devices: set[str] = set()
-    unrecognized_statuses: set[str] = set()
-    unrecognized_models: set[str] = set()
-    invalid_ips: set[str] = set()
-
-    known_device_aliases = {
-        row["alias"] for row in conn.execute("SELECT alias FROM device_aliases").fetchall()
-    }
-    known_standard_names = {
-        row["name"] for row in conn.execute("SELECT name FROM device_standard_names").fetchall()
-    }
-    known_status_aliases = {
-        row["alias"] for row in conn.execute("SELECT alias FROM status_aliases").fetchall()
-    }
-    known_standard_statuses = {
-        row["name"] for row in conn.execute("SELECT name FROM status_standard_names").fetchall()
-    }
-    known_model_aliases = {
-        row["alias"] for row in conn.execute("SELECT alias FROM model_aliases").fetchall()
-    }
-    known_standard_models = {
-        row["name"] for row in conn.execute("SELECT name FROM model_standard_names").fetchall()
-    }
-
-    def get(row, field_name):
-        idx = col_map.get(field_name)
-        return row[idx] if idx is not None and idx < len(row) else None
+    clean = _RowCleaner(conn, col_map, fixed_branch_no)
+    get = clean.get
 
     for row in rows:
         # A CCTV sheet almost always follows its real DVR/camera rows with a
@@ -919,38 +897,16 @@ def _ingest_cctv_rows(
             report.rows_skipped_header_repeat += 1
             continue
 
-        device_clean = device_name_raw.upper()
-        if device_clean and device_clean not in known_device_aliases and device_clean not in known_standard_names:
-            unrecognized_devices.add(device_clean)
-            record_unmapped_device(conn, device_clean)
-        device_name = normalize_device_name(conn, device_name_raw, cache=device_cache)
-
+        device_name = clean.normalized("device", device_name_raw)
         status_raw = _clean_str(get(row, "status"))
-        status_clean = status_raw.upper()
-        if status_clean and status_clean not in known_status_aliases and status_clean not in known_standard_statuses:
-            unrecognized_statuses.add(status_clean)
-            record_unmapped_status(conn, status_clean)
-        status = normalize_status(conn, status_raw, cache=status_cache)
-
+        status = clean.normalized("status", status_raw)
         model_device_raw = _clean_str(get(row, "model_device"))
-        model_clean = model_device_raw.upper()
-        if model_clean and model_clean not in known_model_aliases and model_clean not in known_standard_models:
-            unrecognized_models.add(model_clean)
-            record_unmapped_model(conn, model_clean)
-        model_device = normalize_model_device(conn, model_device_raw, cache=model_cache)
+        model_device = clean.normalized("model", model_device_raw)
 
         asset_key = _cctv_asset_key(branch_dept_cell, device_name, model_device, serial_tag)
-        if fixed_branch_no is not None:
-            branch_no = fixed_branch_no
-        else:
-            branch_no, _ = resolve_branch(conn, branch_dept_cell, cache=branch_cache)
-            if not branch_no:
-                record_unresolved_branch(conn, branch_dept_cell)
+        branch_no = clean.branch_no(branch_dept_cell)
 
-        ip_raw = _clean_str(get(row, "ip"))
-        ip = clean_ip(ip_raw)
-        if ip_raw and not ip:
-            invalid_ips.add(ip_raw)
+        ip = clean.ip(row)
 
         cursor = conn.execute(
             """
@@ -1011,30 +967,12 @@ def _ingest_cctv_rows(
             # copied to the other (db.sync_cctv_asset_link).
             conn.execute("UPDATE cctv_items SET asset_item_id = ? WHERE id = ?", (linked_asset_id, new_id))
 
-        if serial_tag:
-            if asset_key in seen_keys:
-                ids = duplicate_ids.setdefault(asset_key, [seen_keys[asset_key]])
-                ids.append(new_id)
-            else:
-                seen_keys[asset_key] = new_id
-                serial_display[asset_key] = serial_tag
+        clean.note_serial(asset_key, serial_tag, new_id)
 
     apply_hand_fixes_to_batch(conn, "cctv_items", batch_id)
     if mirror_batch_id is not None:
         apply_hand_fixes_to_batch(conn, "asset_items", mirror_batch_id)
-    report.unrecognized_devices = sorted(unrecognized_devices)
-    report.unrecognized_statuses = sorted(unrecognized_statuses)
-    report.unrecognized_models = sorted(unrecognized_models)
-    report.invalid_ips = sorted(invalid_ips)
-    report.duplicate_serials = []
-    for key, ids in sorted(duplicate_ids.items()):
-        placeholders = ",".join("?" * len(ids))
-        detail_rows = conn.execute(
-            f"SELECT * FROM cctv_items WHERE id IN ({placeholders})", ids
-        ).fetchall()
-        report.duplicate_serials.append(
-            {"serial": serial_display.get(key, key), "asset_ids": ids, "rows": detail_rows}
-        )
+    clean.finish(report, "cctv_items")
 
 
 def _xls_cell_to_python(cell_type: int, value, book: xlrd.Book):

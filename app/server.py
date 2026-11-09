@@ -15,7 +15,7 @@ import subprocess
 import threading
 from logging.handlers import RotatingFileHandler
 
-from . import paths, server_config
+from . import paths, server_config, sso_client
 
 log = logging.getLogger(__name__)
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -108,19 +108,23 @@ def create_server_app(config: dict):
     app.config["CUCM_SCAN_BACKGROUND"] = True
     # Settings > Data & System shows the backups and "Back up now" (app/backup.py)
     app.config["SERVER_CONFIG"] = dict(config)
-    scheme = "https" if config["tls_cert"] else "http"
     # over HTTPS the session cookie is never sent on a plain-HTTP request
     app.config["SESSION_COOKIE_SECURE"] = bool(config["tls_cert"])
-    app.config["LAN_URL"] = f"{scheme}://{_server_name()}:{config['port']}"
+    # the dotless name: browsers treat it as intranet and sign in with Windows silently
+    app.config["CERT_NAMES"] = _cert_names(config)
+    app.config["LAN_URL"] = sso_client.address(config, app.config["CERT_NAMES"])
     return app, app.config.get("DB_INIT_ERROR") or ""
 
 
-def _server_name() -> str:
-    import socket
+def _cert_names(config: dict) -> list[str] | None:
+    """The names the HTTPS certificate is valid for (None: plain HTTP or unreadable)."""
+    if not config.get("tls_cert"):
+        return None
+    from . import tls
     try:
-        return socket.getfqdn() or socket.gethostname()
-    except OSError:
-        return "localhost"
+        return tls.cert_info(config["tls_cert"])["names"]
+    except Exception:  # noqa: BLE001 - the server still starts; the address falls back
+        return None
 
 
 def serve(config_file: str | None = None, console: bool = True) -> int:

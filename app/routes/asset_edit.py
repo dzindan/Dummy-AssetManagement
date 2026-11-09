@@ -1,7 +1,6 @@
-from urllib.parse import urlencode
-
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 
+from . import listing
 from ..auth import current_username, require_permission, safe_next
 from ..db import (apply_hand_fix, delete_asset_rows, delete_summary, get_connection, log_activity,
                   prune_stale_unmapped, sync_cctv_asset_link)
@@ -12,7 +11,6 @@ from ..queries import (
     ASSET_SORTS,
     UNRESOLVED_BRANCH_FILTER,
     find_current_duplicate_serials,
-    get_branch,
     get_branches_with_current_assets,
     has_unresolved_current_assets,
     inline_edit_suggestions,
@@ -21,39 +19,6 @@ from ..queries import (
 from ..text_utils import normalize_handover_date, usage_duration_years
 
 bp = Blueprint("asset_edit", __name__, url_prefix="/assets")
-
-# Manage Assets used to load every matching row at once (see search_assets'
-# docstring) - fine at a few hundred rows, but painfully slow to render once
-# a deployment's asset_items grew into the thousands. Paginated server-side
-# now.
-PER_PAGE_OPTIONS = [100, 200, 300, 400, 500, 1000, 2000, 3000, 4000, 5000]
-DEFAULT_PER_PAGE = 200
-
-
-def _parse_per_page() -> int:
-    try:
-        value = int(request.args.get("per_page", DEFAULT_PER_PAGE))
-    except (TypeError, ValueError):
-        return DEFAULT_PER_PAGE
-    return value if value in PER_PAGE_OPTIONS else DEFAULT_PER_PAGE
-
-
-def _parse_page() -> int:
-    try:
-        value = int(request.args.get("page", 1))
-    except (TypeError, ValueError):
-        return 1
-    return max(value, 1)
-
-
-def _pagination_qs() -> str:
-    """Current query string (filters + per_page) with `page` stripped out -
-    Prev/Next links append their own `&page=N` onto this rather than onto
-    the raw request query string, so paging never accidentally carries a
-    stale page number along for the ride."""
-    pairs = [(k, v) for k in request.args if k != "page" for v in request.args.getlist(k)]
-    return urlencode(pairs)
-
 
 # Free-text fields a user can correct by hand (e.g. to resolve a duplicate
 # serial flagged by the cleaning report). branch_no/batch_id/asset_key are
@@ -93,8 +58,8 @@ def _filters_from_args() -> dict:
 @bp.route("/")
 def index():
     filters = _filters_from_args()
-    per_page = _parse_per_page()
-    page = _parse_page()
+    per_page = listing.parse_per_page()
+    page = listing.parse_page()
     sort = current_sort(ASSET_SORTS)
 
     conn = get_connection()
@@ -140,16 +105,7 @@ def index():
                 "SELECT DISTINCT period FROM import_batches WHERE period != '' ORDER BY period DESC"
             ).fetchall()
         ]
-        # Only worth showing the "filtered to this one branch" convenience
-        # message/link (see template) when exactly one branch is selected -
-        # with several selected at once there's no single branch to link to.
-        selected_branch = None
-        if len(filters["branch_no"]) == 1:
-            only_branch = filters["branch_no"][0]
-            if only_branch == UNRESOLVED_BRANCH_FILTER:
-                selected_branch = {"branch_no": "", "eng_name": "Unresolved / unmatched branch"}
-            else:
-                selected_branch = get_branch(conn, only_branch)
+        selected_branch = listing.selected_branch(conn, filters)
         suggestions = inline_edit_suggestions(conn)
     finally:
         conn.close()
@@ -171,9 +127,9 @@ def index():
         selected_branch=selected_branch,
         page=page,
         per_page=per_page,
-        per_page_options=PER_PAGE_OPTIONS,
+        per_page_options=listing.PER_PAGE_OPTIONS,
         total_pages=total_pages,
-        pagination_qs=_pagination_qs(),
+        pagination_qs=listing.pagination_qs(),
         sort=sort,
     )
 
@@ -387,12 +343,7 @@ def edit(asset_id):
         batch = conn.execute(
             "SELECT * FROM import_batches WHERE id = ?", (asset["batch_id"],)
         ).fetchone()
-        standard_names = [
-            r["name"] for r in conn.execute("SELECT name FROM device_standard_names ORDER BY name").fetchall()
-        ]
-        standard_statuses = [
-            r["name"] for r in conn.execute("SELECT name FROM status_standard_names ORDER BY name").fetchall()
-        ]
+        standard_names, standard_statuses = listing.standard_lists(conn)
     finally:
         conn.close()
 

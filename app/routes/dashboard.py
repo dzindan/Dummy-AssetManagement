@@ -88,7 +88,7 @@ def index():
         ).fetchall()
 
         # Every device type, no OTHER bucket (see analytics.MAX_SERIES).
-        all_periods, all_items, all_matrix = get_all_branches_item_trend(conn, max_series=None, scope=scope)
+        all_periods, _items, all_matrix = get_all_branches_item_trend(conn, max_series=None, scope=scope)
 
         available_years = get_available_report_years(conn)
         selected_year = resolve_report_year(request.args.get("year"), available_years)

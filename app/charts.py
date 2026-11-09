@@ -50,16 +50,6 @@ def _hash(name: str) -> int:
     return h
 
 
-def stable_color_for(name: str) -> str:
-    """Deterministic PALETTE slot for `name` in isolation - same process or
-    a different one, same page or a different page, so e.g. "PC" is always
-    the same color when it's the only thing asking. Real charts should go
-    through _assign_colors() instead, which resolves same-chart collisions;
-    this is kept as the building block that gives a name its *preferred*
-    slot before collision resolution."""
-    return PALETTE[_hash(name) % len(PALETTE)]
-
-
 def _extra_color(i: int) -> str:
     """Color for the i-th series past the palette (charts that opt out of
     MAX_SERIES, like the Dashboard's full device list): golden-angle hues
@@ -77,7 +67,7 @@ def _assign_colors(names: list[str]) -> dict[str, str]:
     """Collision-free color per name for a single chart's shown series.
     "OTHER" (the fold-of-remainder bucket) is pinned to the reserved last
     slot (see PALETTE) and never displaces or is displaced by a real
-    series. The remaining names get their stable_color_for() slot as a
+    series. The remaining names get their stable _hash() slot as a
     *preference*; MAX_SERIES (app/analytics.py) caps real series at
     len(PALETTE) - 1, so there's always a free slot among the rest, but two
     preferences can still land on the same slot (there are ~25 standard

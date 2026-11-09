@@ -1240,6 +1240,14 @@ hues, deterministic by rank). With more than 8 series the chip bar gets
 **CCTV** (`importer._ingest_cctv_rows`, `cctv_metrics.py`,
 `routes/cctv_dashboard.py`, `routes/cctv_edit.py`):
 
+- **Shared with the asset rows (2026-11-09)**: `importer._RowCleaner` does
+  what both row importers did word for word - the device / status / model
+  through their alias tables (unknown values queued for Settings), branch
+  resolution, the IP, the repeated serials and the report's lists. Manage
+  Assets and Manage CCTV share `routes/listing.py` (paging, the one-branch
+  banner, the Edit form's lists) and `queries._search_current` (filters,
+  count, page, sort); each keeps only its own filters and searched columns.
+
 - **Sheet detection**: `detect_equipment_sheets` keeps the best-scoring
   sheet *per kind* - at most one regular equipment sheet and one CCTV sheet
   per file - rather than a single global best, which used to silently drop
@@ -1699,6 +1707,40 @@ AD is down.
   default; an FQDN needs the GPO "Site to Zone Assignment List"); for
   Kerberos rather than NTLM register the SPN to the service account:
   `setspn -S HTTP/amserver DOMAIN\svc-am` and `setspn -S HTTP/amserver.corp.local DOMAIN\svc-am`.
+  Since 2026-11-09 the server gives people the dotless address
+  (`app/sso_client.py`: Settings and the console show `https://AMSERVER:8737`,
+  not the full DNS name, when the certificate holds the short name - it does
+  by default). The full name or an IP is the Internet zone, where Edge /
+  Chrome pop up a username + password box instead of signing in. Users &
+  Roles > AD sign-in shows, on the central server only, the address, the
+  GPO "Site to Zone Assignment List" entries (`https://name` = 1), the
+  `setspn` lines and a .reg file (`/settings/users/sso-client.reg`, UTF-16)
+  that puts both names in the current user's Local intranet zone on one PC
+  (HKCU ZoneMap\Domains, no admin rights; ignored where the GPO "use only
+  machine settings" is on). It warns when the certificate has no dotless
+  name. Tests: `tests/test_sso_client.py`.
+- **On by default, everyone gets a Viewer account (2026-11-09)**: with no
+  account yet the app still opens /setup (the first Admin, app password).
+  After that `ad_enabled` defaults to on and the new setting `ad_open`
+  ("Anyone with a Windows account", default on): whoever opens the app is
+  signed in with their Windows session, and with no AD group a person with
+  no account gets one on that first sign-in with `ad_default_role` (Viewer
+  when unset); the page then says which role and to ask an administrator
+  for more (`auth.tell_new_ad_account`, after `login_account` since that
+  starts a fresh session). With an AD group only its members get one, as
+  before; untick both for the hand-picked accounts only. The first Admin
+  signing in on their own PC also gets their Windows account as a Viewer -
+  Sign out shows the form (no Windows sign-in straight back in), or give
+  that Windows account the Admin role and keep the app-password Admin for
+  when AD is down. An `ad_enabled` saved earlier is kept (off stays off),
+  but `ad_open` is new: a server upgraded from an earlier version with AD
+  on and no group lets anyone in as a Viewer from then on, until an
+  administrator unticks "Anyone with a Windows account".
+- **The desktop app serves with cheroot too** (`lifecycle.serve_local`, not
+  werkzeug `app.run`): werkzeug answers `Connection: close`, so NTLM's 2nd
+  round came on a new connection and SSPI said "the token supplied to the
+  function is invalid". Checked in Chrome on this PC: a fresh session on
+  http://localhost / http://127.0.0.1 signs in as the Windows user, no box.
 - **The form**: `DOMAIN\user`, `user@domain` or `user` (+ the default
   domain) with the AD password -> `LogonUser` (network logon) on the
   server. A name that's an app account with an app password signs in the

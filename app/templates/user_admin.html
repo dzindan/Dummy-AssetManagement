@@ -6,12 +6,13 @@
 
 <div class="panel">
   <h2>AD sign-in</h2>
-  <p class="muted">Choose who signs in with AD, one by one, in Accounts below: Add Account with Sign-in = AD, or
-    "Use AD" on an existing account. They sign in with their Windows account - on a domain PC with no typing
-    (Windows sign-in), or with DOMAIN\username + their AD password.
-    The AD group is optional: leave it empty and only those accounts get in. With a group, its members may also
-    sign in; their account is made on the first sign-in with the role below, and out of the group = refused at
-    the next sign-in. The accounts with an app password keep working (one Admin stays among them in case AD is down).</p>
+  <p class="muted">Whoever opens the app is signed in with their Windows account - with no typing (Windows sign-in),
+    or with DOMAIN\username + their Windows password. With "Anyone with a Windows account" ticked and no AD group,
+    a person with no account here gets one on their first sign-in, with the role below (Viewer unless you change it);
+    give them another role in Accounts below. With an AD group, only its members get an account that way
+    (out of the group = refused at the next sign-in). Untick both to let in only the AD accounts you add one by one:
+    Add Account with Sign-in = AD, or "Use AD" on an existing account. The accounts with an app password keep
+    working (one Admin stays among them in case AD is down).</p>
   {% if not ad_available %}<p class="flash flash-error">Not available on this computer (Windows + pywin32 only).</p>{% endif %}
   <form method="post" action="{{ url_for('user_admin.save_ad') }}">
     <div class="field-row">
@@ -21,6 +22,9 @@
       <div>
         <label for="ad_domain">Domain (for "username" alone)</label>
         <input type="text" id="ad_domain" name="ad_domain" value="{{ ad.domain }}" placeholder="e.g. CORP">
+      </div>
+      <div style="flex:0 0 auto; align-self:flex-end;">
+        <label><input type="checkbox" name="ad_open" value="1" {{ 'checked' if ad.open }}> Anyone with a Windows account</label>
       </div>
       <div>
         <label for="ad_group">AD group that may use the app (optional)</label>
@@ -37,6 +41,28 @@
       <div style="flex: 0 0 auto; align-self: flex-end;"><button type="submit">Save</button></div>
     </div>
   </form>
+  {% if sso %}
+  <h3 style="margin-top:1.2rem;">Windows sign-in on the client PCs (no password)</h3>
+  <p class="muted">A domain PC signs in with the Windows user who is logged on, with no typing, only when the
+    browser trusts this server as an intranet site. Otherwise the browser asks for a username and password.</p>
+  <ol class="muted">
+    <li>Open the app at <code>{{ sso.address }}</code>. A name without dots is intranet by default.
+      A full name with dots or an IP address makes the browser ask for a password.</li>
+    <li>For every PC at once, IT sets the GPO
+      <em>Computer Configuration &gt; Administrative Templates &gt; Windows Components &gt; Internet Explorer &gt;
+      Internet Control Panel &gt; Security Page &gt; Site to Zone Assignment List</em>:
+      {% for s in sso.zone_sites %}<code>{{ s }}</code> = <code>1</code>{{ ', ' if not loop.last }}{% endfor %}
+      (Edge and Chrome use the same list).</li>
+    <li>For one PC only: <a href="{{ url_for('user_admin.sso_client_reg') }}">download the .reg file</a> and open it
+      on that PC with the user who signs in (no admin rights needed), then restart the browser.
+      It does nothing where the GPO "use only machine settings" is on.</li>
+    <li>Optional, for Kerberos instead of NTLM when the server runs as a domain service account:
+      {% for n in sso.names %}<code>setspn -S HTTP/{{ n }} DOMAIN\service-account</code>{{ ', ' if not loop.last }}{% endfor %}.</li>
+  </ol>
+  {% if sso.short_name_missing %}<p class="flash flash-error">The HTTPS certificate has no name without dots for this
+    server, so the address above makes the browser ask for a password. Make it again with the short name:
+    <code>AssetManagementTool.exe make-cert</code> (its default names include it), then give the clients the new .cer.</p>{% endif %}
+  {% endif %}
 </div>
 
 <div class="panel">

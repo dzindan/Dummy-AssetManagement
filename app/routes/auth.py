@@ -9,6 +9,7 @@ from ..auth import (
     ad_sign_in_on,
     require_permission,
     sign_in_ad,
+    tell_new_ad_account,
     accounts_table_is_empty,
     create_account,
     find_account_by_username,
@@ -74,6 +75,7 @@ def login():
                 throttle.sign_in_by_name.clear(name)
                 try:
                     login_account(sign_in_ad(identity))
+                    tell_new_ad_account()
                     return redirect(_safe_next(next_url))
                 except SignInRefused as e:
                     flash(str(e), "error")
@@ -137,6 +139,7 @@ def sso():
         return challenge(token)  # NTLM: one more round on this connection
     try:
         login_account(sign_in_ad(identity))
+        tell_new_ad_account()
     except SignInRefused as e:
         flash(str(e), "error")
         return redirect(form_url)
