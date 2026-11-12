@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "_cctv_month_table.html" as cctv_month_table %}
+{% import "_as_of.html" as as_of_ui %}
 {#
 Text linking to Manage Assets (`endpoint` asset_edit.index) or Manage CCTV
 (cctv_edit.index) filtered to this branch + `device` (+ `status`), so a row
@@ -10,20 +11,29 @@ plain text.
 {% macro filter_link(endpoint, text, device, status=None) -%}
 {%- if device == '(UNKNOWN)' or status == '(UNKNOWN)' -%}{{ text }}
 {%- else -%}
-<a class="branch-link" href="{{ url_for(endpoint, branch_no=branch['branch_no'], device_name=device, status=status) }}"
+<a class="branch-link" href="{{ url_for(endpoint, branch_no=branch['branch_no'], device_name=device, status=status, as_of=as_of or None) }}"
    title="Open {{ device }}{{ ' / ' ~ status if status else '' }} for this branch">{{ text }}</a>
 {%- endif -%}
 {%- endmacro %}
 {% block title %}{{ branch['eng_name'] }} - Asset Management Tool{% endblock %}
 {% block content %}
 <h1>{{ branch['eng_name'] }}</h1>
-<p class="muted">Branch No: {{ branch['branch_no'] }} &middot; {{ counted_asset_count }} assets currently on record
+{% set on_record = 'on record as of ' ~ as_of if as_of else 'currently on record' %}
+<p class="muted">Branch No: {{ branch['branch_no'] }} &middot; {{ counted_asset_count }} assets {{ on_record }}
   {% if assets | length > counted_asset_count %}(+ {{ assets | length - counted_asset_count }} CCTV/DVR counted separately){% endif %}
-  &middot; {{ cctv_items | length }} CCTV item(s) currently on record</p>
+  &middot; {{ cctv_items | length }} CCTV item(s) {{ on_record }}
+  {% if report_periods %}&middot; from the {{ report_periods | join(', ') }} report{% endif %}</p>
 
-<div class="actions" style="margin-top:0;">
-  <a class="btn" href="{{ url_for('branch_detail.export', branch_no=branch['branch_no']) }}">Export Assets to Excel</a>
-  <a class="btn secondary" href="{{ url_for('branch_detail.export_cctv', branch_no=branch['branch_no']) }}">Export CCTV to Excel</a>
+{{ as_of_ui.banner(as_of, "The trend chart and the month table below always cover every month.") }}
+<div class="actions" style="margin-top:0; align-items:center;">
+  <a class="btn" href="{{ url_for('branch_detail.export', branch_no=branch['branch_no'], as_of=as_of or None) }}">Export Assets to Excel</a>
+  <a class="btn secondary" href="{{ url_for('branch_detail.export_cctv', branch_no=branch['branch_no'], as_of=as_of or None) }}">Export CCTV to Excel</a>
+  {% if as_of_options | length > 1 %}
+  <form method="get" action="{{ url_for('branch_detail.detail', branch_no=branch['branch_no']) }}" style="display:flex; align-items:center; gap:0.35rem;">
+    {% if request.args.get('year') %}<input type="hidden" name="year" value="{{ request.args.get('year') }}">{% endif %}
+    {{ as_of_ui.select(as_of, as_of_options, onchange=True) }}
+  </form>
+  {% endif %}
 </div>
 
 <div class="panel" style="margin-top: 1.25rem;">
@@ -38,6 +48,7 @@ plain text.
     {% if available_years %}
     <form method="get" action="{{ url_for('branch_detail.detail', branch_no=branch['branch_no']) }}" style="display:flex; align-items:center; gap:0.35rem;">
       <label for="branch-year" class="muted" style="font-size:0.85rem;">Report year</label>
+      {% if as_of %}<input type="hidden" name="as_of" value="{{ as_of }}">{% endif %}
       <select id="branch-year" name="year" onchange="this.form.submit()">
         {% for y in available_years %}
         <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
@@ -239,7 +250,7 @@ plain text.
 </div>
 
 <div class="panel">
-  <h2>Current Assets</h2>
+  <h2>{{ 'Assets as of ' ~ as_of if as_of else 'Current Assets' }}</h2>
   <p class="muted"><a href="{{ url_for('asset_edit.index', branch_no=branch['branch_no']) }}">Open in Manage Assets</a> for more filters and pagination.</p>
   <div class="table-scroll">
   <table>
@@ -259,7 +270,7 @@ plain text.
         <td>{{ a['position'] }}</td>
         <td>{{ a['handover_date'] }}</td>
         <td>{{ a['handover_date'] | usage_duration }}</td>
-        <td><a class="btn secondary" href="{{ url_for('asset_edit.edit', asset_id=a['id'], next=request.path) }}">Edit</a></td>
+        <td>{% if as_of %}{{ a['period'] }}{% else %}<a class="btn secondary" href="{{ url_for('asset_edit.edit', asset_id=a['id'], next=request.path) }}">Edit</a>{% endif %}</td>
       </tr>
       {% else %}
       <tr><td colspan="11" class="muted">No assets on record for this branch.</td></tr>
@@ -270,7 +281,7 @@ plain text.
 </div>
 
 <div class="panel">
-  <h2>Current CCTV Items</h2>
+  <h2>{{ 'CCTV Items as of ' ~ as_of if as_of else 'Current CCTV Items' }}</h2>
   <p class="muted"><a href="{{ url_for('cctv_edit.index', branch_no=branch['branch_no']) }}">Open in Manage CCTV</a> for more filters.</p>
   <div class="table-scroll">
   <table>
@@ -290,7 +301,7 @@ plain text.
         <td>{{ c['hdd_count'] }}</td>
         <td>{{ c['hdd_capacity'] }}</td>
         <td>{{ c['location'] }}</td>
-        <td><a class="btn secondary" href="{{ url_for('cctv_edit.edit', asset_id=c['id'], next=request.path) }}">Edit</a></td>
+        <td>{% if as_of %}{{ c['period'] }}{% else %}<a class="btn secondary" href="{{ url_for('cctv_edit.edit', asset_id=c['id'], next=request.path) }}">Edit</a>{% endif %}</td>
       </tr>
       {% else %}
       <tr><td colspan="11" class="muted">No CCTV items on record for this branch.</td></tr>

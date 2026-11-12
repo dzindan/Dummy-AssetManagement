@@ -1,5 +1,6 @@
 import os
 import secrets
+from urllib.parse import urlencode
 
 from flask import Flask, Response
 
@@ -67,6 +68,10 @@ def create_app(csrf: bool = True) -> Flask:
     app.jinja_env.filters["form_number"] = form_number
     # Header links of the server-sorted tables (templates/_sort.html).
     app.jinja_env.globals["sort_url"] = sort_url
+    # The same query string without "as_of"/"page": templates/_as_of.html's
+    # "Back to latest" link.
+    app.jinja_env.filters["as_of_cleared"] = lambda args: urlencode(
+        [(k, v) for k in args if k not in ("as_of", "page") for v in args.getlist(k)])
 
     # get_app_data_dir_status() (used by init_db -> get_connection)
     # already falls back to the default location on its own if a configured

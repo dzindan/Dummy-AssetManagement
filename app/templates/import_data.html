@@ -93,11 +93,11 @@
 
   <div class="panel">
     <h2>4. HO Monthly Report</h2>
-    <p class="muted">The Head Office consolidated <code>Monthly Report ddmmyyyy.xlsx</code> ("Equipment list detail" sheet). Each row goes to the unit of its User ID (User IDs list), else its Dept / BRANCH / DEPT column; one batch per unit. Kept apart from the units' own monthly reports: neither ever replaces the other's data. Rows of a unit that sends its own monthly report are left out. Branch reports are refused here.</p>
+    <p class="muted">The Head Office consolidated <code>Monthly Report ddmmyyyy.xlsx</code> ("Equipment list detail" sheet). Rows whose BRANCH / DEPT is NORTHERN HO go to Northern Head Office, rows of a unit that sends its own monthly report (e.g. HNCMC) to that unit; every other row is HEAD OFFICE, its Dept column kept as the Position. A unit's own report for the same month always wins over these rows (whichever is imported first). Branch reports are refused here.</p>
     <form method="post" action="{{ url_for('import_data.upload_ho_reports') }}" enctype="multipart/form-data">
       <label for="ho-files">Excel file(s)</label>
       <input type="file" id="ho-files" name="files" accept=".xlsx" multiple required data-folder-pick>
-      <label for="ho-period">Reporting month <span class="muted">(blank = from the date in the file name)</span></label>
+      <label for="ho-period">Reporting month <span class="muted">(the month folder the file is in; blank = the month before the date in the file name, e.g. Monthly Report 18092026 = 2026-08)</span></label>
       <input type="month" id="ho-period" name="period">
       <button type="submit">Import HO Report</button>
     </form>

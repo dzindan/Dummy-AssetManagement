@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 
 from flask import request
 
-from ..queries import UNRESOLVED_BRANCH_FILTER, get_branch
+from ..queries import UNRESOLVED_BRANCH_FILTER, get_branch, get_report_periods, parse_as_of
 
 PER_PAGE_OPTIONS = [100, 200, 300, 400, 500, 1000, 2000, 3000, 4000, 5000]
 DEFAULT_PER_PAGE = 200
@@ -23,6 +23,17 @@ def parse_per_page() -> int:
     except (TypeError, ValueError):
         return DEFAULT_PER_PAGE
     return value if value in PER_PAGE_OPTIONS else DEFAULT_PER_PAGE
+
+
+def as_of_month(conn) -> tuple[str, list[str]]:
+    """(the "As of month" picked - "" for the latest - , every month on
+    file newest first). A month at or after the newest report is the
+    latest view itself, so it stays "" there (and the page stays editable)."""
+    periods = get_report_periods(conn)
+    as_of = parse_as_of(request.args.get("as_of"))
+    if as_of and (not periods or as_of >= periods[0]):
+        as_of = ""
+    return as_of, periods
 
 
 def parse_page() -> int:

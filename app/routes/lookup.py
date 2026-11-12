@@ -2,6 +2,7 @@ import datetime as dt
 
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
+from . import listing
 from ..auth import current_username, require_permission
 from ..db import get_connection, get_setting
 from ..handover import ASSET_CONDITIONS, HO_TYPES, REASONS, apply_handover_date, create_handover
@@ -41,6 +42,9 @@ def index():
 
     conn = get_connection()
     try:
+        # A past month (user, 2026-11-12) only shows who had what then: the
+        # hand-over builder below works on the current rows only.
+        as_of, as_of_options = listing.as_of_month(conn)
         user = None
         branch = None
         assets = []
@@ -50,16 +54,16 @@ def index():
             # currently holds the matching asset(s), then the user clicks
             # through to the normal per-user flow to actually build the form -
             # simpler and less error-prone than guessing a single owner here.
-            serial_matches = search_current_assets_by_serial(conn, q)
+            serial_matches = search_current_assets_by_serial(conn, q, as_of=as_of)
         elif q:
             user = find_user(conn, q)
             if user:
                 user_id_norm = normalize_user_id(user["user_no"])[1]
                 branch = get_branch(conn, user["branch_no"])
-                assets = get_current_assets(conn, user_id_norm=user_id_norm)
+                assets = get_current_assets(conn, user_id_norm=user_id_norm, as_of=as_of)
             else:
                 _, norm = normalize_user_id(q)
-                assets = get_current_assets(conn, user_id_norm=norm)
+                assets = get_current_assets(conn, user_id_norm=norm, as_of=as_of)
 
         default_ict_name = get_setting("ict_rep_name", "")
         default_ict_id = get_setting("ict_rep_id", "")
@@ -73,6 +77,8 @@ def index():
         active_page="lookup",
         q=q,
         search_by=search_by,
+        as_of=as_of,
+        as_of_options=as_of_options,
         user=user,
         branch=branch,
         assets=assets,

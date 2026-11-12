@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_as_of.html" as as_of_ui %}
 {% block title %}Lookup & Hand-Over - Asset Management Tool{% endblock %}
 {% block content %}
 <h1>Lookup &amp; Hand-Over</h1>
@@ -17,6 +18,7 @@
     <label for="q">{{ 'Serial / Service Tag' if search_by == 'serial' else 'User ID' }}</label>
     <div class="field-row">
       <div><input type="text" id="q" name="q" value="{{ q }}" placeholder="{{ 'e.g. ABC12345' if search_by == 'serial' else 'e.g. 14501864' }}" autofocus></div>
+      <div style="flex: 0 0 auto;">{{ as_of_ui.select(as_of, as_of_options) }}</div>
       <div style="flex: 0 0 auto;"><button type="submit">Search</button></div>
     </div>
   </form>
@@ -24,12 +26,13 @@
 
 {% if q and search_by == 'serial' %}
   <div class="panel">
+    {{ as_of_ui.banner(as_of, "The hand-over form uses the latest data.") }}
     {% if serial_matches %}
       <h2>{{ serial_matches | length }} asset(s) matching "{{ q }}"</h2>
       <p class="muted">Pick a row to open the normal hand-over builder for that person.</p>
       <div class="table-scroll">
       <table>
-        <thead><tr><th>Branch</th><th>Device</th><th>Current Holder</th><th>Model</th><th>Serial / Service Tag</th><th>Handover Date</th><th></th></tr></thead>
+        <thead><tr><th>Branch</th><th>Device</th><th>{{ 'Holder' if as_of else 'Current Holder' }}</th><th>Model</th><th>Serial / Service Tag</th><th>Handover Date</th>{% if as_of %}<th>Period</th>{% endif %}<th></th></tr></thead>
         <tbody>
           {% for m in serial_matches %}
           <tr>
@@ -39,9 +42,14 @@
             <td>{{ m['model_device'] }}</td>
             <td>{{ m['serial_tag'] }}</td>
             <td>{{ m['handover_date'] }}</td>
+            {% if as_of %}<td>{{ m['period'] }}</td>{% endif %}
             <td>
               {% if m['user_id_raw'] %}
+              {% if as_of %}
+              <a class="btn secondary" href="{{ url_for('lookup.index', q=m['user_id_raw'], search_by='user', as_of=as_of) }}">View User</a>
+              {% else %}
               <a class="btn secondary" href="{{ url_for('lookup.index', q=m['user_id_raw'], search_by='user') }}">Build Hand-Over</a>
+              {% endif %}
               {% endif %}
             </td>
           </tr>
@@ -55,6 +63,7 @@
   </div>
 {% elif q %}
   <div class="panel">
+    {{ as_of_ui.banner(as_of, "The hand-over form uses the latest data.") }}
     {% if user %}
       <h2>{{ user['user_name'] }}</h2>
       <p class="muted">
@@ -67,12 +76,35 @@
     {% endif %}
 
     {% if not assets %}
-      <p class="muted">No assets currently assigned to this user ID.</p>
+      <p class="muted">No assets {{ 'assigned to this user ID as of ' ~ as_of if as_of else 'currently assigned to this user ID' }}.</p>
     {% endif %}
   </div>
 {% endif %}
 
-{% if assets %}
+{% if assets and as_of %}
+<div class="panel">
+  <h2>Assets assigned as of {{ as_of }}</h2>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>Branch</th><th>Device</th><th>Model</th><th>Serial / Service Tag</th><th>Status</th><th>Handover Date</th><th>Period</th></tr></thead>
+    <tbody>
+      {% for a in assets %}
+      <tr>
+        <td>{{ a['branch_dept'] }}</td>
+        <td>{{ a['device_name'] }}</td>
+        <td>{{ a['model_device'] }}</td>
+        <td>{{ a['serial_tag'] }}</td>
+        <td>{{ a['status'] }}</td>
+        <td>{{ a['handover_date'] }}</td>
+        <td>{{ a['period'] }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="muted"><a href="{{ url_for('lookup.index', q=q, search_by=search_by) }}">Back to latest</a> to build a hand-over form.</p>
+</div>
+{% elif assets %}
 <form method="post" action="{{ url_for('lookup.review') }}">
   <input type="hidden" name="user_no" value="{{ user['user_no'] if user else q }}">
 

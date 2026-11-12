@@ -45,8 +45,15 @@ WITH rows AS (
     JOIN import_batches ib ON ai.batch_id = ib.id
     WHERE ai.branch_no = ? AND ib.period IS NOT NULL AND ib.period != ''
 ),
+-- One report per month (user, 2026-11-11, like queries.current_assets_cte):
+-- the unit's own report ('BRANCH' < 'HO') before the HO report's copy.
+month_src AS (
+    SELECT period, MIN(src) AS src FROM rows GROUP BY period
+),
 latest AS (
-    SELECT period, MAX(batch_id) AS batch_id FROM rows GROUP BY period, src
+    SELECT r.period, MAX(r.batch_id) AS batch_id
+    FROM rows r JOIN month_src m ON m.period = r.period AND m.src = r.src
+    GROUP BY r.period
 )
 SELECT r.period, r.item, COUNT(*) AS cnt
 FROM rows r
@@ -66,8 +73,14 @@ WITH rows AS (
     JOIN import_batches ib ON ai.batch_id = ib.id
     WHERE ib.period IS NOT NULL AND ib.period != ''
 ),
+-- One report per unit and month (as _branch_trend_sql).
+month_src AS (
+    SELECT branch_no, period, MIN(src) AS src FROM rows GROUP BY branch_no, period
+),
 latest AS (
-    SELECT branch_no, period, MAX(batch_id) AS batch_id FROM rows GROUP BY branch_no, period, src
+    SELECT r.branch_no, r.period, MAX(r.batch_id) AS batch_id
+    FROM rows r JOIN month_src m ON m.branch_no = r.branch_no AND m.period = r.period AND m.src = r.src
+    GROUP BY r.branch_no, r.period
 )
 SELECT r.period, r.item, COUNT(*) AS cnt
 FROM rows r
@@ -180,34 +193,23 @@ def _walk_period_changes(rows: list[tuple[str, str, str]]) -> dict[str, dict]:
 
 def _walk_by_source(rows) -> dict[str, dict]:
     """_walk_period_changes for rows that also carry their report source -
-    (group_key, src, period, asset_key). Each (group, source) is walked as
-    its own series - a unit's own report diffed against its previous own
-    report, its HO-report rows against the previous HO report - then the
-    sources are added back together per group. Walking them as one series
-    would show a month in which only the HO report came in (a few rows) as
-    every one of the branch report's devices removed. current_count sums
-    each source's latest count, the same total "current state" shows, and
-    each period cell's "current" is that sum as of that period (what
-    _prepare_year_columns sorts by)."""
-    split = _walk_period_changes(((g, src), period, key) for g, src, period, key in rows)
-    result: dict[str, dict] = {}
-    for (group_key, _src), data in sorted(split.items(), key=lambda kv: str(kv[0])):
-        merged = result.setdefault(
-            group_key, {"periods": {}, "total_added": 0, "total_removed": 0, "current_count": 0})
-        merged["total_added"] += data["total_added"]
-        merged["total_removed"] += data["total_removed"]
-        merged["current_count"] += data["current_count"]
-        for period, cell in data["periods"].items():
-            into = merged["periods"].setdefault(period, {"count": 0, "added": None, "removed": None})
-            into["count"] += cell["count"]
-            for field in ("added", "removed"):
-                if cell[field] is not None:
-                    into[field] = (into[field] or 0) + cell[field]
-    for (group_key, src), data in split.items():
-        for period, cell in result[group_key]["periods"].items():
-            as_of = [p for p in data["periods"] if p <= period]
-            if as_of:
-                cell["current"] = cell.get("current", 0) + data["periods"][max(as_of)]["count"]
+    (group_key, src, period, asset_key). One report per unit and month
+    (user, 2026-11-11, like queries.current_assets_cte): when a month has
+    rows from both the unit's own report and the HO report, only the own
+    report's ('BRANCH' < 'HO') count; the months are then walked as one
+    series, so a unit whose report came from the HO file one month and from
+    its own file the next is diffed across the two. Each period cell's
+    "current" is its own count (what _prepare_year_columns sorts by)."""
+    rows = list(rows)
+    keep: dict[tuple, str] = {}
+    for group_key, src, period, _key in rows:
+        k = (group_key, period)
+        keep[k] = min(keep.get(k, src), src)
+    result = _walk_period_changes(
+        (g, period, key) for g, src, period, key in rows if keep[(g, period)] == src)
+    for data in result.values():
+        for cell in data["periods"].values():
+            cell["current"] = cell["count"]
     return result
 
 
@@ -408,10 +410,16 @@ def get_device_month_change_table(conn, year: str, rows=None, scope: str | None 
     fetch_month_change_rows."""
     if rows is None:
         rows = fetch_month_change_rows(conn, scope=scope)
-    # Each (branch, report source) is its own series - see _walk_by_source.
+    # One report per branch and month, the own report before the HO
+    # report's copy - see _walk_by_source.
+    rows = list(rows)
+    keep: dict[tuple, str] = {}
+    for r in rows:
+        k = (r["branch_no"] or "", r["period"])
+        keep[k] = min(keep.get(k, r["src"]), r["src"])
     by_group = _device_changes_across_branches(
-        ((r["branch_no"] or "", r["src"]), r["device_name"] or "(UNKNOWN)", r["period"], r["asset_key"])
-        for r in rows
+        (r["branch_no"] or "", r["device_name"] or "(UNKNOWN)", r["period"], r["asset_key"])
+        for r in rows if keep[(r["branch_no"] or "", r["period"])] == r["src"]
     )
     visible_periods, prepared = _prepare_year_columns(by_group, year)
     # A device type a branch dropped to zero still gets a cell (count 0,
@@ -486,8 +494,16 @@ def get_branch_device_year_table(conn, branch_no: str, year: str, top_items: lis
         JOIN import_batches ib ON ai.batch_id = ib.id
         WHERE ai.branch_no = ? AND ib.period IS NOT NULL AND ib.period != ''
     ),
+    -- one report per month for the whole branch (not per device type): a
+    -- device only in the HO report's copy mustn't count when the branch's
+    -- own report for that month is there
+    month_src AS (
+        SELECT period, MIN(src) AS src FROM rows GROUP BY period
+    ),
     latest AS (
-        SELECT period, MAX(batch_id) AS batch_id FROM rows GROUP BY period, src
+        SELECT r.period, MAX(r.batch_id) AS batch_id
+        FROM rows r JOIN month_src m ON m.period = r.period AND m.src = r.src
+        GROUP BY r.period
     )
     SELECT r.device_name AS device_name, r.period AS period, r.asset_key AS asset_key, r.src AS src
     FROM rows r

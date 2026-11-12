@@ -80,6 +80,10 @@ def login():
                 except SignInRefused as e:
                     flash(str(e), "error")
                     return form()
+                except Exception:  # noqa: BLE001 - logged, and the form instead of a bare 500
+                    log.exception("AD sign-in failed for %s", identity.username)
+                    flash("AD sign-in failed on the server (details in its log).", "error")
+                    return form()
         locked = throttle.sign_in_by_name.fail(name) | throttle.sign_in_by_address.fail(address)
         log.warning("Failed sign-in as %r from %s%s", username, address, " - now locked for a while" if locked else "")
         flash(throttle.wait_message(throttle.LOCK) if locked else message, "error")
@@ -135,6 +139,11 @@ def sso():
     except winauth.AuthError as e:
         flash(f"{e} - sign in with your AD username and password.", "error")
         return redirect(form_url)
+    except Exception:  # noqa: BLE001 - anything else: logged, and the form instead of a bare 500
+        log.exception("Windows sign-in failed")
+        flash("Windows sign-in failed on the server (details in its log) - "
+              "sign in with your AD username and password.", "error")
+        return redirect(form_url)
     if identity is None:
         return challenge(token)  # NTLM: one more round on this connection
     try:
@@ -142,6 +151,11 @@ def sso():
         tell_new_ad_account()
     except SignInRefused as e:
         flash(str(e), "error")
+        return redirect(form_url)
+    except Exception:  # noqa: BLE001 - as above
+        log.exception("Windows sign-in failed for %s", identity.username)
+        flash("Windows sign-in failed on the server (details in its log) - "
+              "sign in with your AD username and password.", "error")
         return redirect(form_url)
     resp = redirect(_safe_next(next_url))
     if token:

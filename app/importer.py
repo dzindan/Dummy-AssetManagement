@@ -1285,11 +1285,32 @@ def import_asset_report(
                    imported_by=performed_by)
         reports.append(report)
 
+    if file_branch is not None:
+        drop_ho_rows(conn, file_branch[1], resolved_period)
     conn.commit()
     conn.close()
     wb.close()
 
     return reports
+
+
+def drop_ho_rows(conn, branch_no: str, period: str) -> int:
+    """A unit's own report for `period` is the truth for it (user, 2026-11-11):
+    remove the HO report's rows put on that unit for the same period (the HO
+    report was imported first), and HO batches left empty. Caller commits."""
+    ids = [r[0] for r in conn.execute(
+        "SELECT ai.id FROM asset_items ai JOIN import_batches ib ON ib.id = ai.batch_id "
+        "WHERE ib.report_source = ? AND ib.period = ? AND ai.branch_no = ?",
+        (REPORT_SOURCE_HO, period, branch_no))]
+    if not ids:
+        return 0
+    conn.executemany("DELETE FROM asset_items WHERE id = ?", [(i,) for i in ids])
+    conn.execute(
+        "DELETE FROM import_batches WHERE report_source = ? AND period = ? "
+        "AND NOT EXISTS (SELECT 1 FROM asset_items ai WHERE ai.batch_id = import_batches.id) "
+        "AND NOT EXISTS (SELECT 1 FROM cctv_items ci WHERE ci.batch_id = import_batches.id)",
+        (REPORT_SOURCE_HO, period))
+    return len(ids)
 
 
 # --- HO consolidated Monthly Report ------------------------------------------
@@ -1300,12 +1321,14 @@ def import_asset_report(
 # units' own reports (queries.current_assets_cte).
 
 HO_REPORT_SHEET = "EQUIPMENT LIST DETAIL"
-# Smart Credit Marketing Center sites (SCMC PICO, SCMC DALI, ...: units
-# whose name starts with this) are counted by location, not by who uses the
-# device - the user's call (2026-10-15): a row whose BRANCH / DEPT is one of
-# them goes there even when its user's unit (mostly 8160 SMART CREDIT
-# MARKETING CENTER) is known.
-HO_LOCATION_UNIT_PREFIX = "SCMC "
+# Where the HO report's rows go (user, 2026-11-11 - replaces the per-user /
+# SCMC-site split of 2026-10-01 / 10-15): the "NORTHERN HO" block (BRANCH /
+# DEPT resolving to Northern Head Office) and a block of any unit that sends
+# its own monthly report (e.g. HNCMC) go to that unit; EVERYTHING else is
+# Head Office, its Dept column kept as the row's Position (like a branch
+# file's Position column).
+HEAD_OFFICE_UNIT = "8061"
+NORTHERN_HO_UNIT = "8136"
 
 
 def _ho_dept_col(ws, match) -> int | None:
@@ -1325,12 +1348,18 @@ def find_ho_report_sheet(wb, matches=None):
 
 
 def ho_report_period(file_name: str) -> str:
-    """"Monthly Report 18092026.xlsx" -> "2026-09" (the report's date,
-    ddmmyyyy, is in its name); "" when the name has no such date."""
+    """"Monthly Report 18092026.xlsx" -> "2026-08": the date in the name
+    (ddmmyyyy) is when the report was sent, early in the month AFTER the one
+    it reports (user, 2026-11-11: the month folder a file sits in is its
+    month - "Monthly Report 18092026" sits in 08). "" when the name has no
+    such date."""
     m = re.search(r"(?<!\d)(\d{2})(\d{2})(20\d{2})(?!\d)", os.path.basename(file_name or ""))
     if not m or not 1 <= int(m.group(2)) <= 12:
         return ""
-    return f"{m.group(3)}-{m.group(2)}"
+    year, month = int(m.group(3)), int(m.group(2)) - 1
+    if month == 0:
+        year, month = year - 1, 12
+    return f"{year}-{month:02d}"
 
 
 @dataclass
@@ -1349,16 +1378,18 @@ def import_ho_report(
     path: str, source_label: str | None = None, period: str | None = None, performed_by: str = ""
 ) -> tuple[list[CleaningReport], HoImportSummary]:
     """Splits the HO report's equipment sheet into one batch per unit
-    (report_source HO). A row's unit (user's rule, 2026-10-01): the branch
-    code of its USER ID in the users table (Aither 9051), else the Dept
-    column, else the BRANCH / DEPT column, mapped through the branch list
-    (resolve_branch) - skipping any that is a unit sending its own monthly
-    report; a row with nothing but such units is left out (see
-    HoImportSummary.skipped_own_report). Exception: a BRANCH / DEPT that is
-    an SCMC site (HO_LOCATION_UNIT_PREFIX) comes before the user. Rows
-    nothing maps stay unresolved (branch "") for Settings > Branch Aliases,
-    like any import. Period: `period` when given, else the date in the file
-    name, else this month."""
+    (report_source HO) - user's rule, 2026-11-11:
+    - a row whose BRANCH / DEPT is Northern Head Office ("NORTHERN HO"), or a
+      unit that sends its own monthly report (e.g. HNCMC), goes to that unit -
+      left out when that unit's own report for this period is already
+      imported (its own file is the truth; HoImportSummary.skipped_own_report);
+      import_asset_report drops this file's rows for a unit + period the
+      other way round, when its own report comes in later (drop_ho_rows);
+    - every other row is Head Office (HEAD_OFFICE_UNIT), its Dept column
+      kept as the row's Position (BRANCH / DEPT instead when Dept is empty,
+      e.g. "SCMC PICO", so the site isn't lost).
+    Period: `period` when given, else the month before the date in the file
+    name (ho_report_period), else this month."""
     source_file = source_label or os.path.basename(path)
     summary = HoImportSummary()
     conn = get_connection()
@@ -1379,67 +1410,50 @@ def import_ho_report(
         summary.period = (period or "").strip() or ho_report_period(source_file) or _now_iso()[:7]
         ws = wb[match.sheet_name]
         dept_idx = _ho_dept_col(ws, match)
-        uid_idx = match.col_map.get("user_id")
         bd_idx = match.col_map.get("branch_dept")
+        # The Dept text rides along as one extra cell at the end of each row,
+        # read by _ingest_asset_rows as the Position column.
+        width = max(ws.max_column or 0, *(i + 1 for i in match.col_map.values()), (dept_idx or 0) + 1)
+        col_map = {**match.col_map, "position": width}
 
-        users = {}
-        for u in conn.execute("SELECT user_no, branch_no FROM users WHERE branch_no != ''"):
-            norm = normalize_user_id(u["user_no"])[1]
-            if norm:
-                users[norm] = u["branch_no"]
-        own_report = {r[0] for r in conn.execute(
-            "SELECT DISTINCT ai.branch_no FROM asset_items ai JOIN import_batches ib ON ib.id = ai.batch_id "
-            "WHERE ib.kind = 'asset_report' AND ib.report_source = ? AND ai.branch_no != ''",
-            (REPORT_SOURCE_BRANCH,))}
+        def own_units(where: str = "", params: tuple = ()) -> set[str]:
+            return {r[0] for r in conn.execute(
+                "SELECT DISTINCT ai.branch_no FROM asset_items ai JOIN import_batches ib ON ib.id = ai.batch_id "
+                "WHERE ib.kind = 'asset_report' AND ib.report_source = ? AND ai.branch_no != ''" + where,
+                (REPORT_SOURCE_BRANCH, *params))}
+
+        own_report = own_units() | {NORTHERN_HO_UNIT}
+        own_this_period = own_units(" AND ib.period = ?", (summary.period,))
         names = {r["branch_no"]: r["eng_name"] for r in conn.execute("SELECT branch_no, eng_name FROM branches")}
-        location_units = {b for b, n in names.items() if (n or "").upper().startswith(HO_LOCATION_UNIT_PREFIX)}
         cache: dict = {}
 
         def cell(row, idx):
-            return row[idx] if idx is not None and idx < len(row) else None
-
-        def _resolve_text(value):
-            text = _clean_str(value)
-            return resolve_branch(conn, text, cache=cache)[0] if text else ""
+            return _clean_str(row[idx]) if idx is not None and idx < len(row) else ""
 
         groups: dict[str, list] = {}
         for row in ws.iter_rows(min_row=match.header_row_idx + 2, values_only=True):
             if row is None or all(_clean_str(c) == "" for c in row[:20]):
                 continue
             summary.rows_read += 1
-            # First candidate that isn't a unit with its own monthly report
-            # wins: a user whose Aither unit is such a branch falls through
-            # to the row's Dept / BRANCH / DEPT (the device is held at HO).
-            # Only when every candidate is an own-report unit is the row
-            # left out.
-            unit, saw_own = "", ""
-            site = _resolve_text(cell(row, bd_idx))
-            candidates = (
-                lambda: site if site in location_units else "",
-                lambda: users.get(normalize_user_id(cell(row, uid_idx))[1] or "", ""),
-                lambda: _resolve_text(cell(row, dept_idx)),
-                lambda: site,
-            )
-            for candidate in candidates:
-                found = candidate()
-                if found and found in own_report:
-                    saw_own = saw_own or found
-                elif found:
-                    unit = found
-                    break
-            if not unit and saw_own:
-                label = names.get(saw_own) or saw_own
-                summary.skipped_own_report[label] = summary.skipped_own_report.get(label, 0) + 1
-                continue
-            if not unit:
-                summary.unresolved_rows += 1
+            block, dept = cell(row, bd_idx), cell(row, dept_idx)
+            unit = resolve_branch(conn, block, cache=cache)[0] if block else ""
+            if unit and unit != HEAD_OFFICE_UNIT and unit in own_report:
+                if unit in own_this_period:
+                    label = names.get(unit) or unit
+                    summary.skipped_own_report[label] = summary.skipped_own_report.get(label, 0) + 1
+                    continue
+                position = dept
+            else:
+                unit = HEAD_OFFICE_UNIT
+                position = dept or ("" if normalize_branch_text(block) == "HEAD OFFICE" else block)
+            row = tuple(row) + (None,) * (width - len(row)) + (position,)
             groups.setdefault(unit, []).append(row)
         wb.close()
 
         now = _now_iso()
         reports = []
         for unit, rows in sorted(groups.items()):
-            label = names.get(unit) or "HO - Unresolved"
+            label = names.get(unit) or ("HEAD OFFICE" if unit == HEAD_OFFICE_UNIT else unit)
             batch_id = conn.execute(
                 """INSERT INTO import_batches
                    (imported_at, kind, source_files_json, label, period, sheet_name, branch_hint,
@@ -1451,11 +1465,8 @@ def import_ho_report(
             report = CleaningReport(source_file=source_file, sheet_name=match.sheet_name, kind="asset_report",
                                     branch_hint=HO_REPORT_HINT, branch_no=unit,
                                     branch_matched=names.get(unit, ""), batch_id=batch_id)
-            # Unresolved rows (unit "") are resolved per row from their own
-            # BRANCH / DEPT text, which also queues it in Settings > Branch
-            # Aliases - mapping it there later re-resolves just those rows.
-            _ingest_asset_rows(conn, batch_id, iter(rows), match.col_map, "", source_file, report,
-                               fixed_branch_no=unit or None)
+            _ingest_asset_rows(conn, batch_id, iter(rows), col_map, "", source_file, report,
+                               fixed_branch_no=unit)
             log_import(conn, "ho_report", f"{source_file} [{label}]", rows_processed=report.rows_imported,
                        period=summary.period, imported_by=performed_by)
             reports.append(report)

@@ -238,6 +238,9 @@ def save_ad():
     domain = request.form.get("ad_domain", "").strip().upper()
     role = request.form.get("ad_default_role", "").strip()
     open_ = request.form.get("ad_open") == "1"
+    if any(c in domain for c in "\\/@ "):
+        flash("Domain is the domain name alone, e.g. SHBVN - not DOMAIN\\username.", "error")
+        return redirect(url_for("user_admin.index"))
     if enabled:
         if not winauth.available():
             flash("AD sign-in needs Windows (pywin32) - not available here.", "error")

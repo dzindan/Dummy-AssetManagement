@@ -9,6 +9,7 @@ from ..analytics import (
 from ..cctv_metrics import build_month_metrics_by_branch, summarize_by_period, summarize_cctv_rows
 from ..charts import per_series_trend_payloads, trend_chart_payload
 from ..db import get_connection
+from . import listing
 from ..exports import (
     add_solo_item_charts,
     add_trend_line_chart,
@@ -69,7 +70,11 @@ def detail(branch_no):
         branch = get_branch(conn, branch_no)
         if not branch:
             abort(404, description="Branch not found.")
-        assets = get_current_assets(conn, branch_no=branch_no)
+        # "As of month" (user, 2026-11-12): the breakdowns and the two item
+        # tables show the branch's newest report up to that month; the trend
+        # chart and the year table always cover every month.
+        as_of, as_of_options = listing.as_of_month(conn)
+        assets = get_current_assets(conn, branch_no=branch_no, as_of=as_of)
         # Counts/breakdown leave CCTV/DVR devices out (see
         # queries.CCTV_ASSET_DEVICE_NAMES); the Current Assets table still
         # lists every row.
@@ -93,7 +98,7 @@ def detail(branch_no):
         # 4 headline metrics (recorder count, parsed camera/HDD totals)
         # for the same selected_year the asset table above uses, so one
         # year selector drives both instead of two independent ones.
-        cctv_items, _cctv_total = search_cctv(conn, {"branch_no": [branch_no]}, per_page=None)
+        cctv_items, _cctv_total = search_cctv(conn, {"branch_no": [branch_no]}, per_page=None, as_of=as_of)
         cctv_summary = summarize_cctv_rows(cctv_items)
         cctv_periods, _cctv_items, cctv_matrix = get_branch_item_trend(conn, branch_no, table="cctv_items")
         cctv_period_rows = get_cctv_items_by_branch_period(conn, branch_no=branch_no)
@@ -122,6 +127,9 @@ def detail(branch_no):
         "branch_detail.html",
         active_page="assets",
         branch=branch,
+        as_of=as_of,
+        as_of_options=as_of_options,
+        report_periods=sorted({a["period"] for a in assets if a["period"]}),
         assets=assets,
         counted_asset_count=len(counted_assets),
         device_status_breakdown=device_status_breakdown,
@@ -164,15 +172,17 @@ def export(branch_no):
         branch = get_branch(conn, branch_no)
         if not branch:
             abort(404, description="Branch not found.")
-        assets = get_current_assets(conn, branch_no=branch_no)
+        as_of, _ = listing.as_of_month(conn)
+        assets = get_current_assets(conn, branch_no=branch_no, as_of=as_of)
         periods, _items, matrix = get_branch_item_trend(conn, branch_no, max_series=None)
     finally:
         conn.close()
 
     safe_name = safe_filename(branch["eng_name"] or branch_no, fallback=branch_no)
-    wb = build_asset_rows_workbook(assets, sheet_title="Current Assets")
+    wb = build_asset_rows_workbook(assets, sheet_title=f"Assets as of {as_of}" if as_of else "Current Assets")
     _add_trend_sheet(wb, "Item Count Trend", periods, matrix)
-    return send_workbook(wb, dated_download_name(f"{safe_name} - assets"))
+    suffix = f" - assets as of {as_of}" if as_of else " - assets"
+    return send_workbook(wb, dated_download_name(f"{safe_name}{suffix}"))
 
 
 @bp.route("/<branch_no>/export-cctv")
@@ -182,7 +192,8 @@ def export_cctv(branch_no):
         branch = get_branch(conn, branch_no)
         if not branch:
             abort(404, description="Branch not found.")
-        cctv_items, _total = search_cctv(conn, {"branch_no": [branch_no]}, per_page=None)
+        as_of, _ = listing.as_of_month(conn)
+        cctv_items, _total = search_cctv(conn, {"branch_no": [branch_no]}, per_page=None, as_of=as_of)
         cctv_periods, _cctv_items, cctv_matrix = get_branch_item_trend(conn, branch_no, table="cctv_items")
         camera_totals_by_period = summarize_by_period(get_cctv_items_by_branch_period(conn, branch_no=branch_no))
         cctv_matrix["Cameras"] = {
@@ -192,6 +203,7 @@ def export_cctv(branch_no):
         conn.close()
 
     safe_name = safe_filename(branch["eng_name"] or branch_no, fallback=branch_no)
-    wb = build_cctv_rows_workbook(cctv_items, sheet_title="Current CCTV")
+    wb = build_cctv_rows_workbook(cctv_items, sheet_title=f"CCTV as of {as_of}" if as_of else "Current CCTV")
     _add_trend_sheet(wb, "CCTV Item Count Trend", cctv_periods, cctv_matrix)
-    return send_workbook(wb, dated_download_name(f"{safe_name} - cctv"))
+    suffix = f" - cctv as of {as_of}" if as_of else " - cctv"
+    return send_workbook(wb, dated_download_name(f"{safe_name}{suffix}"))

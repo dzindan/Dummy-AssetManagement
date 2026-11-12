@@ -299,6 +299,31 @@ class AdLoginTests(AdLoginBase):
         from app.auth import ad_settings
         self.assertEqual((ad_settings()["enabled"], ad_settings()["domain"]), (True, "CORP"))
 
+    def test_domain_field_takes_the_domain_alone(self):
+        self.login_local()
+        resp = self.client.post("/settings/users/ad", data={"ad_enabled": "1", "ad_domain": "SHBVN\\24508659"},
+                                follow_redirects=True)
+        self.assertIn("domain name alone", resp.get_data(as_text=True))
+        from app.auth import ad_settings
+        self.assertNotIn("\\", ad_settings()["domain"])
+        # a whole account saved there by an older version: only its domain is used
+        set_setting("ad_domain", "shbvn\\24508659")
+        self.assertEqual(ad_settings()["domain"], "SHBVN")
+        set_setting("ad_enabled", "1")
+        self.client.post("/logout")
+        html = self.client.get("/login?form=1").get_data(as_text=True)
+        self.assertIn("SHBVN\\username", html)
+        self.assertNotIn("24508659", html)
+
+    def test_an_unexpected_error_in_ad_sign_in_lands_on_the_form(self):
+        self.turn_on(group="")
+        with mock.patch.object(winauth, "logon", return_value=_identity()), \
+                mock.patch("app.routes.auth.sign_in_ad", side_effect=RuntimeError("boom")), \
+                self.assertLogs(level="ERROR"):
+            resp = self.client.post("/login?form=1", data={"username": "corp\\nva", "password": "x"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("failed on the server", resp.get_data(as_text=True))
+
     def test_logout_doesnt_sign_straight_back_in(self):
         self.turn_on()
         self.login_local()
@@ -359,6 +384,29 @@ class WindowsSignInTests(AdLoginBase):
         self.assertIn("form=1", resp.headers["Location"])
         html = self.client.get(resp.headers["Location"]).get_data(as_text=True)
         self.assertIn("isn&#39;t a member of Guests", html)
+
+    def test_an_unexpected_error_after_the_handshake_lands_on_the_form(self):
+        # the server's 500 at /sso (user's AM2.jpg): now logged, and the form instead
+        self.turn_on()
+        with mock.patch("app.routes.auth.sign_in_ad", side_effect=RuntimeError("boom")), \
+                self.assertLogs(level="ERROR") as logs:
+            resp = self.handshake(self.client)
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("form=1", resp.headers["Location"])
+        self.assertIn("boom", "\n".join(logs.output))
+        html = self.client.get(resp.headers["Location"]).get_data(as_text=True)
+        self.assertIn("failed on the server", html)
+
+    def test_a_windows_error_reading_the_user_is_not_a_500(self):
+        import pywintypes
+
+        self.turn_on()
+        with mock.patch.object(winauth, "_identity_from_token",
+                               side_effect=pywintypes.error(1332, "LookupAccountSid", "No mapping")):
+            resp = self.handshake(self.client)
+        self.assertIn("form=1", resp.headers["Location"])
+        html = self.client.get(resp.headers["Location"]).get_data(as_text=True)
+        self.assertIn("Windows sign-in failed: No mapping", html)
 
     def test_a_browser_that_cant_lands_on_the_form(self):
         self.turn_on()

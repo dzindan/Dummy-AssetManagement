@@ -846,3 +846,6 @@ table[data-inline-edit] td.cell-error { background: var(--danger-bg); }
 table[data-resizable-table] thead th + th { border-left: 1px solid #b6bfcc; }
 table[data-resizable-table] thead th:hover .col-resize-handle { background: rgba(29, 78, 216, 0.18); }
 .table-zoom .table-zoom-sep { margin-left: 0.8rem; }
+
+/* "As of month" view (templates/_as_of.html) */
+.as-of-banner { margin: 0 0 0.75rem; padding: 0.5rem 0.75rem; border-left: 3px solid var(--warn); background: var(--warn-bg); }

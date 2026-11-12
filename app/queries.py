@@ -32,6 +32,8 @@ snapshots - see get_previous_batch_for_branch().
 
 from __future__ import annotations
 
+import re
+
 from .db import REPORT_SOURCE_BRANCH
 
 # --- Branch network vs Head Office (Dashboard / CCTV Dashboard scope) -------
@@ -136,24 +138,33 @@ branch_batches AS (
     JOIN import_batches ib ON ib.id = bk.batch_id
     {batch_where}
 ),
--- Per unit AND per report source (branch report / HO report - see
--- import_batches.report_source): a unit appearing in both keeps the latest
--- batch of each, so e.g. a few HO-report rows for HO CHI MINH BRANCH dated
--- September can't hide that branch's own August report.
+-- One report per unit (user, 2026-11-11): the HO report now only puts a
+-- whole block on a unit (Northern HO, a unit sending its own report - see
+-- importer.import_ho_report), so a unit's newest month wins whichever file
+-- it came from, and on the same month the unit's own report ('BRANCH' <
+-- 'HO') beats the HO report's copy of it - never both (Northern counted
+-- twice). Before, each source kept its own latest batch, for HO rows
+-- spread over units by user.
 latest_period AS (
-    SELECT bkey, src, MAX(period) AS period
+    SELECT bkey, MAX(period) AS period
     FROM branch_batches
-    GROUP BY bkey, src
+    GROUP BY bkey
 ),
-latest_batch AS (
+latest_src AS (
     -- "IS", not "=": a NULL period (shouldn't happen for a real import - see
     -- importer.py, which always resolves one - but must not silently vanish
     -- from "current" if it ever does) needs NULL-safe equality, since SQL's
     -- "NULL = NULL" is never true and would drop every such row here.
+    SELECT bb.bkey, bb.period, MIN(bb.src) AS src
+    FROM branch_batches bb
+    JOIN latest_period lp ON lp.bkey = bb.bkey AND lp.period IS bb.period
+    GROUP BY bb.bkey
+),
+latest_batch AS (
     SELECT bb.bkey, MAX(bb.batch_id) AS batch_id
     FROM branch_batches bb
-    JOIN latest_period lp ON lp.bkey = bb.bkey AND lp.src = bb.src AND lp.period IS bb.period
-    GROUP BY bb.bkey, bb.src
+    JOIN latest_src ls ON ls.bkey = bb.bkey AND ls.period IS bb.period AND ls.src = bb.src
+    GROUP BY bb.bkey
 )
 SELECT bk.*
 FROM branch_key bk
@@ -163,6 +174,37 @@ JOIN latest_batch lb ON bk.bkey = lb.bkey AND bk.batch_id = lb.batch_id
 
 CURRENT_ASSETS_CTE = current_assets_cte()
 CURRENT_CCTV_CTE = current_assets_cte(table="cctv_items")
+
+_AS_OF_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+
+
+def parse_as_of(value: str | None) -> str:
+    """A "YYYY-MM" month for the "as of month" view, or "" (the latest)."""
+    value = (value or "").strip()
+    return value if _AS_OF_RE.match(value) else ""
+
+
+def assets_cte(as_of: str = "", table: str = "asset_items") -> str:
+    """The current-state CTE, or with `as_of` ("YYYY-MM") the state as of
+    that month (user, 2026-11-12): each unit's newest report up to and
+    including `as_of` - a unit with no report for that exact month shows its
+    report from before it, like the latest view does. Every month's rows are
+    kept (an import never drops an older month), so this needs no extra
+    data. `as_of` is checked against _AS_OF_RE before it goes into the SQL
+    text."""
+    if not as_of:
+        return CURRENT_ASSETS_CTE if table == "asset_items" else CURRENT_CCTV_CTE
+    if not _AS_OF_RE.match(as_of):
+        raise ValueError(f"bad month: {as_of!r}")
+    return current_assets_cte(
+        f"WHERE ib.period IS NOT NULL AND ib.period != '' AND ib.period <= '{as_of}'", table=table)
+
+
+def get_report_periods(conn) -> list[str]:
+    """Every reporting month on file, newest first (the "as of" choices)."""
+    return [r["period"] for r in conn.execute(
+        "SELECT DISTINCT period FROM import_batches WHERE period IS NOT NULL AND period != '' "
+        "ORDER BY period DESC")]
 
 # CCTV and DVR devices inside asset_items (user's request 2026-10-05): the
 # Asset Dashboard / Branch Detail counts and charts leave them out - they're
@@ -188,8 +230,11 @@ def cctv_gear_sql(device_col: str) -> str:
     return f"(COALESCE({device_col}, '') IN ({names}))"
 
 
-def get_current_assets(conn, branch_no: str | None = None, user_id_norm: str | None = None):
-    sql = CURRENT_ASSETS_CTE
+def get_current_assets(conn, branch_no: str | None = None, user_id_norm: str | None = None, as_of: str = ""):
+    """Current rows (or as of `as_of`, see assets_cte), each with its
+    report's `period`."""
+    sql = (f"SELECT bk.*, ib.period AS period FROM ({assets_cte(as_of)}) bk "
+           "LEFT JOIN import_batches ib ON ib.id = bk.batch_id")
     conditions = []
     params: list = []
     if branch_no:
@@ -204,15 +249,15 @@ def get_current_assets(conn, branch_no: str | None = None, user_id_norm: str | N
     return conn.execute(sql, params).fetchall()
 
 
-def search_current_assets_by_serial(conn, serial_query: str):
+def search_current_assets_by_serial(conn, serial_query: str, as_of: str = ""):
     """Case-insensitive partial match on serial_tag, scoped to each branch's
     current (latest-batch) snapshot - same "current state" semantics as
     get_current_assets. Used by Lookup's "Search by Serial Number" option to
     find who currently holds a given asset."""
-    sql = CURRENT_ASSETS_CTE + (
-        " WHERE bk.serial_tag != '' AND UPPER(bk.serial_tag) LIKE ?"
-        " ORDER BY bk.branch_dept, bk.device_name"
-    )
+    sql = (f"SELECT bk.*, ib.period AS period FROM ({assets_cte(as_of)}) bk "
+           "LEFT JOIN import_batches ib ON ib.id = bk.batch_id"
+           " WHERE bk.serial_tag != '' AND UPPER(bk.serial_tag) LIKE ?"
+           " ORDER BY bk.branch_dept, bk.device_name")
     like = f"%{serial_query.strip().upper()}%"
     return conn.execute(sql, [like]).fetchall()
 
@@ -340,25 +385,25 @@ def get_current_branch_breakdown(conn, table: str = "asset_items", scope: str | 
 UNRESOLVED_BRANCH_FILTER = "__unresolved__"
 
 
-def get_branches_with_current_assets(conn):
+def get_branches_with_current_assets(conn, as_of: str = ""):
     """Only branches that actually have at least one current asset - used to
     populate the Manage Assets branch filter so a selection can never return
     zero rows just because that branch hasn't been imported (yet)."""
     sql = f"""
     SELECT DISTINCT b.branch_no, b.eng_name
-    FROM ({CURRENT_ASSETS_CTE}) bk
+    FROM ({assets_cte(as_of)}) bk
     JOIN branches b ON b.branch_no = bk.branch_no
     ORDER BY b.eng_name
     """
     return conn.execute(sql).fetchall()
 
 
-def has_unresolved_current_assets(conn) -> bool:
+def has_unresolved_current_assets(conn, as_of: str = "") -> bool:
     """Whether any current asset's branch text failed to auto-resolve to a
     branch_no - surfaced as a selectable "Unresolved" filter option so those
     rows are findable and fixable instead of just vanishing into a blank
     dashboard bucket."""
-    sql = f"SELECT EXISTS (SELECT 1 FROM ({CURRENT_ASSETS_CTE}) bk WHERE bk.branch_no = '') AS e"
+    sql = f"SELECT EXISTS (SELECT 1 FROM ({assets_cte(as_of)}) bk WHERE bk.branch_no = '') AS e"
     return bool(conn.execute(sql).fetchone()["e"])
 
 
@@ -510,7 +555,8 @@ def _search_current(conn, cte: str, filters: dict, in_filters: list[tuple[str, s
     return rows, total
 
 
-def search_assets(conn, filters: dict, page: int = 1, per_page: int | None = None, sort: str = ""):
+def search_assets(conn, filters: dict, page: int = 1, per_page: int | None = None, sort: str = "",
+                  as_of: str = ""):
     """Filterable view over *current* assets (see CURRENT_ASSETS_CTE
     docstring) for the standalone Manage Assets page - deliberately scoped
     to current state, like the rest of the app, so nobody accidentally
@@ -527,10 +573,10 @@ def search_assets(conn, filters: dict, page: int = 1, per_page: int | None = Non
     itself always passes a real page/per_page.
 
     `sort` is an ASSET_SORTS key (optionally "-" for descending); empty or
-    unknown keeps the default branch, device order.
+    unknown keeps the default branch, device order. `as_of`: see assets_cte.
     """
     return _search_current(
-        conn, CURRENT_ASSETS_CTE, filters,
+        conn, assets_cte(as_of), filters,
         [("device_name", "bk.device_name", False), ("model_device", "bk.model_device", False),
          ("status", "bk.status", True), ("period", "ib.period", False)],
         ["bk.serial_tag", "bk.model_device", "bk.full_name", "bk.user_id_raw", "bk.branch_dept", "bk.remark",
@@ -538,20 +584,21 @@ def search_assets(conn, filters: dict, page: int = 1, per_page: int | None = Non
         page, per_page, sort, ASSET_SORTS)
 
 
-def get_branches_with_current_cctv(conn):
+def get_branches_with_current_cctv(conn, as_of: str = ""):
     """CCTV counterpart of get_branches_with_current_assets - only branches
     that actually have at least one current CCTV item, for the Manage CCTV
     branch filter."""
     sql = f"""
     SELECT DISTINCT b.branch_no, b.eng_name
-    FROM ({CURRENT_CCTV_CTE}) bk
+    FROM ({assets_cte(as_of, table="cctv_items")}) bk
     JOIN branches b ON b.branch_no = bk.branch_no
     ORDER BY b.eng_name
     """
     return conn.execute(sql).fetchall()
 
 
-def search_cctv(conn, filters: dict, page: int = 1, per_page: int | None = None, sort: str = ""):
+def search_cctv(conn, filters: dict, page: int = 1, per_page: int | None = None, sort: str = "",
+                as_of: str = ""):
     """CCTV counterpart of search_assets - filterable view over *current*
     cctv_items rows for the standalone Manage CCTV page. `branch_no`,
     `device_name`, and `status` are each a list (possibly empty). `q`
@@ -561,7 +608,7 @@ def search_cctv(conn, filters: dict, page: int = 1, per_page: int | None = None,
     matching row unpaginated, used by the Excel export. `sort` is a
     CCTV_SORTS key, like search_assets'."""
     return _search_current(
-        conn, CURRENT_CCTV_CTE, filters,
+        conn, assets_cte(as_of, table="cctv_items"), filters,
         [("device_name", "bk.device_name", False), ("status", "bk.status", True)],
         ["bk.serial_tag", "bk.model_device", "bk.location", "bk.manufacturer", "bk.branch_dept", "bk.remark"],
         page, per_page, sort, CCTV_SORTS)
@@ -770,18 +817,20 @@ def get_previous_batch_for_branch(conn, branch_no: str, before_batch_id: int) ->
     ).fetchone()
     if period_row is None:
         return None
-    # Same report source only - an HO-report batch is compared with the
-    # previous HO report's rows for that unit, never with its own report.
+    # One report per unit and month (user, 2026-11-11, like
+    # current_assets_cte / analytics._walk_by_source): the month before,
+    # whichever file it came from - the unit's own report ('BRANCH' < 'HO')
+    # before the HO report's copy of it.
     row = conn.execute(
         """
         SELECT ai.batch_id
         FROM asset_items ai
         JOIN import_batches ib ON ib.id = ai.batch_id
-        WHERE ai.branch_no = ? AND ib.period < ? AND ib.report_source = ?
-        ORDER BY ib.period DESC, ai.batch_id DESC
+        WHERE ai.branch_no = ? AND ib.period < ?
+        ORDER BY ib.period DESC, ib.report_source ASC, ai.batch_id DESC
         LIMIT 1
         """,
-        (branch_no, period_row["period"], period_row["report_source"]),
+        (branch_no, period_row["period"]),
     ).fetchone()
     return row["batch_id"] if row else None
 

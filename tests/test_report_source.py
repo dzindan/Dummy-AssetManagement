@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 """Branch reports vs the HO consolidated Monthly Report: separate import
 paths (each refuses the other's file), import_batches.report_source, and
-"current state" / month-change tables keeping the two sources apart (a few
-HO-report rows for a branch in a later month must not hide the branch's
-own report). Same isolated-DB pattern as tests/test_period_skip.py."""
+"current state" / month-change tables with one report per unit. HO
+report rules (user, 2026-11-11): the NORTHERN HO block -> Northern Head
+Office, a block of a unit with its own report -> that unit (dropped when
+its own report for the month is there), everything else -> Head Office with
+Dept as Position; the file's date is the month after the one it reports.
+Same isolated-DB pattern as tests/test_period_skip.py."""
 import io
 import os
 import sys
@@ -25,6 +28,9 @@ UNITS = (
     ("8009", "HO CHI MINH BRANCH"),
     ("7904", "HO CHI MINH CORPORATE MARKETING CENTER"),
     ("8129", "ICT PLANNING DEPARTMENT"),
+    ("8061", "HEAD OFFICE"),
+    ("8136", "NORTHERN HEAD OFFICE"),
+    ("C001", "SCMC PICO"),
 )
 USERS = (("111", "8009"), ("222", "7904"), ("333", "8129"))
 
@@ -37,14 +43,14 @@ def _xlsx(build) -> bytes:
     return buf.getvalue()
 
 
-def _branch_report(serials) -> bytes:
+def _branch_report(serials, label="HCMC BRANCH", unit="HO CHI MINH BRANCH") -> bytes:
     def build(wb):
         ws = wb.active
-        ws.append([None] * 7 + ["Branch/TO/Center Name:", "HCMC BRANCH"])
+        ws.append([None] * 7 + ["Branch/TO/Center Name:", label])
         ws.append(["NO", "BRANCH / DEPT", "DEVICE NAME", "USER ID", "FULL NAME", "IP", "MODEL DEVICE",
                    "SERIAL/ SERVICE TAG", "STATUS", "REMARK"])
         for i, sn in enumerate(serials, start=1):
-            ws.append([i, "HO CHI MINH BRANCH", "PC", "111", "A", "", "DELL", sn, "USING LOCAL", ""])
+            ws.append([i, unit, "PC", "111", "A", "", "DELL", sn, "USING LOCAL", ""])
     return _xlsx(build)
 
 
@@ -74,6 +80,7 @@ class ReportSourceTests(unittest.TestCase):
                 conn.execute("INSERT INTO users (user_no, user_no_norm, branch_no, user_name) VALUES (?, ?, ?, ?)",
                              (user_no, user_no, branch_no, f"USER {user_no}"))
             conn.execute("INSERT INTO branch_aliases (alias, branch_no) VALUES ('HCMC', '8009')")
+            conn.execute("INSERT INTO branch_aliases (alias, branch_no) VALUES ('NORTHERN HO', '8136')")
             self.admin = conn.execute("SELECT id FROM roles WHERE name = 'Admin'").fetchone()["id"]
             conn.commit()
         finally:
@@ -105,79 +112,119 @@ class ReportSourceTests(unittest.TestCase):
         finally:
             conn.close()
 
+    def _positions(self, branch_no):
+        conn = get_connection()
+        try:
+            return {r["serial_tag"]: r["position"] or "" for r in get_current_assets(conn, branch_no=branch_no)}
+        finally:
+            conn.close()
+
+    def _import_ho(self, name, rows):
+        path = self._write(name, _ho_report(rows))
+        reports, summary = import_ho_report(path, source_label=os.path.basename(path))
+        self.assertEqual(summary.error, "")
+        return reports, summary
+
     def test_period_from_file_name(self):
-        self.assertEqual(ho_report_period("Monthly Report 18092026.xlsx"), "2026-09")
-        self.assertEqual(ho_report_period("Monthly Report.xlsx"), "")
+        # sent in September -> the August report (it sits in the 08 folder)
+        self.assertEqual(ho_report_period("Monthly Report 18092026.xlsx"), "2026-08")
+        self.assertEqual(ho_report_period("Monthly Report 12012027.xlsx"), "2026-12")
+        self.assertEqual(ho_report_period("Monthly Report Sep 26.xlsx"), "")
 
-    def test_ho_import_splits_by_user_unit_and_skips_own_report_units(self):
+    def test_ho_import_rules(self):
         self._import_branch("2026-08", ["B1", "B2", "B3"])
-        path = self._write("Monthly Report 18092026.xlsx", _ho_report([
-            ("HEAD OFFICE", "222", "H1", ""),                      # user -> 7904
-            ("HEAD OFFICE", "999", "H2", "ICT PLANNING DEPARTMENT"),  # unknown user -> Dept column
-            ("HEAD OFFICE", "111", "H3", ""),                      # 8009 sends its own report
-            ("HEAD OFFICE", "111", "H5", "ICT PLANNING DEPARTMENT"),  # ... so its Dept column wins
-            ("NOWHERE", "", "H4", ""),                             # nothing maps
-        ]))
-        reports, summary = import_ho_report(path, source_label=os.path.basename(path))
-        self.assertEqual(summary.error, "")
-        self.assertEqual(summary.period, "2026-09")
-        self.assertEqual(summary.rows_read, 5)
+        reports, summary = self._import_ho("Monthly Report 18092026.xlsx", [
+            ("HEAD OFFICE", "222", "H1", "ICT PLANNING DEPARTMENT"),  # Head Office, Dept kept as Position
+            ("HEAD OFFICE", "333", "H2", ""),        # the user's unit (8129) no longer counts
+            ("SCMC PICO", "", "H3", ""),             # a site is Head Office too, its name as Position
+            ("NORTHERN HO", "", "N1", "RETAIL"),     # the Northern block -> Northern Head Office
+            ("HCMC", "", "H4", ""),                  # 8009's own August report is in: left out
+            ("NOWHERE", "", "H5", ""),               # anything else: Head Office
+        ])
+        self.assertEqual(summary.period, "2026-08")
+        self.assertEqual(summary.rows_read, 6)
         self.assertEqual(summary.skipped_own_report, {"HO CHI MINH BRANCH": 1})
-        self.assertEqual(summary.unresolved_rows, 1)
-        self.assertEqual(sorted(r.branch_no for r in reports), ["", "7904", "8129"])
-        self.assertEqual(
-            [s for s in self._sources() if s[2] == "HO"],
-            [("HO - Unresolved", "2026-09", "HO"), ("HO CHI MINH CORPORATE MARKETING CENTER", "2026-09", "HO"),
-             ("ICT PLANNING DEPARTMENT", "2026-09", "HO")],
-        )
-        self.assertEqual(self._current_serials("7904"), ["H1"])
-        self.assertEqual(self._current_serials("8129"), ["H2", "H5"])
+        self.assertEqual(summary.unresolved_rows, 0)
+        self.assertEqual(sorted(r.branch_no for r in reports), ["8061", "8136"])
+        self.assertEqual(self._positions("8061"), {"H1": "ICT PLANNING DEPARTMENT", "H2": "", "H3": "SCMC PICO",
+                                                   "H5": "NOWHERE"})
+        self.assertEqual(self._positions("8136"), {"N1": "RETAIL"})
         self.assertEqual(self._current_serials("8009"), ["B1", "B2", "B3"])
+        self.assertEqual(self._current_serials("8129"), [])
+        self.assertEqual(self._current_serials("C001"), [])
 
-    def test_scmc_site_wins_over_user_unit(self):
+    def test_own_report_replaces_the_ho_copy(self):
+        """Northern's own file and the HO report's NORTHERN HO block are the
+        same devices: never both."""
+        self._import_ho("Monthly Report 21082026.xlsx", [("NORTHERN HO", "", "N0", "")])   # July
+        self._import_ho("Monthly Report 18092026.xlsx", [("NORTHERN HO", "", "N1", ""),    # August
+                                                         ("NORTHERN HO", "", "N2", ""),
+                                                         ("HEAD OFFICE", "", "H1", "")])
+        self.assertEqual(self._current_serials("8136"), ["N1", "N2"])
+        # Northern's own August report comes in later: the HO copy for August goes.
+        path = self._write("NORTHERN BUSINESS DIVISION - Aug.xlsx",
+                           _branch_report(["N1", "N3"], label="NORTHERN HO", unit="NORTHERN HO"))
+        reports = import_asset_report(path, source_label=os.path.basename(path), period="2026-08")
+        self.assertEqual([r.branch_no for r in reports if not r.error], ["8136"])
+        self.assertEqual(self._current_serials("8136"), ["N1", "N3"])
+        self.assertEqual(self._current_serials("8061"), ["H1"])
         conn = get_connection()
         try:
-            conn.execute("INSERT INTO branches (branch_no, local_name, eng_name, updated_at) "
-                         "VALUES ('C001', 'SCMC PICO', 'SCMC PICO', datetime('now'))")
-            conn.commit()
-        finally:
-            conn.close()
-        path = self._write("Monthly Report 18092026.xlsx", _ho_report([
-            ("SCMC PICO", "222", "S1", ""),        # user -> 7904, but the SCMC site wins
-            ("HEAD OFFICE", "222", "S2", ""),      # not a site: user's unit as usual
-        ]))
-        reports, summary = import_ho_report(path, source_label=os.path.basename(path))
-        self.assertEqual(summary.error, "")
-        self.assertEqual(self._current_serials("C001"), ["S1"])
-        self.assertEqual(self._current_serials("7904"), ["S2"])
-
-    def test_ho_rows_never_hide_the_branch_report(self):
-        """The HCMC case: HO-report rows on 8009 dated September (from before
-        8009 had its own report) used to replace its August report."""
-        # Imported before 8009 had a report of its own, so its row was kept.
-        path = self._write("Monthly Report 18092026.xlsx", _ho_report([("HEAD OFFICE", "111", "H9", "")]))
-        reports, _ = import_ho_report(path, source_label=os.path.basename(path))
-        self.assertEqual([r.branch_no for r in reports], ["8009"])
-        self._import_branch("2026-07", ["B0", "B1"])
-        self._import_branch("2026-08", ["B1", "B2", "B3"])
-
-        self.assertEqual(self._current_serials("8009"), ["B1", "B2", "B3", "H9"])
-        conn = get_connection()
-        try:
-            self.assertEqual(get_current_asset_count(conn), 4)
+            self.assertEqual(get_current_asset_count(conn), 3)
             periods, table, *_ = get_branch_month_change_table(conn, "2026")
+            left = conn.execute("SELECT COUNT(*) FROM asset_items ai JOIN import_batches ib ON ib.id = ai.batch_id "
+                                "WHERE ib.report_source = 'HO' AND ai.branch_no = '8136'").fetchone()[0]
         finally:
             conn.close()
-        row = next(r for r in table if r["branch_no"] == "8009")
-        self.assertEqual(row["current_count"], 4)
-        cells = dict(zip(periods, row["cells"]))
-        # September has only the HO report: its 1 row, nothing "removed".
-        self.assertEqual((cells["2026-09"]["count"], cells["2026-09"]["removed"]), (1, None))
-        self.assertEqual((cells["2026-08"]["added"], cells["2026-08"]["removed"]), (2, 1))
+        self.assertEqual(left, 1)  # July's N0 stays: no own report for July
+        cells = dict(zip(periods, next(r for r in table if r["branch_no"] == "8136")["cells"]))
+        self.assertEqual(cells["2026-07"]["count"], 1)
+        self.assertEqual(cells["2026-08"]["count"], 2)
+        # A newer HO report while Northern has no own file for that month: it counts.
+        self._import_ho("Monthly Report 12102026.xlsx", [("NORTHERN HO", "", "N9", "")])  # September
+        self.assertEqual(self._current_serials("8136"), ["N9"])
+        # The same month from both, HO first: the unit's own report wins.
+        self._import_ho("Monthly Report 04112026.xlsx", [("NORTHERN HO", "", "N8", "")])  # October
+        path = self._write("NORTHERN BUSINESS DIVISION - Oct.xlsx",
+                           _branch_report(["N1"], label="NORTHERN HO", unit="NORTHERN HO"))
+        import_asset_report(path, source_label=os.path.basename(path), period="2026-10")
+        self.assertEqual(self._current_serials("8136"), ["N1"])
+        # ... and an HO report imported after it leaves the block out.
+        _, summary = self._import_ho("Monthly Report 05112026.xlsx", [("NORTHERN HO", "", "N7", "")])
+        self.assertEqual(summary.skipped_own_report, {"NORTHERN HEAD OFFICE": 1})
+        self.assertEqual(self._current_serials("8136"), ["N1"])
 
-        # A newer branch report replaces only the branch part.
-        self._import_branch("2026-09", ["B2", "B4"])
-        self.assertEqual(self._current_serials("8009"), ["B2", "B4", "H9"])
+    def test_trends_and_previous_report_take_one_report_per_month(self):
+        """Charts, the device table and "previous report" follow the same
+        rule as current state: one report per unit and month, the unit's own
+        before the HO report's copy, the series running across both."""
+        from app.analytics import get_all_branches_item_trend, get_branch_device_year_table, get_branch_item_trend
+        from app.queries import get_previous_batch_for_branch
+
+        self._import_ho("Monthly Report 21082026.xlsx", [("NORTHERN HO", "", "N0", "")])  # July, HO only
+        path = self._write("NORTHERN BUSINESS DIVISION - Aug.xlsx",
+                           _branch_report(["N1", "N2"], label="NORTHERN HO", unit="NORTHERN HO"))
+        own = import_asset_report(path, source_label=os.path.basename(path), period="2026-08")[0].batch_id
+        conn = get_connection()
+        try:
+            # an HO copy for August left next to the own report (e.g. data from
+            # before drop_ho_rows), with a device type the own report hasn't got
+            cur = conn.execute("INSERT INTO import_batches (imported_at, kind, source_files_json, label, period, "
+                               "report_source) VALUES (datetime('now'), 'asset_report', '[]', 'x', '2026-08', 'HO')")
+            conn.execute("INSERT INTO asset_items (batch_id, asset_key, branch_no, device_name, serial_tag) "
+                         "VALUES (?, 'k-ho', '8136', 'LAPTOP', 'L9')", (cur.lastrowid,))
+            conn.commit()
+            periods, items, matrix = get_branch_item_trend(conn, "8136")
+            self.assertEqual({i: matrix[i].get("2026-08") for i in items}, {"PC": 2})
+            periods, items, matrix = get_all_branches_item_trend(conn)
+            self.assertEqual(matrix["PC"]["2026-08"], 2)
+            self.assertNotIn("LAPTOP", matrix)
+            periods, rows, *_ = get_branch_device_year_table(conn, "8136", "2026", ["PC", "LAPTOP"])
+            self.assertEqual([r["item"] for r in rows], ["PC"])
+            self.assertEqual(get_previous_batch_for_branch(conn, "8136", own), conn.execute(
+                "SELECT id FROM import_batches WHERE period = '2026-07'").fetchone()[0])
+        finally:
+            conn.close()
 
     def test_each_form_refuses_the_other_report(self):
         ho_path = self._write("Monthly Report 18092026.xlsx", _ho_report([("HEAD OFFICE", "222", "H1", "")]))
@@ -202,8 +249,8 @@ class ReportSourceTests(unittest.TestCase):
                            follow_redirects=True)
         self.assertEqual(resp.status_code, 200)
         body = resp.get_data(as_text=True)
-        self.assertIn("HO report for 2026-08 - 1 rows into 1 unit(s)", body)
-        self.assertEqual(self._sources(), [("HO CHI MINH CORPORATE MARKETING CENTER", "2026-08", "HO")])
+        self.assertIn("HO report for 2026-07 - 1 rows into 1 unit(s)", body)
+        self.assertEqual(self._sources(), [("HEAD OFFICE", "2026-07", "HO")])
 
     def test_migration_flags_old_ho_batches(self):
         conn = get_connection()

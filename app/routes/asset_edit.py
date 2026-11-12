@@ -64,16 +64,17 @@ def index():
 
     conn = get_connection()
     try:
-        rows, total = search_assets(conn, filters, page=page, per_page=per_page, sort=sort)
+        as_of, as_of_options = listing.as_of_month(conn)
+        rows, total = search_assets(conn, filters, page=page, per_page=per_page, sort=sort, as_of=as_of)
         total_pages = (total + per_page - 1) // per_page if total else 1
         if page > total_pages:
             # Stale page number (filters changed, or rows were deleted out
             # from under it) - fall back to the last real page instead of
             # rendering an empty table.
             page = total_pages
-            rows, total = search_assets(conn, filters, page=page, per_page=per_page, sort=sort)
-        branches = get_branches_with_current_assets(conn)
-        show_unresolved_option = has_unresolved_current_assets(conn)
+            rows, total = search_assets(conn, filters, page=page, per_page=per_page, sort=sort, as_of=as_of)
+        branches = get_branches_with_current_assets(conn, as_of=as_of)
+        show_unresolved_option = has_unresolved_current_assets(conn, as_of=as_of)
         device_names = [
             r["device_name"]
             for r in conn.execute(
@@ -99,12 +100,7 @@ def index():
             r["name"] for r in conn.execute("SELECT name FROM status_standard_names").fetchall()
         }
         status_options = sorted(current_statuses | standard_statuses)
-        period_options = [
-            r["period"]
-            for r in conn.execute(
-                "SELECT DISTINCT period FROM import_batches WHERE period != '' ORDER BY period DESC"
-            ).fetchall()
-        ]
+        period_options = [p for p in as_of_options if not as_of or p <= as_of]
         selected_branch = listing.selected_branch(conn, filters)
         suggestions = inline_edit_suggestions(conn)
     finally:
@@ -124,6 +120,8 @@ def index():
         model_options=model_options,
         status_options=status_options,
         period_options=period_options,
+        as_of=as_of,
+        as_of_options=as_of_options,
         selected_branch=selected_branch,
         page=page,
         per_page=per_page,
@@ -143,7 +141,8 @@ def export():
     filters = _filters_from_args()
     conn = get_connection()
     try:
-        rows, _total = search_assets(conn, filters, sort=current_sort(ASSET_SORTS))
+        as_of, _ = listing.as_of_month(conn)
+        rows, _total = search_assets(conn, filters, sort=current_sort(ASSET_SORTS), as_of=as_of)
     finally:
         conn.close()
 
@@ -152,8 +151,9 @@ def export():
         + list(ASSET_ROW_COLUMNS)
         + [("Period", lambda r: r["period"])]
     )
-    wb = build_asset_rows_workbook(rows, sheet_title="Manage Assets", columns=columns)
-    return send_workbook(wb, dated_download_name("manage_assets"))
+    wb = build_asset_rows_workbook(rows, sheet_title=f"Assets as of {as_of}" if as_of else "Manage Assets",
+                                   columns=columns)
+    return send_workbook(wb, dated_download_name(f"manage_assets_as_of_{as_of}" if as_of else "manage_assets"))
 
 
 @bp.route("/duplicates")

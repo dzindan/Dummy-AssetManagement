@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "_sort.html" as sorthdr %}
+{% import "_as_of.html" as as_of_ui %}
 {% block title %}Manage CCTV - Asset Management Tool{% endblock %}
 
 {% macro pager() %}
@@ -17,7 +18,7 @@
 {% endmacro %}
 
 {% block content %}
-{% set can_edit = 'edit_assets' in current_permissions %}
+{% set can_edit = 'edit_assets' in current_permissions and not as_of %}
 <h1>Manage CCTV</h1>
 <p class="muted">
   Every currently-imported CCTV item (DVRs/recorders + attached cameras/monitors) across all branches -
@@ -72,6 +73,9 @@
           </div>
         </div>
       </div>
+      <div>
+        {{ as_of_ui.select(as_of, as_of_options) }}
+      </div>
       <div class="search-field">
         <label for="q" title="Matches serial, model, location, manufacturer, branch/dept, or remark.">Search</label>
         <input type="text" id="q" name="q" value="{{ filters.q }}" placeholder="e.g. HIK VISION">
@@ -87,7 +91,7 @@
       <div class="filter-actions">
         {% if sort %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
         <button type="submit">Filter</button>
-        {% if filters.branch_no or filters.device_name or filters.status or filters.q %}
+        {% if filters.branch_no or filters.device_name or filters.status or filters.q or as_of %}
         <a class="btn secondary" href="{{ url_for('cctv_edit.index') }}">Clear</a>
         {% endif %}
       </div>
@@ -105,6 +109,7 @@
 {% endif %}
 
 <div class="panel">
+  {{ as_of_ui.banner(as_of) }}
   <p class="muted">
     <strong>{{ total }}</strong> CCTV item(s) match these filters total &middot;
     page {{ page }} of {{ total_pages }}
@@ -113,12 +118,14 @@
   {% if rows %}
   <div class="actions" style="margin-top:0;">
     <a class="btn secondary" href="{{ url_for('cctv_edit.export') }}?{{ request.query_string.decode() }}">Export to Excel</a>
+    {% if not as_of %}
     <button type="button" class="danger" data-bulk-delete-trigger
       data-bulk-delete-url="{{ url_for('cctv_edit.bulk_delete') }}"
       data-bulk-delete-checkbox-class="cctv-row-checkbox"
       data-bulk-delete-all-months="1"
       data-bulk-delete-note="Every month of these devices is deleted, here and in Manage Assets."
       data-bulk-delete-next="{{ request.full_path }}">Delete Selected</button>
+    {% endif %}
   </div>
   {% endif %}
 {% if can_edit %}
@@ -135,7 +142,7 @@
     <thead>
       <tr>
         <th><input type="checkbox" data-select-all="cctv-row-checkbox"></th>
-        {{ sorthdr.th('Branch', 'branch') }}{{ sorthdr.th('Device', 'device') }}{{ sorthdr.th('IP', 'ip') }}{{ sorthdr.th('Manufacturer', 'manufacturer') }}{{ sorthdr.th('Model', 'model') }}{{ sorthdr.th('Serial/Tag', 'serial') }}{{ sorthdr.th('Status', 'status') }}{{ sorthdr.th('Cameras', 'cameras') }}{{ sorthdr.th('HDD Count', 'hdd_count') }}{{ sorthdr.th('HDD Capacity', 'hdd_capacity') }}{{ sorthdr.th('Location', 'location') }}{{ sorthdr.th('Remark', 'remark') }}<th></th>
+        {{ sorthdr.th('Branch', 'branch') }}{{ sorthdr.th('Device', 'device') }}{{ sorthdr.th('IP', 'ip') }}{{ sorthdr.th('Manufacturer', 'manufacturer') }}{{ sorthdr.th('Model', 'model') }}{{ sorthdr.th('Serial/Tag', 'serial') }}{{ sorthdr.th('Status', 'status') }}{{ sorthdr.th('Cameras', 'cameras') }}{{ sorthdr.th('HDD Count', 'hdd_count') }}{{ sorthdr.th('HDD Capacity', 'hdd_capacity') }}{{ sorthdr.th('Location', 'location') }}{{ sorthdr.th('Remark', 'remark') }}<th>{{ 'Period' if as_of else '' }}</th>
       </tr>
     </thead>
     <tbody>
@@ -154,7 +161,7 @@
         <td data-field="hdd_capacity" data-value="{{ a['hdd_capacity'] or '' }}">{{ a['hdd_capacity'] }}</td>
         <td data-field="location" data-value="{{ a['location'] or '' }}">{{ a['location'] }}</td>
         <td data-field="remark" data-value="{{ a['remark'] or '' }}">{{ a['remark'] }}</td>
-        <td><a class="btn secondary" href="{{ url_for('cctv_edit.edit', asset_id=a['id'], next=request.full_path) }}">Edit</a></td>
+        <td>{% if as_of %}{{ a['period'] }}{% else %}<a class="btn secondary" href="{{ url_for('cctv_edit.edit', asset_id=a['id'], next=request.full_path) }}">Edit</a>{% endif %}</td>
       </tr>
       {% else %}
       <tr><td colspan="14" class="muted">No CCTV items match these filters.</td></tr>

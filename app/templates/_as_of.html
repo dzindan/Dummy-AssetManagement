@@ -1,0 +1,24 @@
+{#
+"As of month" (user, 2026-11-12): every page that lists current rows can
+show them as they were in an earlier month instead - each unit's newest
+report up to that month (a unit with no report for that exact month shows
+its report from before it). `options`: every month on file, newest first.
+#}
+{% macro select(as_of, options, onchange=False) -%}
+<label for="as_of" title="Each branch's newest report up to this month. A branch with no report for that month shows its last report before it.">As of month</label>
+<select id="as_of" name="as_of"{% if onchange %} onchange="this.form.submit()"{% endif %}>
+  <option value="">Latest</option>
+  {% for p in options[1:] %}
+  <option value="{{ p }}" {{ 'selected' if p == as_of else '' }}>{{ p }}</option>
+  {% endfor %}
+</select>
+{%- endmacro %}
+
+{% macro banner(as_of, note="") -%}
+{% if as_of %}
+<p class="as-of-banner"><span class="badge badge-changed">As of {{ as_of }}</span>
+  Each branch's newest report up to {{ as_of }} (the Period column shows which month a row comes from).
+  Read-only - editing and deleting work on the latest data only.{% if note %} {{ note }}{% endif %}
+  <a href="{{ request.path }}?{{ request.args | as_of_cleared }}">Back to latest</a></p>
+{% endif %}
+{%- endmacro %}

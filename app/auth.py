@@ -48,10 +48,11 @@ def ad_settings() -> dict:
     "open" makes their account on that first sign-in with the default role
     (Viewer) - an Admin gives more. Off only when an administrator turns it off."""
     from .db import get_setting
-    from .winauth import computer_domain
+    from .winauth import clean_domain, computer_domain
 
     return {"enabled": get_setting("ad_enabled", "1") == "1",
-            "domain": (get_setting("ad_domain", "") or "").strip() or computer_domain(),
+            # clean_domain: a whole DOMAIN\user saved here before the field was checked
+            "domain": clean_domain(get_setting("ad_domain", "")) or computer_domain(),
             "group": (get_setting("ad_group", "") or "").strip(),
             "default_role": (get_setting("ad_default_role", "") or "").strip(),
             "open": get_setting("ad_open", "1") == "1"}

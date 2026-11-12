@@ -346,6 +346,21 @@ computers on the same office network.
       (C001 SCMC PICO, C002 GOLDEN PALACE, C003 DALI, ...) comes before the
       user's unit; otherwise most of those devices would land on 8160 SMART
       CREDIT MARKETING CENTER, the unit of their users.
+    - **Replaced 2026-11-11 (user)** - the two rules above no longer apply.
+      Now: a row whose `BRANCH / DEPT` maps to Northern Head Office (8136,
+      "NORTHERN HO") or to a unit that sends its own monthly report (e.g.
+      HNCMC 7905) goes to that unit; EVERY other row is HEAD OFFICE (8061) -
+      SCMC sites, Contact Center, RAMC... included - with its `Dept` column
+      stored as the row's Position (the `BRANCH / DEPT` text when `Dept` is
+      empty, e.g. "SCMC PICO"). The user's unit no longer matters. A unit's
+      own report for a month is the truth for it: the HO import leaves out
+      that unit's rows when its own report for the period is already in
+      (`skipped_own_report`), and `import_asset_report` deletes the HO
+      report's rows of that unit + period when its own report comes in
+      later (`importer.drop_ho_rows`). Period: **the month folder the file
+      sits in** - the date in the name is when it was sent, so a blank
+      Reporting month = the month before it (`ho_report_period`:
+      "Monthly Report 18092026" = 2026-08; was 2026-09).
     - Since 2026-10-07 the branch list match is exact, while the first HO
       import used substring guessing; many `Dept` texts ("CREDIT PLANNING",
       "ICT DEV", "DS", ...) no longer map and fall through to `BRANCH /
@@ -586,7 +601,37 @@ just because it happened to be imported first. `get_previous_batch_for_branch`
 (used for diffing) follows the same period-first rule when picking a
 branch's "previous" snapshot to compare against.
 
-**Report source** (2026-10-15, §1 #26): all of the above is per unit *and*
+**"As of month" view** (2026-11-12): Manage Assets, Manage CCTV, Lookup and
+Branch Detail (and their Excel exports) have an "As of month" select. A
+month picked there shows the same per-branch rule bounded to that month
+(`queries.assets_cte(as_of)`, i.e. `current_assets_cte("WHERE ib.period <=
+'<month>'")`): each branch's newest report up to and including it, so a
+branch that didn't send a report for that exact month shows its report from
+before it (the Period column / "from the ... report" note says which). No
+extra storage: an import never drops an older month, every month's rows are
+already kept (~16-17k rows, ~5-6 MB a month). `listing.as_of_month` reads
+`?as_of=` (validated "YYYY-MM"; the newest month or later means the latest
+view). A past month is read-only: no inline edit, Edit or Delete, and Lookup
+shows the user's assets then but builds a hand-over only from the latest
+data. Branch Detail's trend chart and by-month table always cover every
+month.
+
+**Report source** (since 2026-11-11, §1 #26): ONE report per unit - the
+newest period wins whichever source it came from, and on the same period
+the unit's own report (`BRANCH`) beats the HO report's copy (`latest_src`
+in `current_assets_cte`; `analytics._walk_by_source` and the by-device
+table keep one source per unit and month the same way, and so do the trend
+charts (`_branch_trend_sql` / `_all_branches_trend_sql`: `month_src` picks
+the source per unit and month before the batch), Branch Detail's
+device-by-month table (per month for the whole branch, not per device type -
+a device only in the HO copy doesn't count next to the own report) and
+`get_previous_batch_for_branch` (the month before, any source, own report
+first - reviewed 2026-11-12). Both sources for one unit and month only
+happen with data from before `drop_ho_rows`, or a file covering several
+branches. The HO report now
+only puts whole blocks on a unit (Northern, units with own reports), so
+adding the two together counted Northern twice. What follows is the
+2026-10-15 design it replaced: all of the above was per unit *and*
 per `import_batches.report_source`. A unit can have rows from its own
 monthly report (`BRANCH`) and from the HO consolidated report (`HO`); each
 source keeps its own latest batch and both count as current, so neither

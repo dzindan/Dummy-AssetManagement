@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "_sort.html" as sorthdr %}
+{% import "_as_of.html" as as_of_ui %}
 {% block title %}Manage Assets - Asset Management Tool{% endblock %}
 
 {% macro pager() %}
@@ -17,7 +18,7 @@
 {% endmacro %}
 
 {% block content %}
-{% set can_edit = 'edit_assets' in current_permissions %}
+{% set can_edit = 'edit_assets' in current_permissions and not as_of %}
 <h1>Manage Assets</h1>
 <p class="muted">
   Every currently-assigned asset across all branches, in one filterable, editable list.
@@ -105,6 +106,9 @@
           </div>
         </div>
       </div>
+      <div>
+        {{ as_of_ui.select(as_of, as_of_options) }}
+      </div>
       <div class="search-field">
         <label for="q" title="Matches serial, model, full name, user ID, branch/dept, position, or remark.">Search</label>
         <input type="text" id="q" name="q" value="{{ filters.q }}" placeholder="e.g. NGO LE GIANG">
@@ -120,7 +124,7 @@
       <div class="filter-actions">
         {% if sort %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
         <button type="submit">Filter</button>
-        {% if filters.branch_no or filters.device_name or filters.model_device or filters.status or filters.period or filters.q %}
+        {% if filters.branch_no or filters.device_name or filters.model_device or filters.status or filters.period or filters.q or as_of %}
         <a class="btn secondary" href="{{ url_for('asset_edit.index') }}">Clear</a>
         {% endif %}
       </div>
@@ -132,7 +136,7 @@
 <p class="muted">
   Filtered to <strong>{{ selected_branch['eng_name'] }}</strong>
   {% if selected_branch['branch_no'] %}
-  &middot; <a href="{{ url_for('branch_detail.detail', branch_no=selected_branch['branch_no']) }}">View trend chart &amp; Excel export for this branch</a>
+  &middot; <a href="{{ url_for('branch_detail.detail', branch_no=selected_branch['branch_no'], as_of=as_of or None) }}">View trend chart &amp; Excel export for this branch</a>
   {% else %}
   &middot; these rows have no branch match - fix with an alias in <a href="{{ url_for('settings.index') }}">Settings</a>, or edit each row's Branch/Dept text directly below.
   {% endif %}
@@ -140,6 +144,7 @@
 {% endif %}
 
 <div class="panel">
+  {{ as_of_ui.banner(as_of) }}
   <p class="muted">
     <strong>{{ total }}</strong> asset(s) match these filters total &middot;
     page {{ page }} of {{ total_pages }}
@@ -148,12 +153,14 @@
   {% if rows %}
   <div class="actions" style="margin-top:0;">
     <a class="btn secondary" href="{{ url_for('asset_edit.export') }}?{{ request.query_string.decode() }}">Export to Excel</a>
+    {% if not as_of %}
     <button type="button" class="danger" data-bulk-delete-trigger
       data-bulk-delete-url="{{ url_for('asset_edit.bulk_delete') }}"
       data-bulk-delete-checkbox-class="asset-row-checkbox"
       data-bulk-delete-all-months="1"
       data-bulk-delete-note="Every month of these devices is deleted, here and in Manage CCTV (DVRs / CCTV monitors)."
       data-bulk-delete-next="{{ request.full_path }}">Delete Selected</button>
+    {% endif %}
   </div>
   {% endif %}
 {% if can_edit %}
@@ -190,7 +197,7 @@
         <td data-field="handover_date" data-value="{{ a['handover_date'] or '' }}">{{ a['handover_date'] }}</td>
         <td data-derived="usage_duration">{{ a['handover_date'] | usage_duration }}</td>
         <td>{{ a['period'] }}</td>
-        <td><a class="btn secondary" href="{{ url_for('asset_edit.edit', asset_id=a['id'], next=request.full_path) }}">Edit</a></td>
+        <td>{% if not as_of %}<a class="btn secondary" href="{{ url_for('asset_edit.edit', asset_id=a['id'], next=request.full_path) }}">Edit</a>{% endif %}</td>
       </tr>
       {% else %}
       <tr><td colspan="15" class="muted">No assets match these filters.</td></tr>

@@ -95,8 +95,16 @@ def logon(name: str, password: str, default_domain: str) -> Identity:
         raise AuthError(messages.get(e.winerror, f"Windows refused the sign-in: {e.strerror}")) from None
     try:
         return _identity_from_token(token)
+    except pywintypes.error as e:  # e.g. the account's SID can't be looked up from this server
+        raise AuthError(f"Windows sign-in failed: {e.strerror}") from None
     finally:
         token.Close()
+
+
+def clean_domain(text: str) -> str:
+    """The domain part only, upper case: 'SHBVN' stays, a whole account typed
+    into the Domain field ('SHBVN\\24508659') gives 'SHBVN'."""
+    return (text or "").strip().split("\\", 1)[0].strip().upper()
 
 
 def group_sid(name: str) -> str:
@@ -185,9 +193,14 @@ class NegotiateServer:
             with self._lock:
                 self._pending[connection] = (server, now)
             return None, reply
-        token = server.ctxt.QuerySecurityContextToken()
+        try:
+            token = server.ctxt.QuerySecurityContextToken()
+        except pywintypes.error as e:
+            raise AuthError(f"Windows sign-in failed: {e.strerror}") from None
         try:
             return _identity_from_token(token), reply
+        except pywintypes.error as e:  # e.g. the user's SID can't be looked up from this server
+            raise AuthError(f"Windows sign-in failed: {e.strerror}") from None
         finally:
             token.Close()
 

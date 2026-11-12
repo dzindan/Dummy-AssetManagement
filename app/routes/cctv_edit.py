@@ -57,12 +57,13 @@ def index():
 
     conn = get_connection()
     try:
-        rows, total = search_cctv(conn, filters, page=page, per_page=per_page, sort=sort)
+        as_of, as_of_options = listing.as_of_month(conn)
+        rows, total = search_cctv(conn, filters, page=page, per_page=per_page, sort=sort, as_of=as_of)
         total_pages = (total + per_page - 1) // per_page if total else 1
         if page > total_pages:
             page = total_pages
-            rows, total = search_cctv(conn, filters, page=page, per_page=per_page, sort=sort)
-        branches = get_branches_with_current_cctv(conn)
+            rows, total = search_cctv(conn, filters, page=page, per_page=per_page, sort=sort, as_of=as_of)
+        branches = get_branches_with_current_cctv(conn, as_of=as_of)
         device_names = [
             r["device_name"]
             for r in conn.execute(
@@ -93,6 +94,8 @@ def index():
         unresolved_value=UNRESOLVED_BRANCH_FILTER,
         device_names=device_names,
         status_options=status_options,
+        as_of=as_of,
+        as_of_options=as_of_options,
         selected_branch=selected_branch,
         page=page,
         per_page=per_page,
@@ -108,7 +111,8 @@ def export():
     filters = _filters_from_args()
     conn = get_connection()
     try:
-        rows, _total = search_cctv(conn, filters, sort=current_sort(CCTV_SORTS))
+        as_of, _ = listing.as_of_month(conn)
+        rows, _total = search_cctv(conn, filters, sort=current_sort(CCTV_SORTS), as_of=as_of)
     finally:
         conn.close()
 
@@ -116,8 +120,9 @@ def export():
         [("Branch", lambda r: r["branch_eng_name"] or r["branch_dept"])]
         + list(CCTV_ROW_COLUMNS)
     )
-    wb = build_cctv_rows_workbook(rows, sheet_title="Manage CCTV", columns=columns)
-    return send_workbook(wb, dated_download_name("manage_cctv"))
+    wb = build_cctv_rows_workbook(rows, sheet_title=f"CCTV as of {as_of}" if as_of else "Manage CCTV",
+                                  columns=columns)
+    return send_workbook(wb, dated_download_name(f"manage_cctv_as_of_{as_of}" if as_of else "manage_cctv"))
 
 
 @bp.route("/bulk-delete", methods=["POST"])
