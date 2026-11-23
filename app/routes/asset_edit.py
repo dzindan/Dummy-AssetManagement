@@ -1,6 +1,7 @@
-from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, Response, flash, jsonify, redirect, render_template, request, url_for
 
 from . import listing
+from .. import assetexplorer
 from ..auth import current_username, require_permission, safe_next
 from ..db import (apply_hand_fix, delete_asset_rows, delete_summary, get_connection, log_activity,
                   prune_stale_unmapped, sync_cctv_asset_link)
@@ -154,6 +155,23 @@ def export():
     wb = build_asset_rows_workbook(rows, sheet_title=f"Assets as of {as_of}" if as_of else "Manage Assets",
                                    columns=columns)
     return send_workbook(wb, dated_download_name(f"manage_assets_as_of_{as_of}" if as_of else "manage_assets"))
+
+
+@bp.route("/export-assetexplorer")
+def export_assetexplorer():
+    """Same rows as export() (filters + As of month), as a CSV laid out
+    for ManageEngine AssetExplorer's Import from CSV - see
+    app/assetexplorer.py for the field mapping."""
+    filters = _filters_from_args()
+    conn = get_connection()
+    try:
+        as_of, _ = listing.as_of_month(conn)
+        rows, _total = search_assets(conn, filters, sort=current_sort(ASSET_SORTS), as_of=as_of)
+    finally:
+        conn.close()
+    name = dated_download_name(f"assetexplorer_import_as_of_{as_of}" if as_of else "assetexplorer_import")
+    return Response(assetexplorer.build_csv(rows), mimetype="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{name[:-5]}.csv"'})
 
 
 @bp.route("/duplicates")

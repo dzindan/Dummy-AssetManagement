@@ -731,6 +731,27 @@ those rows can be edited inline. Not done yet: pasting a block copied from Excel
 JS in `app/static/app.js`, styles in `style.css`. Tests:
 `tests/test_inline_edit.py`.
 
+**Export for AssetExplorer** (user's request 2026-11-23): a button next to
+Manage Assets' Export to Excel downloads the same rows (filters, sort, As of
+month) as a UTF-8 CSV for ManageEngine AssetExplorer's *Assets -> Import
+from CSV* (`app/assetexplorer.py`, route `asset_edit.export_assetexplorer`).
+Columns are named after AE's fields: Asset Name, Product Type (= Device),
+Product (= Model; blank -> "<DEVICE> - UNKNOWN MODEL"), Serial Number,
+Asset State, Site (= branch English name), Department (= Position, the HO
+Dept text), User (= `FULL NAME(USER ID)`, user 2026-11-23; just the one
+that's filled if the other is blank/NA), IP Address, Description (AM
+status, handover date, remark, period - things AE has no field for).
+- Asset Name = `<branch no>-<device>-<serial>`; no serial ->
+  `...-NOSN-<row id>`; a repeated name (duplicate serial) gets `-2`, `-3`, so
+  every name in a file is unique. Unresolved branch -> `UNRESOLVED-...`.
+- Asset State (`assetexplorer.STATE_MAP`): USING LOCAL / USING INTERNET /
+  USING LOCAL/ITN / RENTAL / RGM / GM / DGM / CGM -> In Use; WAREHOUSE,
+  RETURN -> In Store; BROKEN -> In Repair; LOST, SENT TO KOREAN -> Disposed;
+  anything else -> In Use if the row has a user, else In Store.
+- Product Types / Sites must exist in AE (or be created by its import) -
+  AM's device names are used as-is, not AE's built-in type names.
+Tests: `tests/test_assetexplorer_export.py`.
+
 **Sorting tables** (user's request 2026-10-06): every table header can be
 clicked to sort - ascending, descending, then back to the original order,
 with a ⇅ / ▲ / ▼ arrow showing which.
