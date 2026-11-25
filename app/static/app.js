@@ -471,6 +471,12 @@ document.addEventListener("click", function (e) {
         if (!res.ok || !res.j.ok) throw new Error(res.j.error || "Save failed.");
         td.dataset.value = res.j.value;
         td.textContent = field === "branch_dept" ? res.j.branch_label : res.j.value;
+        ["user_department", "os"].forEach(function (name) {
+          const cell = tr.querySelector('[data-derived="' + name + '"]');
+          if (!cell || res.j[name] === undefined || cell.textContent.trim() === res.j[name]) return;
+          cell.textContent = res.j[name];
+          cell.removeAttribute("title");  // told about the old value
+        });
         const usage = tr.querySelector('[data-derived="usage_duration"]');
         if (usage && res.j.usage_duration !== undefined) usage.textContent = res.j.usage_duration || "";
         td.classList.remove("cell-saving");

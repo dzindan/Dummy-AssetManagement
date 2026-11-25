@@ -3,9 +3,11 @@
 
 Choices the user made:
 - Asset Name = <branch no>-<device>-<serial>, e.g. "8061-PC-5CD1234XYZ".
-  No serial -> "<branch>-<device>-NOSN-<row id>"; a name already used in
-  the same file (duplicate serial) gets "-2", "-3"... so every row stays
-  importable (AssetExplorer needs unique asset names).
+  No serial -> "<branch>-<device>-NOSN-<code>", the code made from what
+  identifies the row (not the row id: every monthly import makes new ids, and
+  AssetExplorer would get the same device again as a new asset); a name used
+  by several rows gets "-2", "-3"... Names are worked out over every current
+  row in a fixed order, so a filter or sort doesn't change them.
 - Site = branch English name, Department = the unit of the user's branch
   code in the Aither ID list (user, 2026-11-25), else AM's Position column, User = "FULL NAME(USER ID)".
 - One CSV for the rows on screen (same filters / As of month as Manage
@@ -19,6 +21,7 @@ handover date, remark, period) goes into Description so nothing is lost.
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 from typing import Any, Iterable
 
@@ -108,23 +111,45 @@ def _description(row) -> str:
     return "; ".join(f"{label}: {_text(v)}" for label, v in parts if _text(v) and _text(v).upper() != "NA")
 
 
-def build_rows(rows: Iterable) -> list[list[str]]:
+def asset_names(rows: Iterable) -> dict[int, str]:
+    """row id -> Asset Name, unique (ignoring case) over `rows`."""
+    base: dict[int, str] = {}
+    rows = sorted(rows, key=lambda r: (_text(r["user_id_norm"]), _text(r["model_device"]), r["id"]))
+    for r in rows:
+        serial = _text(r["serial_tag"])
+        if not _has_serial(serial):
+            identity = "|".join(_text(r[k]).upper() for k in ("asset_key", "model_device", "user_id_norm"))
+            serial = "NOSN-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:8].upper()
+        base[r["id"]] = (f"{_text(r['branch_no']) or 'UNRESOLVED'}-"
+                         f"{_text(r['device_name']) or 'UNKNOWN DEVICE'}-{serial}")
+    taken = {name.upper() for name in base.values()}  # a "-2" must not be another row's own name
+    first: set[str] = set()
+    names = {}
+    for row_id, name in base.items():
+        out, n = name, 1
+        if name.upper() in first:
+            while out.upper() in taken:
+                n += 1
+                out = f"{name}-{n}"
+            taken.add(out.upper())
+        first.add(name.upper())
+        names[row_id] = out
+    return names
+
+
+def build_rows(rows: Iterable, names: dict[int, str] | None = None) -> list[list[str]]:
+    """`names`: asset_names() of every current row when `rows` is filtered."""
+    rows = list(rows)
+    names = asset_names(rows) if names is None else names
     out = []
-    used: dict[str, int] = {}
     for r in rows:
         device = _text(r["device_name"]) or "UNKNOWN DEVICE"
-        branch = _text(r["branch_no"]) or "UNRESOLVED"
         serial = _text(r["serial_tag"])
         has_serial = _has_serial(serial)
-        name = f"{branch}-{device}-{serial if has_serial else 'NOSN-' + str(r['id'])}"
-        n = used.get(name.upper(), 0) + 1
-        used[name.upper()] = n
-        if n > 1:
-            name = f"{name}-{n}"
         model = _text(r["model_device"])
         user = _text(r["user_id_raw"])
         out.append([
-            name,
+            names[r["id"]],
             device,
             model if model and model.upper() != "NA" else f"{device} - UNKNOWN MODEL",
             serial if has_serial else "",
@@ -139,11 +164,11 @@ def build_rows(rows: Iterable) -> list[list[str]]:
     return out
 
 
-def build_csv(rows: Iterable) -> bytes:
+def build_csv(rows: Iterable, names: dict[int, str] | None = None) -> bytes:
     """UTF-8 with BOM, so Vietnamese names survive both AE's importer and
     Excel if someone opens the file first."""
     buf = io.StringIO()
     writer = csv.writer(buf, lineterminator="\r\n")
     writer.writerow(COLUMNS)
-    writer.writerows(build_rows(rows))
+    writer.writerows(build_rows(rows, names))
     return buf.getvalue().encode("utf-8-sig")

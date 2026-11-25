@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import openpyxl
 
@@ -74,6 +75,20 @@ class UserDepartmentTests(unittest.TestCase):
         finally:
             conn.close()
         self.assertIn(("SERIAL2", "RETAIL DEPARTMENT"), self._rows())
+
+    def test_inline_edit_redraws_department(self):
+        conn = get_connection()
+        try:
+            row_id = conn.execute("SELECT id FROM asset_items WHERE serial_tag = 'SERIAL1'").fetchone()["id"]
+        finally:
+            conn.close()
+        out = self.client.post(f"/assets/{row_id}/cell", json={"field": "user_id_raw", "value": "222"}).get_json()
+        self.assertEqual((out["user_department"], out["os"]), ("SERVICE DEPARTMENT", ""))
+        with mock.patch("app.routes.network_check._own_scan", return_value={"snapshot": {}, "branch_no": ""}):
+            self.client.post("/network-check/scan/x/apply", json={"updates": [
+                {"ip": "10.0.0.1", "field": "user", "asset_ids": [row_id], "value": "111"}]})
+        self.assertIn(("SERIAL1", "RETAIL DEPARTMENT"), self._rows())
+        self.assertIn('data-derived="user_department"', self.client.get("/assets/").get_data(as_text=True))
 
     def test_page_and_exports(self):
         page = self.client.get("/assets/", query_string={"department": "RETAIL DEPARTMENT"}).get_data(as_text=True)

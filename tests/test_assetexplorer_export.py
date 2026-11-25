@@ -89,6 +89,30 @@ class AssetExplorerExportTests(unittest.TestCase):
         page = self.client.get("/assets/?device_name=LCD").get_data(as_text=True)
         self.assertIn("/assets/export-assetexplorer?device_name=LCD", page)
 
+    def _import(self, period):
+        path = os.path.join(tempfile.mkdtemp(prefix="am_ae_n_"), f"Zeta Branch {period}.xlsx")
+        with open(path, "wb") as f:
+            f.write(_report("Zeta Branch", [
+                ("LCD", "", "", "", "", "WAREHOUSE"), ("LCD", "333", "C", "", "N/A", "USING LOCAL"),
+                ("PC", "222", "B", "DELL OPTIPLEX 7090", "SN1", "BROKEN"),
+                ("PC", "111", "A", "DELL OPTIPLEX 7090", "SN1", "USING LOCAL"),
+                ("PC", "444", "D", "DELL OPTIPLEX 7090", "SN1-2", "USING LOCAL")]))
+        import_asset_report(path, source_label=os.path.basename(path), period=period)
+
+    def test_names_stay_the_same(self):
+        before = {r["Asset Name"] for r in self._csv() if r["Product Type"] == "LCD"}
+        self._import("2026-04")
+        rows = self._csv()
+        names = {r["Asset Name"]: r["User"] for r in rows}
+        self.assertEqual(len(names), 5)
+        self.assertTrue(before <= set(names))                       # new month, new row ids
+        # the second SN1 may not take SN1-2, another PC's own name
+        self.assertEqual({k for k in names if "-PC-" in k}, {"001-PC-SN1", "001-PC-SN1-2", "001-PC-SN1-3"})
+        self.assertTrue(names["001-PC-SN1-2"].endswith("(444)"))
+        for qs in ("?sort=-user_id", "?sort=user_id", "?status=BROKEN", "?q=222"):
+            for r in self._csv(qs):
+                self.assertEqual(names.get(r["Asset Name"]), r["User"], qs)
+
     def test_state_map(self):
         self.assertEqual(asset_state("LOST", "1"), "Disposed")
         self.assertEqual(asset_state("", "123"), "In Use")

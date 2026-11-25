@@ -514,6 +514,12 @@ _DEPT_FILTER = f"COALESCE(NULLIF({_DEPT_NAME}, ''), '{NO_DEPARTMENT}')"
 ASSET_SORTS["department"] = (_DEPT_NAME, False)
 
 
+def derived_cells(conn, asset_id: int):
+    """One row's Department and OS, to redraw after an inline edit."""
+    return conn.execute(f"SELECT bk.id{_OS_SELECT}{_DEPT_SELECT} FROM asset_items bk {_OS_JOIN}{_DEPT_JOIN}"
+                        " WHERE bk.id = ?", (asset_id,)).fetchone()
+
+
 def department_options(conn) -> list[str]:
     """Departments of the Aither users, for Manage Assets' filter."""
     return [NO_DEPARTMENT] + [r["name"] for r in conn.execute(

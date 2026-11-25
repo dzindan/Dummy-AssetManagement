@@ -742,9 +742,11 @@ department, see below; else Position), User (= `FULL NAME(USER ID)`, user 2026-1
 that's filled if the other is blank/NA), IP Address, Operating System
 (last scan, see below), Description (AM
 status, handover date, remark, period - things AE has no field for).
-- Asset Name = `<branch no>-<device>-<serial>`; no serial ->
-  `...-NOSN-<row id>`; a repeated name (duplicate serial) gets `-2`, `-3`, so
-  every name in a file is unique. Unresolved branch -> `UNRESOLVED-...`.
+- Asset Name = `<branch no>-<device>-<serial>`; no serial -> `...-NOSN-<code>`
+  (a hash of asset_key + model + user, so it stays the same next month - row
+  ids don't); several rows with one name get `-2`, `-3`, worked out over all
+  current rows in a fixed order, whatever the filter / sort
+  (`asset_names`). Unresolved branch -> `UNRESOLVED-...`.
 - Asset State (`assetexplorer.STATE_MAP`): USING LOCAL / USING INTERNET /
   USING LOCAL/ITN / RENTAL / RGM / GM / DGM / CGM -> In Use; WAREHOUSE,
   RETURN -> In Store; BROKEN -> In Repair; LOST, SENT TO KOREAN -> Disposed;

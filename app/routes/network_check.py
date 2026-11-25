@@ -37,7 +37,7 @@ from ..exports import build_workbook, dated_download_name, match_text, send_work
 from ..paths import safe_filename
 from ..queries import get_branch, get_branches_with_current_assets, get_current_assets, os_coverage
 from ..scanner import DEFAULT_CONCURRENCY, TargetParseError, parse_targets, run_scan
-from ..text_utils import serial_key as _normalize_serial
+from ..text_utils import normalize_user_id, serial_key as _normalize_serial
 
 bp = Blueprint("network_check", __name__, url_prefix="/network-check")
 
@@ -473,6 +473,9 @@ def apply_updates(scan_id: str):
                     continue
                 old_value = row[column]
                 conn.execute(f"UPDATE asset_items SET {column} = ? WHERE id = ?", (new_value, asset_id))
+                if column == "user_id_raw":
+                    conn.execute("UPDATE asset_items SET user_id_norm = ? WHERE id = ?",
+                                 (normalize_user_id(new_value)[1], asset_id))
                 conn.execute(
                     "INSERT INTO logsdb.network_check_log "
                     "(applied_at, branch_no, ip, asset_id, field, old_value, new_value, applied_by) "
@@ -485,6 +488,8 @@ def apply_updates(scan_id: str):
                     for r in snapshot.get(ip, []):
                         if r["id"] == asset_id:
                             r[column] = new_value
+                            if column == "user_id_raw":
+                                r["user_id_norm"] = normalize_user_id(new_value)[1]
         conn.commit()
     finally:
         conn.close()

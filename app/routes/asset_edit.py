@@ -12,13 +12,15 @@ from ..queries import (
     ASSET_SORTS,
     UNRESOLVED_BRANCH_FILTER,
     department_options,
+    derived_cells,
     find_current_duplicate_serials,
     get_branches_with_current_assets,
+    get_current_assets,
     has_unresolved_current_assets,
     inline_edit_suggestions,
     search_assets,
 )
-from ..text_utils import normalize_handover_date, usage_duration_years
+from ..text_utils import normalize_handover_date, normalize_user_id, usage_duration_years
 
 bp = Blueprint("asset_edit", __name__, url_prefix="/assets")
 
@@ -179,10 +181,11 @@ def export_assetexplorer():
     try:
         as_of, _ = listing.as_of_month(conn)
         rows, _total = search_assets(conn, filters, sort=current_sort(ASSET_SORTS), as_of=as_of)
+        names = assetexplorer.asset_names(get_current_assets(conn, as_of=as_of))
     finally:
         conn.close()
     name = dated_download_name(f"assetexplorer_import_as_of_{as_of}" if as_of else "assetexplorer_import")
-    return Response(assetexplorer.build_csv(rows), mimetype="text/csv",
+    return Response(assetexplorer.build_csv(rows, names), mimetype="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="{name[:-5]}.csv"'})
 
 
@@ -278,6 +281,10 @@ def _apply_edit(conn, asset, values: dict, performed_by: str) -> list[tuple[str,
     messages = []
     set_clause = ", ".join(f"{f} = ?" for f in EDITABLE_FIELDS)
     conn.execute(f"UPDATE asset_items SET {set_clause} WHERE id = ?", [*(values[f] for f in EDITABLE_FIELDS), asset_id])
+    if values["user_id_raw"] != (asset["user_id_raw"] or ""):
+        # what Lookup, User History and the Department go by
+        conn.execute("UPDATE asset_items SET user_id_norm = ? WHERE id = ?",
+                     (normalize_user_id(values["user_id_raw"])[1], asset_id))
     changed = {}
     for field_name in EDITABLE_FIELDS:
         old_value, new_value = asset[field_name] or "", values[field_name]
@@ -334,10 +341,13 @@ def edit_cell(asset_id):
             "SELECT ai.*, b.eng_name AS branch_eng_name FROM asset_items ai "
             "LEFT JOIN branches b ON b.branch_no = ai.branch_no WHERE ai.id = ?", (asset_id,)
         ).fetchone()
+        derived = derived_cells(conn, asset_id)
     finally:
         conn.close()
     return jsonify({
         "ok": True,
+        "user_department": derived["user_department"] or "",
+        "os": asset_os.os_text(derived),
         "value": row[field_name] or "",
         "branch_label": row["branch_eng_name"] or row["branch_dept"] or "",
         "usage_duration": usage_duration_years(row["handover_date"]),

@@ -228,8 +228,8 @@
         <td data-field="position" data-value="{{ a['position'] or '' }}">{{ a['position'] }}</td>
         <td data-field="handover_date" data-value="{{ a['handover_date'] or '' }}">{{ a['handover_date'] }}</td>
         <td data-derived="usage_duration">{{ a['handover_date'] | usage_duration }}</td>
-        <td{% if a['user_department'] %} title="Branch code {{ a['user_branch_no'] }}"{% endif %}>{{ a['user_department'] or '' }}</td>
-        <td{% if a['os_name'] %} title="{{ a['os_source'] }}{% if a['os_seen_at'] %} {{ a['os_seen_at'] }}{% endif %}{% if a['os_hostname'] %} - {{ a['os_hostname'] }}{% endif %}{% if a['os_arch'] %} - {{ a['os_arch'] }}{% endif %}"{% endif %}>{% if a['os_name'] %}{{ a['os_name'] }}{% if a['os_version'] %} ({{ a['os_version'] }}){% endif %}{% endif %}</td>
+        <td data-derived="user_department"{% if a['user_department'] %} title="Branch code {{ a['user_branch_no'] }}"{% endif %}>{{ a['user_department'] or '' }}</td>
+        <td data-derived="os"{% if a['os_name'] %} title="{{ a['os_source'] }}{% if a['os_seen_at'] %} {{ a['os_seen_at'] }}{% endif %}{% if a['os_hostname'] %} - {{ a['os_hostname'] }}{% endif %}{% if a['os_arch'] %} - {{ a['os_arch'] }}{% endif %}"{% endif %}>{% if a['os_name'] %}{{ a['os_name'] }}{% if a['os_version'] %} ({{ a['os_version'] }}){% endif %}{% endif %}</td>
         <td>{{ a['period'] }}</td>
         <td>{% if not as_of %}<a class="btn secondary" href="{{ url_for('asset_edit.edit', asset_id=a['id'], next=request.full_path) }}">Edit</a>{% endif %}</td>
       </tr>
