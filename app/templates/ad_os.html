@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}OS from AD - Asset Management Tool{% endblock %}
+{% block content %}
+<h1>Network Check</h1>
+{% include "_network_tabs.html" %}
+<div class="panel">
+  <h2>Operating systems from Active Directory</h2>
+  <p class="muted">
+    Fills in the OS of PCs that a network scan has not read - switched-off ones too. AD has no serials, so each
+    computer is matched to a PC by hostname (the name a scan read together with the serial), then by IP, then by a
+    serial written in its AD name / description. A scan's own result is kept, unless the computer was used in
+    AD after that scan. Nothing is changed in AD. Read as <code>{{ scan_identity }}</code>.
+  </p>
+  <form method="post" action="{{ url_for('network_check.read_ad') }}">
+    <div class="field-row">
+      <div>
+        <label for="domain">Domain / DC</label>
+        <input type="text" id="domain" name="domain" maxlength="250" placeholder="blank = this computer's domain">
+      </div>
+      <div>
+        <label><input type="checkbox" name="by_ip" value="1" checked> Match by IP</label>
+        <p class="muted" style="margin-top:0.3rem;">Computer's IP (from AD or its DNS name) &rarr; the one current PC
+          with that IP in the reports. A stale DNS record or a wrong IP puts the OS on another PC, so these show as
+          "AD (by IP)", never replace a scan, and an IP shared by several PCs is skipped. Takes a few minutes.</p>
+      </div>
+    </div>
+    <div class="actions"><button type="submit"{% if 'network_check' not in current_permissions %} disabled{% endif %}>Read from AD</button></div>
+  </form>
+  {% for j in active_jobs %}
+  <p class="muted">Reading now: {{ j.label }} ({{ j.owner }})</p>
+  {% endfor %}
+</div>
+
+<div class="panel">
+  <h2>Coverage</h2>
+  <p class="muted">Current PCs, notebooks and server PCs by where their OS comes from.
+    {% if read_at %}Last AD read: {{ read_at }}.{% else %}AD has not been read yet.{% endif %}</p>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>OS source</th><th>PCs</th></tr></thead>
+    <tbody>
+      {% for label, n in coverage %}<tr><td>{{ label }}</td><td>{{ n }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p><a href="{{ url_for('asset_edit.index', os=no_os) }}">Show the PCs with no OS in Manage Assets</a></p>
+</div>
+{% endblock %}

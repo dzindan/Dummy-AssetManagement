@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import re
 
+from .asset_os import AD_MATCH_LABELS, NO_OS, PC_DEVICE_NAMES
 from .db import REPORT_SOURCE_BRANCH
 
 # --- Branch network vs Head Office (Dashboard / CCTV Dashboard scope) -------
@@ -477,6 +478,37 @@ ASSET_SORTS = {
     "period": ("ib.period", False),
 }
 
+_IS_PC = "bk.device_name IN ({})".format(", ".join(f"'{d}'" for d in PC_DEVICE_NAMES))
+# Only PCs: a monitor/printer row carrying a PC's serial by mistake has no OS.
+_OS_JOIN = (f"LEFT JOIN asset_os ao ON {_IS_PC} AND ao.serial_key = SERIAL_KEY(bk.serial_tag)"
+            f" LEFT JOIN asset_os_ad ad ON {_IS_PC} AND ad.serial_key = SERIAL_KEY(bk.serial_tag)")
+# A scan beats AD, unless the computer was used in AD after that scan (then
+# AD's is newer) - never for a match by IP only.
+_AD_WINS = ("(ad.serial_key IS NOT NULL AND (ao.serial_key IS NULL"
+            " OR (ad.matched_by != 'ip' AND ad.last_logon > ao.scanned_at)))")
+_OS_NAME = f"CASE WHEN {_AD_WINS} THEN ad.os_name ELSE ao.os_name END"
+_OS_SOURCE = (f"CASE WHEN {_AD_WINS} THEN CASE ad.matched_by"
+              + "".join(f" WHEN '{k}' THEN '{v}'" for k, v in AD_MATCH_LABELS.items())
+              + " END WHEN ao.serial_key IS NOT NULL THEN 'Scan' END")
+_OS_FILTER = f"CASE WHEN {_IS_PC} THEN COALESCE({_OS_NAME}, '{NO_OS}') END"
+_OS_SELECT = (f", {_OS_NAME} AS os_name, {_OS_SOURCE} AS os_source,"
+              f" CASE WHEN {_AD_WINS} THEN ad.os_version ELSE ao.os_version END AS os_version,"
+              f" CASE WHEN {_AD_WINS} THEN '' ELSE ao.os_arch END AS os_arch,"
+              f" CASE WHEN {_AD_WINS} THEN ad.hostname ELSE ao.hostname END AS os_hostname,"
+              f" CASE WHEN {_AD_WINS} THEN ad.last_logon ELSE ao.scanned_at END AS os_seen_at")
+
+ASSET_SORTS["os"] = (f"{_OS_NAME} || ' ' || CASE WHEN {_AD_WINS} THEN COALESCE(ad.os_version, '')"
+                     " ELSE COALESCE(ao.os_version, '') END", False)
+
+
+def os_coverage(conn) -> list[tuple[str, int]]:
+    """Current PCs per OS source, for the OS from AD page."""
+    counts = {r["src"] or NO_OS: r["n"] for r in conn.execute(
+        f"SELECT {_OS_SOURCE} AS src, COUNT(*) AS n FROM ({CURRENT_ASSETS_CTE}) bk {_OS_JOIN}"
+        f" WHERE {_IS_PC} GROUP BY 1")}
+    return [(label, counts.get(label, 0)) for label in ("Scan", *AD_MATCH_LABELS.values(), NO_OS)]
+
+
 CCTV_SORTS = {
     "branch": ("COALESCE(b.eng_name, bk.branch_dept)", False),
     "device": ("bk.device_name", False),
@@ -498,7 +530,8 @@ CCTV_SORTS = {
 
 
 def _search_current(conn, cte: str, filters: dict, in_filters: list[tuple[str, str, bool]], q_columns: list[str],
-                    page: int, per_page: int | None, sort: str, sorts: dict):
+                    page: int, per_page: int | None, sort: str, sorts: dict,
+                    extra_join: str = "", extra_select: str = ""):
     """The filter / count / page / sort shared by search_assets and search_cctv
     over the current rows (`cte`). `in_filters`: (filters key, column, compare
     upper-cased) for the multi-select filters, in order; `q_columns`: the
@@ -534,6 +567,7 @@ def _search_current(conn, cte: str, filters: dict, in_filters: list[tuple[str, s
     FROM ({cte}) bk
     LEFT JOIN branches b ON b.branch_no = bk.branch_no
     LEFT JOIN import_batches ib ON ib.id = bk.batch_id
+    {extra_join}
     {where_sql}
     """
 
@@ -545,7 +579,7 @@ def _search_current(conn, cte: str, filters: dict, in_filters: list[tuple[str, s
         query_params += [per_page, max(page - 1, 0) * per_page]
     rows = conn.execute(
         f"""
-        SELECT bk.*, b.eng_name AS branch_eng_name, ib.period AS period
+        SELECT bk.*, b.eng_name AS branch_eng_name, ib.period AS period{extra_select}
         {from_sql}
         ORDER BY {order_by_sql(sort, sorts, _DEFAULT_LIST_ORDER)}
         {limit_sql}
@@ -578,10 +612,10 @@ def search_assets(conn, filters: dict, page: int = 1, per_page: int | None = Non
     return _search_current(
         conn, assets_cte(as_of), filters,
         [("device_name", "bk.device_name", False), ("model_device", "bk.model_device", False),
-         ("status", "bk.status", True), ("period", "ib.period", False)],
+         ("status", "bk.status", True), ("period", "ib.period", False), ("os", _OS_FILTER, False)],
         ["bk.serial_tag", "bk.model_device", "bk.full_name", "bk.user_id_raw", "bk.branch_dept", "bk.remark",
          "bk.position"],
-        page, per_page, sort, ASSET_SORTS)
+        page, per_page, sort, ASSET_SORTS, _OS_JOIN, _OS_SELECT)
 
 
 def get_branches_with_current_cctv(conn, as_of: str = ""):

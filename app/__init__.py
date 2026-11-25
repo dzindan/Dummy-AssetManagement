@@ -171,9 +171,10 @@ def create_app(csrf: bool = True) -> Flask:
     from . import throttle
     for t in throttle.ALL:  # a fresh app (the tests make many) starts with no failures counted
         t.reset()
-    from .jobs import cucm_runner, runner
+    from .jobs import ad_runner, cucm_runner, runner
     runner.reset()
     cucm_runner.reset()
+    ad_runner.reset()
     from .routes import network_check
     network_check.reset_scans()
 

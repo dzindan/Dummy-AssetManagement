@@ -1,0 +1,4 @@
+<nav class="settings-tabs">
+  <a href="{{ url_for('network_check.index') }}" class="{{ 'active' if request.endpoint == 'network_check.index' else '' }}">Network scan</a>
+  <a href="{{ url_for('network_check.ad_os_page') }}" class="{{ 'active' if request.endpoint == 'network_check.ad_os_page' else '' }}">OS from AD</a>
+</nav>

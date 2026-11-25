@@ -105,7 +105,8 @@ class ExportRouteSmokeTests(unittest.TestCase):
             resp,
             expected_header=(
                 "Branch", "Device", "User ID", "Full Name", "IP", "Model", "Serial/Service Tag",
-                "Status", "Remark", "Position", "Handover Date", "Usage Duration", "Period",
+                "Status", "Remark", "Position", "Handover Date", "Usage Duration", "OS",
+                "OS Source", "OS Seen At", "Period",
             ),
             expected_rows=1,
         )

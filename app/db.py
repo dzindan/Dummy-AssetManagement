@@ -12,7 +12,7 @@ from .paths import (
     read_json,
     write_json_atomic,
 )
-from .text_utils import clean_ip, normalize_handover_date, normalize_user_id, strip_bank_prefix
+from .text_utils import serial_key, clean_ip, normalize_handover_date, normalize_user_id, strip_bank_prefix
 
 # Machine-local settings can never live in data.db (that's exactly what gets
 # copied to a new machine) or in settings.json (portable, meant to travel) -
@@ -275,6 +275,30 @@ CREATE TABLE IF NOT EXISTS disposal_checks (
     counts_json TEXT,
     notes_json TEXT,
     items_json TEXT NOT NULL
+);
+
+-- Operating system per PC serial, from Network Check scans - see app/asset_os.py.
+CREATE TABLE IF NOT EXISTS asset_os (
+    serial_key TEXT PRIMARY KEY,
+    serial TEXT,
+    hostname TEXT,
+    ip TEXT,
+    os_name TEXT NOT NULL,
+    os_version TEXT,
+    os_arch TEXT,
+    install_date TEXT,
+    scanned_at TEXT NOT NULL
+);
+
+-- The same from Active Directory, replaced by every read - see app/ad_os.py.
+CREATE TABLE IF NOT EXISTS asset_os_ad (
+    serial_key TEXT PRIMARY KEY,
+    hostname TEXT,
+    os_name TEXT NOT NULL,
+    os_version TEXT,
+    last_logon TEXT,
+    matched_by TEXT NOT NULL,
+    read_at TEXT NOT NULL
 );
 
 -- Login/permissions. Deliberately named `accounts`/`roles`, not `users` -
@@ -668,6 +692,7 @@ def get_connection() -> sqlite3.Connection:
     # Vietnamese text missed lowercase rows. Python's str.upper() handles
     # every Unicode letter; overriding the built-in keeps every query as is.
     conn.create_function("UPPER", 1, _unicode_upper, deterministic=True)
+    conn.create_function("SERIAL_KEY", 1, serial_key, deterministic=True)
     # Audit-trail tables (import_log/activity_log/network_check_log) live in
     # their own physical file so they can be copied to a new machine
     # independently of the business data - see LOGS_SCHEMA's docstring. They

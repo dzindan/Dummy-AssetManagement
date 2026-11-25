@@ -145,6 +145,7 @@ function renderResults(results) {
         <td>${r.alive ? "Alive" : "No response"}</td>
         <td>${escapeHtml(r.hostname) || "-"}</td>
         <td>${hardwareCell(null, c.live_mac)}</td>
+        <td>${escapeHtml(c.live_os) || "-"}</td>
         <td>${hardwareCell(null, c.live_pc_serial)}</td>
         <td>${importedCell(r.ip, UPDATABLE_FIELDS[0], c, c.imported_pc_serial)}</td>
         <td>${matchBadge(c.pc_match)}</td>

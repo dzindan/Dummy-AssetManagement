@@ -142,3 +142,8 @@ def usage_duration_years(handover_date: str) -> str:
     if years < 0:
         return ""
     return f"{years} year" if years == 1 else f"{years} years"
+
+
+def serial_key(value) -> str:
+    """A serial as compared between reports and live scans: A-Z0-9 only."""
+    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())

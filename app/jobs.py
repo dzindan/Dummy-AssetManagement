@@ -168,3 +168,5 @@ runner = JobRunner("Import")
 # requests a minute, so two people auto-split scanning at once would both
 # hit its limit. Kept apart from imports, so a scan never waits for one.
 cucm_runner = JobRunner("CUCM scan")
+# Reading operating systems from AD (app/ad_os.py).
+ad_runner = JobRunner("AD read")

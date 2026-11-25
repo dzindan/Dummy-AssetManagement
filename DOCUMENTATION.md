@@ -739,7 +739,8 @@ Columns are named after AE's fields: Asset Name, Product Type (= Device),
 Product (= Model; blank -> "<DEVICE> - UNKNOWN MODEL"), Serial Number,
 Asset State, Site (= branch English name), Department (= Position, the HO
 Dept text), User (= `FULL NAME(USER ID)`, user 2026-11-23; just the one
-that's filled if the other is blank/NA), IP Address, Description (AM
+that's filled if the other is blank/NA), IP Address, Operating System
+(last scan, see below), Description (AM
 status, handover date, remark, period - things AE has no field for).
 - Asset Name = `<branch no>-<device>-<serial>`; no serial ->
   `...-NOSN-<row id>`; a repeated name (duplicate serial) gets `-2`, `-3`, so
@@ -751,6 +752,38 @@ status, handover date, remark, period - things AE has no field for).
 - Product Types / Sites must exist in AE (or be created by its import) -
   AM's device names are used as-is, not AE's built-in type names.
 Tests: `tests/test_assetexplorer_export.py`.
+
+**Operating System** (user's request 2026-11-25, `app/asset_os.py`): the
+reports carry no OS, so Network Check reads it - Caption / Version /
+OSArchitecture / InstallDate from the `Win32_OperatingSystem` query
+`scanner.get_uptime` already made - and shows it in its results and Excel.
+Each machine whose PC serial was read too ("Scan hardware" on) is saved as
+it is scanned in `asset_os`, one row per `text_utils.serial_key(serial)`:
+the latest successful read, never blanked by a failed scan. It is not an
+`asset_items` column because every import replaces those rows;
+`queries.search_assets` joins it by serial (SQL function `SERIAL_KEY`,
+PC / NOTEBOOK / SERVER PC rows only). Placeholder serials ("To be filled by
+O.E.M.", ...) are not saved - they would match many PCs. Manage Assets has
+the column "OS" (read-only, sortable, source and date in the tooltip)
+and an OS filter, with "(No OS info)" for PCs without one; both exports
+carry it. An As of month view also shows the latest known OS, not the OS
+back then. The standalone IP Scanner (IS) has not been given the same change yet.
+Tests: `tests/test_asset_os.py`.
+
+**OS from AD** (2026-11-25, `app/ad_os.py`, Network Check > OS from AD tab,
+permission `network_check`): reads every enabled computer with an
+operatingSystem through ADSI as the app's own account (read-only, no RSAT;
+Domain / DC optional) and replaces `asset_os_ad`. AD has no serials, so a
+computer is matched to a PC's serial by (1) the machine name WMI gave with
+that serial in a scan, (2) unless "Match by IP" is unticked: its IP
+(ipHostNumber / an IP in the description, else its DNS name) -> the only
+current PC with that IP and the only recent (45 days) computer there - the
+bank's AD has only hostname and IP to go by (user, 2026-11-25), (3) a
+current PC's serial (7+ characters with a digit) in its name / description /
+serialNumber - only if exactly one. `search_assets`
+shows the scan's OS, unless AD's lastLogonTimestamp is after the scan (not
+for IP matches). A failed or empty read keeps the previous one. Runs as a
+background job (`jobs.ad_runner`). Tests: `tests/test_ad_os.py`.
 
 **Sorting tables** (user's request 2026-10-06): every table header can be
 clicked to sort - ascending, descending, then back to the original order,

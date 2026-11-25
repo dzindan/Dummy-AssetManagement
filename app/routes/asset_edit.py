@@ -1,7 +1,7 @@
 from flask import Blueprint, Response, flash, jsonify, redirect, render_template, request, url_for
 
 from . import listing
-from .. import assetexplorer
+from .. import asset_os, assetexplorer
 from ..auth import current_username, require_permission, safe_next
 from ..db import (apply_hand_fix, delete_asset_rows, delete_summary, get_connection, log_activity,
                   prune_stale_unmapped, sync_cctv_asset_link)
@@ -52,6 +52,7 @@ def _filters_from_args() -> dict:
         "model_device": [v for v in request.args.getlist("model_device") if v],
         "status": [v for v in request.args.getlist("status") if v],
         "period": [v for v in request.args.getlist("period") if v],
+        "os": [v for v in request.args.getlist("os") if v],
         "q": request.args.get("q", "").strip(),
     }
 
@@ -104,6 +105,7 @@ def index():
         period_options = [p for p in as_of_options if not as_of or p <= as_of]
         selected_branch = listing.selected_branch(conn, filters)
         suggestions = inline_edit_suggestions(conn)
+        os_options = asset_os.os_options(conn)
     finally:
         conn.close()
 
@@ -121,6 +123,7 @@ def index():
         model_options=model_options,
         status_options=status_options,
         period_options=period_options,
+        os_options=os_options,
         as_of=as_of,
         as_of_options=as_of_options,
         selected_branch=selected_branch,
@@ -150,7 +153,10 @@ def export():
     columns = (
         [("Branch", lambda r: r["branch_eng_name"] or r["branch_dept"])]
         + list(ASSET_ROW_COLUMNS)
-        + [("Period", lambda r: r["period"])]
+        + [("OS", asset_os.os_text),
+           ("OS Source", lambda r: r["os_source"] or ""),
+           ("OS Seen At", lambda r: r["os_seen_at"] or ""),
+           ("Period", lambda r: r["period"])]
     )
     wb = build_asset_rows_workbook(rows, sheet_title=f"Assets as of {as_of}" if as_of else "Manage Assets",
                                    columns=columns)

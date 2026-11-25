@@ -107,6 +107,21 @@
         </div>
       </div>
       <div>
+        <label title="From Network Check scans, then Active Directory (matched by serial).">OS</label>
+        <div class="multiselect">
+          <button type="button" class="multiselect-toggle">
+            <span>{% if filters.os %}{{ filters.os | length }} selected{% else %}All OS{% endif %}</span>
+            <span class="nav-caret">&#9662;</span>
+          </button>
+          <div class="multiselect-panel">
+            <input type="text" class="multiselect-search" placeholder="Type to filter...">
+            {% for o in os_options %}
+            <label><input type="checkbox" name="os" value="{{ o }}" {{ 'checked' if o in filters.os else '' }}> {{ o }}</label>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      <div>
         {{ as_of_ui.select(as_of, as_of_options) }}
       </div>
       <div class="search-field">
@@ -124,7 +139,7 @@
       <div class="filter-actions">
         {% if sort %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
         <button type="submit">Filter</button>
-        {% if filters.branch_no or filters.device_name or filters.model_device or filters.status or filters.period or filters.q or as_of %}
+        {% if filters.branch_no or filters.device_name or filters.model_device or filters.status or filters.period or filters.os or filters.q or as_of %}
         <a class="btn secondary" href="{{ url_for('asset_edit.index') }}">Clear</a>
         {% endif %}
       </div>
@@ -179,7 +194,7 @@
     <thead>
       <tr>
         <th><input type="checkbox" data-select-all="asset-row-checkbox"></th>
-        {{ sorthdr.th('Branch', 'branch') }}{{ sorthdr.th('Device', 'device') }}{{ sorthdr.th('User ID', 'user_id') }}{{ sorthdr.th('Full Name', 'full_name') }}{{ sorthdr.th('IP', 'ip') }}{{ sorthdr.th('Model', 'model') }}{{ sorthdr.th('Serial/Tag', 'serial') }}{{ sorthdr.th('Status', 'status') }}{{ sorthdr.th('Remark', 'remark') }}{{ sorthdr.th('Position', 'position') }}{{ sorthdr.th('Handover Date', 'handover') }}{{ sorthdr.th('Usage Duration', 'usage') }}{{ sorthdr.th('Period', 'period') }}<th></th>
+        {{ sorthdr.th('Branch', 'branch') }}{{ sorthdr.th('Device', 'device') }}{{ sorthdr.th('User ID', 'user_id') }}{{ sorthdr.th('Full Name', 'full_name') }}{{ sorthdr.th('IP', 'ip') }}{{ sorthdr.th('Model', 'model') }}{{ sorthdr.th('Serial/Tag', 'serial') }}{{ sorthdr.th('Status', 'status') }}{{ sorthdr.th('Remark', 'remark') }}{{ sorthdr.th('Position', 'position') }}{{ sorthdr.th('Handover Date', 'handover') }}{{ sorthdr.th('Usage Duration', 'usage') }}{{ sorthdr.th('OS', 'os') }}{{ sorthdr.th('Period', 'period') }}<th></th>
       </tr>
     </thead>
     <tbody>
@@ -198,11 +213,12 @@
         <td data-field="position" data-value="{{ a['position'] or '' }}">{{ a['position'] }}</td>
         <td data-field="handover_date" data-value="{{ a['handover_date'] or '' }}">{{ a['handover_date'] }}</td>
         <td data-derived="usage_duration">{{ a['handover_date'] | usage_duration }}</td>
+        <td{% if a['os_name'] %} title="{{ a['os_source'] }}{% if a['os_seen_at'] %} {{ a['os_seen_at'] }}{% endif %}{% if a['os_hostname'] %} - {{ a['os_hostname'] }}{% endif %}{% if a['os_arch'] %} - {{ a['os_arch'] }}{% endif %}"{% endif %}>{% if a['os_name'] %}{{ a['os_name'] }}{% if a['os_version'] %} ({{ a['os_version'] }}){% endif %}{% endif %}</td>
         <td>{{ a['period'] }}</td>
         <td>{% if not as_of %}<a class="btn secondary" href="{{ url_for('asset_edit.edit', asset_id=a['id'], next=request.full_path) }}">Edit</a>{% endif %}</td>
       </tr>
       {% else %}
-      <tr><td colspan="15" class="muted">No assets match these filters.</td></tr>
+      <tr><td colspan="16" class="muted">No assets match these filters.</td></tr>
       {% endfor %}
     </tbody>
   </table>

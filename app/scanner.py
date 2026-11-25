@@ -194,9 +194,18 @@ def get_sessions(ip: str) -> dict:
 
 _UPTIME_PS_SCRIPT = (
     "$ErrorActionPreference = 'Stop'; "
-    "$os = Get-WmiObject -Class Win32_OperatingSystem -ComputerName '{ip}'; "
-    "$os.ConvertToDateTime($os.LastBootUpTime).ToString('yyyy-MM-ddTHH:mm:ss')"
+    "$os = Get-WmiObject -Class Win32_OperatingSystem -ComputerName '__IP__'; "
+    "$inst = ''; if ($os.InstallDate) { $inst = $os.ConvertToDateTime($os.InstallDate).ToString('yyyy-MM-dd') }; "
+    "@{ boot = $os.ConvertToDateTime($os.LastBootUpTime).ToString('yyyy-MM-ddTHH:mm:ss'); "
+    "hostname = $os.CSName; name = $os.Caption; version = $os.Version; arch = $os.OSArchitecture; install_date = $inst } "
+    "| ConvertTo-Json -Compress"
 )
+
+
+def _clean_os_name(caption: str) -> str:
+    """"Microsoft Windows 10 Pro " -> "Windows 10 Pro"; (R)/(TM) marks dropped."""
+    text = re.sub(r"\(R\)|\(TM\)|[\u00ae\u2122]", "", caption or "", flags=re.IGNORECASE)
+    return re.sub(r"^Microsoft\s+", "", " ".join(text.split()))
 
 
 def _format_uptime(delta_seconds: float) -> str:
@@ -233,11 +242,12 @@ def _validate_ip(ip: str) -> Optional[str]:
 
 
 def get_uptime(ip: str) -> dict:
-    """Run Get-WmiObject Win32_OperatingSystem to compute uptime from LastBootUpTime."""
+    """Run Get-WmiObject Win32_OperatingSystem: uptime from LastBootUpTime,
+    plus the OS itself ("os": name/version/arch/install_date, None when unread)."""
     invalid = _validate_ip(ip)
     if invalid:
-        return {"ok": False, "error": invalid, "boot_time": None, "uptime": None}
-    script = _UPTIME_PS_SCRIPT.format(ip=ip)
+        return {"ok": False, "error": invalid, "boot_time": None, "uptime": None, "os": None}
+    script = _UPTIME_PS_SCRIPT.replace("__IP__", ip)
     code, out = _run(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
         timeout=WMI_TIMEOUT_S,
@@ -245,12 +255,15 @@ def get_uptime(ip: str) -> dict:
     text = out.strip()
     if code != 0 or not text:
         message = text.splitlines()[-1] if text else "No response"
-        return {"ok": False, "error": message, "boot_time": None, "uptime": None}
+        return {"ok": False, "error": message, "boot_time": None, "uptime": None, "os": None}
 
     try:
-        boot_time = datetime.fromisoformat(text.splitlines()[-1].strip())
-    except ValueError:
-        return {"ok": False, "error": f"Unrecognized date format: {text}", "boot_time": None, "uptime": None}
+        # _run() appends stderr to stdout - take the JSON line itself
+        raw = json.loads(next(line for line in text.splitlines() if line.startswith("{")))
+        boot_time = datetime.fromisoformat(raw["boot"])
+    except (StopIteration, ValueError, KeyError, TypeError):
+        return {"ok": False, "error": f"Unrecognized output: {text[:200]}", "boot_time": None, "uptime": None,
+                "os": None}
 
     delta = (datetime.now() - boot_time).total_seconds()
     return {
@@ -258,6 +271,13 @@ def get_uptime(ip: str) -> dict:
         "error": None,
         "boot_time": boot_time.strftime("%Y-%m-%d %H:%M:%S"),
         "uptime": _format_uptime(delta),
+        "os": {
+            "hostname": (raw.get("hostname") or "").strip(),
+            "name": _clean_os_name(raw.get("name")),
+            "version": (raw.get("version") or "").strip(),
+            "arch": (raw.get("arch") or "").strip(),
+            "install_date": raw.get("install_date") or "",
+        },
     }
 
 

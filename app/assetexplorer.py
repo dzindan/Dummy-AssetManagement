@@ -24,6 +24,8 @@ from typing import Any, Iterable
 
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 
+from .asset_os import os_text
+
 COLUMNS = [
     "Asset Name",
     "Product Type",
@@ -34,6 +36,7 @@ COLUMNS = [
     "Department",
     "User",
     "IP Address",
+    "Operating System",
     "Description",
 ]
 
@@ -121,6 +124,7 @@ def build_rows(rows: Iterable) -> list[list[str]]:
             "" if _text(r["position"]).upper() == "NA" else _text(r["position"]),
             user_field(r["full_name"], user),
             "" if _text(r["ip"]).upper() == "NA" else _text(r["ip"]),
+            os_text(r),
             _description(r),
         ])
     return out

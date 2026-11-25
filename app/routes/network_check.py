@@ -23,19 +23,21 @@ from __future__ import annotations
 
 import datetime as dt
 import getpass
+import logging
 import os
-import re
 import threading
 import uuid
 
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, url_for
 
+from .. import ad_os, asset_os, jobs
 from ..auth import current_username, require_permission
-from ..db import get_connection
+from ..db import get_connection, log_activity
 from ..exports import build_workbook, dated_download_name, match_text, send_workbook
 from ..paths import safe_filename
-from ..queries import get_branch, get_branches_with_current_assets, get_current_assets
+from ..queries import get_branch, get_branches_with_current_assets, get_current_assets, os_coverage
 from ..scanner import DEFAULT_CONCURRENCY, TargetParseError, parse_targets, run_scan
+from ..text_utils import serial_key as _normalize_serial
 
 bp = Blueprint("network_check", __name__, url_prefix="/network-check")
 
@@ -105,12 +107,8 @@ def _latest_own_scan_id() -> str:
         mine = [(st["started_at"], sid) for sid, st in _SCANS.items() if st["owner"] == me]
     return max(mine)[1] if mine else ""
 
-PC_DEVICE_NAMES = {"PC", "NOTEBOOK", "SERVER PC"}
+PC_DEVICE_NAMES = set(asset_os.PC_DEVICE_NAMES)
 MONITOR_DEVICE_NAMES = {"LCD"}
-
-
-def _normalize_serial(value: str) -> str:
-    return re.sub(r"[^A-Z0-9]", "", (value or "").upper())
 
 
 def _live_pc_serial(hardware: dict | None) -> str:
@@ -170,6 +168,33 @@ def _live_mac(hardware: dict | None) -> str:
     if not mac_address.get("ok"):
         return ""
     return mac_address.get("mac") or ""
+
+
+def _live_os(live: dict) -> dict:
+    return (live.get("uptime") or {}).get("os") or {}
+
+
+def _live_os_text(live: dict) -> str:
+    info = _live_os(live)
+    text = asset_os.os_text({"os_name": info.get("name"), "os_version": info.get("version")})
+    return f"{text} {info['arch']}" if text and info.get("arch") else text
+
+
+def _save_os(live: dict) -> None:
+    """Keep the scanned PC's OS (see app/asset_os.py). Never lets a database
+    problem end the scan."""
+    serial = _live_pc_serial(live.get("hardware"))
+    if not serial or not _live_os(live):
+        return
+    try:
+        conn = get_connection()
+        try:
+            if asset_os.save_scan(conn, serial, live["ip"], live.get("hostname") or "", _live_os(live)):
+                conn.commit()
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("Network Check: could not save the OS of %s", live.get("ip"))
 
 
 UPDATABLE_FIELDS = {
@@ -263,6 +288,8 @@ def compare_result(live: dict, imported_rows: list) -> dict:
         # No MAC address is imported anywhere in the asset data, so this is
         # informational only (like hostname) - not something to MATCH/MISMATCH.
         "live_mac": _live_mac(live.get("hardware")),
+        # Not in the reports either; saved per serial by _save_os().
+        "live_os": _live_os_text(live),
     }
 
 
@@ -370,6 +397,7 @@ def start_scan():
 
     def worker():
         def on_result(result: dict):
+            _save_os(result)
             with _LOCK:
                 state_ref["results"].append(result)
                 state_ref["done"] += 1
@@ -499,6 +527,7 @@ NETWORK_CHECK_COLUMNS = [
     ("Alive", lambda r: "Yes" if r["alive"] else "No"),
     ("Hostname", lambda r: r.get("hostname") or ""),
     ("MAC Address", lambda r: r["compare"]["live_mac"]),
+    ("Operating System", lambda r: r["compare"]["live_os"]),
     ("PC Serial (Live)", lambda r: r["compare"]["live_pc_serial"]),
     ("PC Serial (Imported)", lambda r: r["compare"]["imported_pc_serial"]),
     ("PC Match", lambda r: match_text(r["compare"]["pc_match"])),
@@ -515,7 +544,7 @@ NETWORK_CHECK_COLUMNS = [
     ("User (Imported)", lambda r: r["compare"]["imported_user"]),
     ("User Match", lambda r: match_text(r["compare"]["user_match"])),
 ]
-NETWORK_CHECK_COLUMN_WIDTHS = [16, 8, 20, 18, 22, 22, 12, 22, 22, 14, 22, 22, 12, 22, 22, 14, 22, 22, 12]
+NETWORK_CHECK_COLUMN_WIDTHS = [16, 8, 20, 18, 36, 22, 22, 12, 22, 22, 14, 22, 22, 12, 22, 22, 14, 22, 22, 12]
 
 
 @bp.route("/scan/<scan_id>/export.xlsx")
@@ -570,3 +599,97 @@ def export_log():
         conn.close()
     wb = build_workbook("Network Check Log", NETWORK_CHECK_LOG_EXPORT_COLUMNS, rows)
     return send_workbook(wb, dated_download_name("network_check_log"))
+
+
+# --- OS from AD (app/ad_os.py) ---------------------------------------------------
+
+
+@bp.route("/ad-os")
+def ad_os_page():
+    conn = get_connection()
+    try:
+        coverage = os_coverage(conn)
+        read_at = conn.execute("SELECT MAX(read_at) AS t FROM asset_os_ad").fetchone()["t"]
+    finally:
+        conn.close()
+    return render_template("ad_os.html", active_page="network_check", coverage=coverage, read_at=read_at,
+                           scan_identity=scan_identity(), no_os=asset_os.NO_OS,
+                           active_jobs=jobs.ad_runner.active())
+
+
+def _read_ad(domain: str, by_ip: bool, owner: str) -> dict:
+    try:
+        computers = ad_os.read_computers(domain)
+    except ad_os.AdReadError as exc:
+        return {"category": "error", "message": f"Could not read AD: {exc} Nothing was changed."}
+    if not computers:
+        # an account with no rights to see them looks like this - keep the last read
+        return {"category": "error", "message": "AD answered with no computers. Nothing was changed."}
+    conn = get_connection()
+    try:
+        pcs, hosts = ad_os.current_pcs(conn), ad_os.scanned_hosts(conn)
+    finally:
+        conn.close()
+    found = ad_os.match(computers, hosts, pcs, by_ip)  # DNS may take minutes: no connection held
+    conn = get_connection()
+    try:
+        ad_os.save(conn, found)
+        ways = [how for _c, how in found.values()]
+        counts = ", ".join(f"{ways.count(k)} by {k}" for k in asset_os.AD_MATCH_LABELS)
+        message = f"Read {len(computers)} computers from AD, matched {len(found)} PCs ({counts})."
+        log_activity(conn, "Network Check", "Read OS from AD", owner, target=domain or "own domain",
+                     new_value=message)
+        conn.commit()
+    finally:
+        conn.close()
+    return {"category": "success", "message": message}
+
+
+@bp.route("/ad-os/read", methods=["POST"])
+@require_permission("network_check")
+def read_ad():
+    domain = request.form.get("domain", "").strip()
+    by_ip = request.form.get("by_ip") == "1"
+    owner = current_username()
+    if any(j.owner == owner for j in jobs.ad_runner.active()):
+        flash("You already have an AD read running.", "error")
+        return redirect(url_for("network_check.ad_os_page"))
+    label = f"OS from AD ({domain or 'own domain'}{', without IP' if not by_ip else ''})"
+    job = jobs.ad_runner.submit(current_app._get_current_object(), "ad_os", label, owner,
+                                lambda: _read_ad(domain, by_ip, owner),
+                                background=current_app.config.get("AD_READ_BACKGROUND", True))
+    return redirect(url_for("network_check.ad_job", job_id=job.id))
+
+
+@bp.route("/ad-os/jobs/<int:job_id>")
+@require_permission("network_check")
+def ad_job(job_id):
+    job = jobs.ad_runner.get(job_id)
+    if job is None:
+        flash("That AD read isn't kept any more (the app was restarted).", "info")
+        return redirect(url_for("network_check.ad_os_page"))
+    if job.owner != current_username():
+        abort(404)
+    if not job.done:
+        return render_template(
+            "import_job.html", active_page="network_check", job=job,
+            running=next((j for j in jobs.ad_runner.active() if j.status == "running"), None),
+            ahead=jobs.ad_runner.ahead_of(job), noun="scan", running_title="Reading Active Directory…",
+            waiting_title="Waiting to read AD…", back_name="Network Check > OS from AD",
+            status_url=url_for("network_check.ad_job_status", job_id=job.id),
+            job_url=url_for("network_check.ad_job", job_id=job.id),
+            why_one_at_a_time="AD reads run one at a time.")
+    if job.status == "error":
+        flash(f"Reading AD failed: {job.error}", "error")
+    else:
+        flash(job.outcome["message"], job.outcome["category"])
+    return redirect(url_for("network_check.ad_os_page"))
+
+
+@bp.route("/ad-os/jobs/<int:job_id>/status")
+@require_permission("network_check")
+def ad_job_status(job_id):
+    job = jobs.ad_runner.get(job_id)
+    if job is None or job.owner != current_username():
+        return {"error": "not found"}, 404
+    return {"status": job.status, "ahead": jobs.ad_runner.ahead_of(job)}

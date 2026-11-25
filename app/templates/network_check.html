@@ -2,6 +2,7 @@
 {% block title %}Network Check - Asset Management Tool{% endblock %}
 {% block content %}
 <h1>Network Check</h1>
+{% include "_network_tabs.html" %}
 <p class="muted">
   Pings every IP address recorded against a branch's current assets - or, in "By IP range" mode, every IP in a
   free-typed range/CIDR - pulls each live machine's PC serial/model, monitor serial/model, and currently logged-on
@@ -41,7 +42,7 @@
       </div>
       <div>
         <label><input type="checkbox" id="include_hardware" name="include_hardware" checked> Scan hardware</label>
-        <p class="muted" style="margin-top:0.3rem;">PC/monitor serial, MAC, CPU, RAM. Uncheck for a faster scan (hostname/session/uptime only).</p>
+        <p class="muted" style="margin-top:0.3rem;">PC/monitor serial, MAC, CPU, RAM. Uncheck for a faster scan (hostname/session/uptime/OS only) - the OS then shows here but is not saved to Manage Assets, which needs the PC serial.</p>
       </div>
     </div>
     <div class="field-row" id="branch-field">
@@ -93,6 +94,7 @@
         <th>Alive</th>
         <th>Hostname</th>
         <th>MAC Address</th>
+        <th>Operating System</th>
         <th>PC Serial (Live)</th>
         <th>PC Serial (Imported)</th>
         <th>PC Match</th>

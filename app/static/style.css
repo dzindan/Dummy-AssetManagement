@@ -815,6 +815,18 @@ th.client-sortable .sort-arrow, .tree-sort-bar .sort-arrow { font-size: 0.8em; o
   font-weight: 500;
   cursor: pointer;
 }
+/* Tabs that are pages of their own (_network_tabs.html). */
+.settings-tabs a {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.35rem 0.9rem;
+  font-weight: 500;
+  text-decoration: none;
+}
+.settings-tabs a:hover { border-color: var(--brand); }
+.settings-tabs a.active { background: var(--brand); border-color: var(--brand); color: #fff; }
 .settings-tabs button:hover { border-color: var(--brand); }
 .settings-tabs button.active { background: var(--brand); border-color: var(--brand); color: #fff; }
 .settings-tabs button.active .badge { background: #fff; }
