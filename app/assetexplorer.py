@@ -6,8 +6,8 @@ Choices the user made:
   No serial -> "<branch>-<device>-NOSN-<row id>"; a name already used in
   the same file (duplicate serial) gets "-2", "-3"... so every row stays
   importable (AssetExplorer needs unique asset names).
-- Site = branch English name, Department = AM's Position column (the HO
-  Dept text), User = "FULL NAME(USER ID)".
+- Site = branch English name, Department = the unit of the user's branch
+  code in the Aither ID list (user, 2026-11-25), else AM's Position column, User = "FULL NAME(USER ID)".
 - One CSV for the rows on screen (same filters / As of month as Manage
   Assets), with Product Type = AM's Device.
 
@@ -61,11 +61,20 @@ STATE_MAP = {
 }
 
 # Serial cells that mean "no serial" in branch reports.
-_NO_SERIAL = {"", "NA", "N/A", "-", "NONE", "NO", "KHÔNG CÓ"}
+_NO_SERIAL = {"", "NA", "N/A", "N/AA", "NN/A", "NONE", "NO", "KHÔNG CÓ"}
 
 
 def _text(value: Any) -> str:
-    return ILLEGAL_CHARACTERS_RE.sub("", str(value or "")).strip()
+    # one line: line breaks inside a cell can break AE's CSV import
+    return " ".join(ILLEGAL_CHARACTERS_RE.sub("", str(value or "")).split())
+
+
+def _has_serial(serial: str) -> bool:
+    """False for blanks, N/A variants and remarks ("MẤT SERI", "LOST OF
+    SERVICE TAG": several words without a digit)."""
+    if serial.upper() in _NO_SERIAL or not any(ch.isalnum() for ch in serial):
+        return False
+    return any(ch.isdigit() for ch in serial) or " " not in serial
 
 
 def asset_state(status: str, user_id: str) -> str:
@@ -77,7 +86,7 @@ def asset_state(status: str, user_id: str) -> str:
 
 def _clean(value: Any) -> str:
     text = _text(value)
-    return "" if text.upper() == "NA" else text
+    return "" if text.upper() in ("NA", "N/A") or not any(ch.isalnum() for ch in text) else text
 
 
 def user_field(full_name: Any, user_id: Any) -> str:
@@ -106,7 +115,7 @@ def build_rows(rows: Iterable) -> list[list[str]]:
         device = _text(r["device_name"]) or "UNKNOWN DEVICE"
         branch = _text(r["branch_no"]) or "UNRESOLVED"
         serial = _text(r["serial_tag"])
-        has_serial = serial.upper() not in _NO_SERIAL
+        has_serial = _has_serial(serial)
         name = f"{branch}-{device}-{serial if has_serial else 'NOSN-' + str(r['id'])}"
         n = used.get(name.upper(), 0) + 1
         used[name.upper()] = n
@@ -121,7 +130,7 @@ def build_rows(rows: Iterable) -> list[list[str]]:
             serial if has_serial else "",
             asset_state(r["status"], user),
             _text(r["branch_eng_name"]) or _text(r["branch_dept"]),
-            "" if _text(r["position"]).upper() == "NA" else _text(r["position"]),
+            _clean(r["user_department"]) or _clean(r["position"]),
             user_field(r["full_name"], user),
             "" if _text(r["ip"]).upper() == "NA" else _text(r["ip"]),
             os_text(r),

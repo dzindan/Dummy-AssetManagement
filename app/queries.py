@@ -483,9 +483,9 @@ _IS_PC = "bk.device_name IN ({})".format(", ".join(f"'{d}'" for d in PC_DEVICE_N
 _OS_JOIN = (f"LEFT JOIN asset_os ao ON {_IS_PC} AND ao.serial_key = SERIAL_KEY(bk.serial_tag)"
             f" LEFT JOIN asset_os_ad ad ON {_IS_PC} AND ad.serial_key = SERIAL_KEY(bk.serial_tag)")
 # A scan beats AD, unless the computer was used in AD after that scan (then
-# AD's is newer) - never for a match by IP only.
+# AD's is newer) - only for a match by hostname, the sure one.
 _AD_WINS = ("(ad.serial_key IS NOT NULL AND (ao.serial_key IS NULL"
-            " OR (ad.matched_by != 'ip' AND ad.last_logon > ao.scanned_at)))")
+            " OR (ad.matched_by = 'hostname' AND ad.last_logon > ao.scanned_at)))")
 _OS_NAME = f"CASE WHEN {_AD_WINS} THEN ad.os_name ELSE ao.os_name END"
 _OS_SOURCE = (f"CASE WHEN {_AD_WINS} THEN CASE ad.matched_by"
               + "".join(f" WHEN '{k}' THEN '{v}'" for k, v in AD_MATCH_LABELS.items())
@@ -499,6 +499,26 @@ _OS_SELECT = (f", {_OS_NAME} AS os_name, {_OS_SOURCE} AS os_source,"
 
 ASSET_SORTS["os"] = (f"{_OS_NAME} || ' ' || CASE WHEN {_AD_WINS} THEN COALESCE(ad.os_version, '')"
                      " ELSE COALESCE(ao.os_version, '') END", False)
+
+# A user's department = the unit of their branch code in the Aither ID list
+# (users.branch_no -> branches). One Aither user per row at most: two user
+# numbers can share a normalized one (an enabled one first).
+NO_DEPARTMENT = "(No department)"
+_DEPT_JOIN = """ LEFT JOIN users du ON du.user_no = (
+        SELECT x.user_no FROM users x WHERE x.user_no_norm = bk.user_id_norm AND bk.user_id_norm != ''
+        ORDER BY x.status, x.updated_at DESC, x.user_no LIMIT 1)
+    LEFT JOIN branches db ON db.branch_no = du.branch_no"""
+_DEPT_NAME = "COALESCE(NULLIF(db.eng_name, ''), db.local_name)"
+_DEPT_SELECT = f", du.branch_no AS user_branch_no, {_DEPT_NAME} AS user_department"
+_DEPT_FILTER = f"COALESCE(NULLIF({_DEPT_NAME}, ''), '{NO_DEPARTMENT}')"
+ASSET_SORTS["department"] = (_DEPT_NAME, False)
+
+
+def department_options(conn) -> list[str]:
+    """Departments of the Aither users, for Manage Assets' filter."""
+    return [NO_DEPARTMENT] + [r["name"] for r in conn.execute(
+        f"SELECT DISTINCT {_DEPT_NAME} AS name FROM users du JOIN branches db ON db.branch_no = du.branch_no"
+        f" WHERE COALESCE({_DEPT_NAME}, '') != '' ORDER BY 1")]
 
 
 def os_coverage(conn) -> list[tuple[str, int]]:
@@ -612,10 +632,11 @@ def search_assets(conn, filters: dict, page: int = 1, per_page: int | None = Non
     return _search_current(
         conn, assets_cte(as_of), filters,
         [("device_name", "bk.device_name", False), ("model_device", "bk.model_device", False),
-         ("status", "bk.status", True), ("period", "ib.period", False), ("os", _OS_FILTER, False)],
+         ("status", "bk.status", True), ("period", "ib.period", False), ("os", _OS_FILTER, False),
+         ("department", _DEPT_FILTER, False)],
         ["bk.serial_tag", "bk.model_device", "bk.full_name", "bk.user_id_raw", "bk.branch_dept", "bk.remark",
          "bk.position"],
-        page, per_page, sort, ASSET_SORTS, _OS_JOIN, _OS_SELECT)
+        page, per_page, sort, ASSET_SORTS, _OS_JOIN + _DEPT_JOIN, _OS_SELECT + _DEPT_SELECT)
 
 
 def get_branches_with_current_cctv(conn, as_of: str = ""):

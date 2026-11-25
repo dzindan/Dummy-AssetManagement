@@ -136,6 +136,31 @@ class PageTests(unittest.TestCase):
         wb.save(path)
         import_asset_report(path, source_label=os.path.basename(path), period="2026-03")
 
+    def test_not_in_use_pcs_match_neither_name_nor_ip(self):
+        self._scan("ABC1234567", "P1", "2026-11-10 08:00:00")
+        conn = get_connection()
+        try:
+            conn.execute("UPDATE asset_items SET status = 'WAREHOUSE'")
+            conn.commit()
+            self.assertEqual(ad_os.scanned_hosts(conn), {})
+            self.assertEqual({ip for _k, ip in ad_os.current_pcs(conn)}, {""})
+        finally:
+            conn.close()
+        self.assertIn("none could be matched", self._read([comp("P1", "Windows 11 Pro", ip="10.0.0.1")]))
+        self.assertEqual(self._shown()["ABC1234567"], ("Windows 10 Pro", "Scan"))
+
+    def test_serial_text_never_replaces_a_scan_and_long_names(self):
+        self._scan("ABC1234567", "VERYLONGHOSTNAM", "2026-11-10 08:00:00")
+        self._read([comp("X", "Windows 11 Pro", description="ABC1234567")])
+        self.assertEqual(self._shown()["ABC1234567"], ("Windows 10 Pro", "Scan"))
+        self._read([comp("VERYLONGHOSTNAME01", "Windows 11 Pro")])
+        self.assertEqual(self._shown()["ABC1234567"], ("Windows 11 Pro", "AD (by hostname)"))
+
+    def test_nothing_matched_keeps_the_last(self):
+        self._read([comp("P1", description="ABC1234567")])
+        self.assertIn("The last read was kept", self._read([comp("ZZ")]))
+        self.assertEqual(self._shown()["ABC1234567"][0], "Windows 10 Pro")
+
     def _read(self, computers, **form):
         form.setdefault("by_ip", "1")
         kw = {"side_effect": computers} if isinstance(computers, Exception) else {"return_value": computers}

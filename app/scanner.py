@@ -202,6 +202,16 @@ _UPTIME_PS_SCRIPT = (
 )
 
 
+def _os_info(raw: dict) -> dict:
+    return {
+        "hostname": (raw.get("hostname") or "").strip(),
+        "name": _clean_os_name(raw.get("name")),
+        "version": (raw.get("version") or "").strip(),
+        "arch": (raw.get("arch") or "").strip(),
+        "install_date": raw.get("install_date") or "",
+    }
+
+
 def _clean_os_name(caption: str) -> str:
     """"Microsoft Windows 10 Pro " -> "Windows 10 Pro"; (R)/(TM) marks dropped."""
     text = re.sub(r"\(R\)|\(TM\)|[\u00ae\u2122]", "", caption or "", flags=re.IGNORECASE)
@@ -271,19 +281,22 @@ def get_uptime(ip: str) -> dict:
         "error": None,
         "boot_time": boot_time.strftime("%Y-%m-%d %H:%M:%S"),
         "uptime": _format_uptime(delta),
-        "os": {
-            "hostname": (raw.get("hostname") or "").strip(),
-            "name": _clean_os_name(raw.get("name")),
-            "version": (raw.get("version") or "").strip(),
-            "arch": (raw.get("arch") or "").strip(),
-            "install_date": raw.get("install_date") or "",
-        },
+        "os": _os_info(raw),
     }
 
 
 _HARDWARE_PS_SCRIPT = r"""
 $ip = '__IP__'
 $result = @{}
+
+# Also here, not only in get_uptime: with 20 hosts at once that call's short
+# timeout runs out now and then while this one still reads the serial.
+try {
+    $os = Get-WmiObject -Class Win32_OperatingSystem -ComputerName $ip -ErrorAction Stop
+    $inst = ''; if ($os.InstallDate) { $inst = $os.ConvertToDateTime($os.InstallDate).ToString('yyyy-MM-dd') }
+    $result.os = [PSCustomObject]@{hostname=$os.CSName; name=$os.Caption; version=$os.Version;
+                                   arch=$os.OSArchitecture; install_date=$inst}
+} catch { }
 
 try {
     $csys = Get-WmiObject -Class Win32_ComputerSystem -ComputerName $ip -ErrorAction Stop
@@ -431,6 +444,7 @@ def get_hardware(ip: str) -> dict:
         "cpu": _wmi_category(raw, "cpu"),
         "memory": _wmi_category(raw, "memory"),
         "mac_address": _mac_result(raw),
+        "os": _os_info(raw["os"]) if raw.get("os") else None,
     }
 
 

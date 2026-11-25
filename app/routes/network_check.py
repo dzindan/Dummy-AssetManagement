@@ -171,7 +171,7 @@ def _live_mac(hardware: dict | None) -> str:
 
 
 def _live_os(live: dict) -> dict:
-    return (live.get("uptime") or {}).get("os") or {}
+    return (live.get("uptime") or {}).get("os") or (live.get("hardware") or {}).get("os") or {}
 
 
 def _live_os_text(live: dict) -> str:
@@ -631,6 +631,9 @@ def _read_ad(domain: str, by_ip: bool, owner: str) -> dict:
     finally:
         conn.close()
     found = ad_os.match(computers, hosts, pcs, by_ip)  # DNS may take minutes: no connection held
+    if not found:
+        return {"category": "error", "message": f"Read {len(computers)} computers from AD, but none could be matched "
+                                                 "to a PC. The last read was kept."}
     conn = get_connection()
     try:
         ad_os.save(conn, found)

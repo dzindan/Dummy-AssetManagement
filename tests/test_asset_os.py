@@ -46,6 +46,16 @@ class ScannerTests(unittest.TestCase):
             self.assertFalse(result["ok"])
             self.assertIsNone(result["os"])
 
+    def test_hardware_reads_os_too(self):
+        raw = {"system": {"Serial": "S1"}, "os": {"name": "Microsoft Windows 10 Pro", "version": "10.0.19045",
+                                                  "arch": "64-bit", "install_date": "2024-01-02", "hostname": "H"}}
+        with mock.patch.object(scanner, "_run", return_value=(0, json.dumps(raw))):
+            self.assertEqual(scanner.get_hardware("10.0.0.1")["os"], {**WIN10, "hostname": "H"})
+        with mock.patch.object(scanner, "_run", return_value=(0, json.dumps({"system": {}}))):
+            self.assertIsNone(scanner.get_hardware("10.0.0.1")["os"])
+        # the uptime call timed out: the hardware one's answer counts
+        self.assertEqual(network_check._live_os({"uptime": {"ok": False, "os": None}, "hardware": {"os": WIN10}}), WIN10)
+
     def test_clean_name(self):
         self.assertEqual(scanner._clean_os_name("Microsoft® Windows Server® 2008 Standard "),
                          "Windows Server 2008 Standard")

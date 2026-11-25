@@ -27,6 +27,7 @@ import re
 import socket
 from concurrent.futures import ThreadPoolExecutor
 
+from .assetexplorer import asset_state
 from .asset_os import PC_DEVICE_NAMES, usable_serial_key
 from .queries import get_current_assets
 from .scanner import _clean_os_name, _run
@@ -134,7 +135,8 @@ def read_computers(domain: str = "") -> list[dict]:
 
 
 def _short(name: str) -> str:
-    return (name or "").split(".")[0].strip().upper()
+    # 15: what Windows itself gives (NetBIOS), AD may have the full name
+    return (name or "").split(".")[0].strip().upper()[:15]
 
 
 def _texts_serials(c: dict) -> set[str]:
@@ -227,15 +229,25 @@ def match(computers: list[dict], hosts: dict[str, str], pcs: list[tuple[str, str
 
 def current_pcs(conn) -> list[tuple[str, str]]:
     """(serial key, ip) of every current PC; the key is "" without a usable
-    serial - it still counts as standing at its IP."""
-    return [(usable_serial_key(r["serial_tag"]), r["ip"] or "")
+    serial - it still counts as standing at its IP. A PC not in use (in the
+    warehouse, broken...) keeps its old IP in the reports while another one
+    uses it, so its IP is left out."""
+    return [(usable_serial_key(r["serial_tag"]), (r["ip"] or "") if _in_use(r) else "")
             for r in get_current_assets(conn) if r["device_name"] in PC_DEVICE_NAMES]
 
 
+def _in_use(row) -> bool:
+    return asset_state(row["status"], row["user_id_raw"]) == "In Use"
+
+
 def scanned_hosts(conn) -> dict[str, str]:
-    """Machine name -> serial key, the latest scan of a name winning."""
+    """Machine name -> serial key, the latest scan of a name winning. Only
+    PCs in use: a replaced one's name usually goes to the new PC."""
+    in_use = {usable_serial_key(r["serial_tag"]) for r in get_current_assets(conn)
+              if r["device_name"] in PC_DEVICE_NAMES and _in_use(r)}
     return {_short(r["hostname"]): r["serial_key"] for r in conn.execute(
-        "SELECT hostname, serial_key FROM asset_os WHERE hostname != '' ORDER BY scanned_at")}
+        "SELECT hostname, serial_key FROM asset_os WHERE hostname != '' ORDER BY scanned_at")
+        if r["serial_key"] in in_use}
 
 
 def save(conn, found: dict[str, tuple[dict, str]]) -> None:

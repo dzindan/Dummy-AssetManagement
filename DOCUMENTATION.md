@@ -737,8 +737,8 @@ month) as a UTF-8 CSV for ManageEngine AssetExplorer's *Assets -> Import
 from CSV* (`app/assetexplorer.py`, route `asset_edit.export_assetexplorer`).
 Columns are named after AE's fields: Asset Name, Product Type (= Device),
 Product (= Model; blank -> "<DEVICE> - UNKNOWN MODEL"), Serial Number,
-Asset State, Site (= branch English name), Department (= Position, the HO
-Dept text), User (= `FULL NAME(USER ID)`, user 2026-11-23; just the one
+Asset State, Site (= branch English name), Department (= the user's
+department, see below; else Position), User (= `FULL NAME(USER ID)`, user 2026-11-23; just the one
 that's filled if the other is blank/NA), IP Address, Operating System
 (last scan, see below), Description (AM
 status, handover date, remark, period - things AE has no field for).
@@ -752,6 +752,15 @@ status, handover date, remark, period - things AE has no field for).
 - Product Types / Sites must exist in AE (or be created by its import) -
   AM's device names are used as-is, not AE's built-in type names.
 Tests: `tests/test_assetexplorer_export.py`.
+
+**Department of a user** (user's request 2026-11-25): the unit of the
+user's branch code in the Aither ID list (`users.branch_no` ->
+`branches.eng_name`, joined by `user_id_norm` in `queries.search_assets`) -
+nothing stored, so a new ID import updates it. Manage Assets: Department
+column (branch code in the tooltip), sort and filter ("(No department)" =
+no such user); Excel adds User Branch Code + Department. It is the person's
+unit, not the row's Branch (HO report rows sit on 8061). An As of month view
+shows today's. Tests: `tests/test_user_department.py`.
 
 **Operating System** (user's request 2026-11-25, `app/asset_os.py`): the
 reports carry no OS, so Network Check reads it - Caption / Version /
@@ -777,12 +786,14 @@ Domain / DC optional) and replaces `asset_os_ad`. AD has no serials, so a
 computer is matched to a PC's serial by (1) the machine name WMI gave with
 that serial in a scan, (2) unless "Match by IP" is unticked: its IP
 (ipHostNumber / an IP in the description, else its DNS name) -> the only
-current PC with that IP and the only recent (45 days) computer there - the
+current PC *in use* with that IP (one in the warehouse keeps its old IP in
+the reports) and the only recent (45 days) computer there - the
 bank's AD has only hostname and IP to go by (user, 2026-11-25), (3) a
 current PC's serial (7+ characters with a digit) in its name / description /
 serialNumber - only if exactly one. `search_assets`
-shows the scan's OS, unless AD's lastLogonTimestamp is after the scan (not
-for IP matches). A failed or empty read keeps the previous one. Runs as a
+shows the scan's OS, unless AD's lastLogonTimestamp is after the scan (only
+for hostname matches, which are limited to PCs in use). A failed read, or
+one that matches nothing, keeps the previous one. Runs as a
 background job (`jobs.ad_runner`). Tests: `tests/test_ad_os.py`.
 
 **Sorting tables** (user's request 2026-10-06): every table header can be

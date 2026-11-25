@@ -14,7 +14,7 @@ import openpyxl
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import create_app  # noqa: E402
-from app.assetexplorer import COLUMNS, asset_state, user_field  # noqa: E402
+from app.assetexplorer import COLUMNS, _has_serial, _text, asset_state, user_field  # noqa: E402
 from app.auth import create_account  # noqa: E402
 from app.db import get_connection  # noqa: E402
 from app.importer import import_asset_report  # noqa: E402
@@ -99,6 +99,14 @@ class AssetExplorerExportTests(unittest.TestCase):
         self.assertEqual(user_field("", "123"), "123")
         self.assertEqual(user_field("FLOOR 1", "NA"), "FLOOR 1")
         self.assertEqual(user_field("NA", ""), "")
+        self.assertEqual(user_field("-", "-"), "")
+
+    def test_one_line_and_serial_remarks(self):
+        self.assertEqual(_text(" a\r\n b\tc "), "a b c")
+        for s in ("", "//", "-", "N/A", "n/aa", "MẤT SERI", "LOST OF SERVICE TAG"):
+            self.assertFalse(_has_serial(s), s)
+        for s in ("5CD1", "NACVWVZV", "SN 123"):
+            self.assertTrue(_has_serial(s), s)
 
 
 if __name__ == "__main__":

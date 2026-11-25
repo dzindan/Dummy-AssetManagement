@@ -11,6 +11,7 @@ from ..exports import ASSET_ROW_COLUMNS, build_asset_rows_workbook, build_duplic
 from ..queries import (
     ASSET_SORTS,
     UNRESOLVED_BRANCH_FILTER,
+    department_options,
     find_current_duplicate_serials,
     get_branches_with_current_assets,
     has_unresolved_current_assets,
@@ -53,6 +54,7 @@ def _filters_from_args() -> dict:
         "status": [v for v in request.args.getlist("status") if v],
         "period": [v for v in request.args.getlist("period") if v],
         "os": [v for v in request.args.getlist("os") if v],
+        "department": [v for v in request.args.getlist("department") if v],
         "q": request.args.get("q", "").strip(),
     }
 
@@ -106,6 +108,7 @@ def index():
         selected_branch = listing.selected_branch(conn, filters)
         suggestions = inline_edit_suggestions(conn)
         os_options = asset_os.os_options(conn)
+        departments = department_options(conn)
     finally:
         conn.close()
 
@@ -124,6 +127,7 @@ def index():
         status_options=status_options,
         period_options=period_options,
         os_options=os_options,
+        departments=departments,
         as_of=as_of,
         as_of_options=as_of_options,
         selected_branch=selected_branch,
@@ -153,7 +157,9 @@ def export():
     columns = (
         [("Branch", lambda r: r["branch_eng_name"] or r["branch_dept"])]
         + list(ASSET_ROW_COLUMNS)
-        + [("OS", asset_os.os_text),
+        + [("User Branch Code", lambda r: r["user_branch_no"] or ""),
+           ("Department", lambda r: r["user_department"] or ""),
+           ("OS", asset_os.os_text),
            ("OS Source", lambda r: r["os_source"] or ""),
            ("OS Seen At", lambda r: r["os_seen_at"] or ""),
            ("Period", lambda r: r["period"])]
