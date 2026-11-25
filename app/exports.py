@@ -11,7 +11,7 @@ from typing import Any, Iterable, Sequence
 
 import openpyxl
 from flask import Response, send_file
-from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE, Cell
 from openpyxl.chart import LineChart, Reference
 from openpyxl.styles import Font
 from openpyxl.worksheet.worksheet import Worksheet
@@ -59,11 +59,18 @@ def _append(ws: Worksheet, values) -> None:
     when the export is opened - so such cells are kept as text; and the
     control characters an xlsx can't hold (openpyxl would fail the whole
     export on one) are dropped."""
-    values = [ILLEGAL_CHARACTERS_RE.sub("", v) if isinstance(v, str) else v for v in values]
-    ws.append(values)
-    for cell, value in zip(ws[ws.max_row], values):
-        if isinstance(value, str) and value.startswith("="):
-            cell.data_type = "s"
+    row = []
+    for v in values:
+        if isinstance(v, str):
+            v = ILLEGAL_CHARACTERS_RE.sub("", v)
+            if v.startswith("="):
+                # made here, not looked up after the append: ws.max_row reads
+                # every cell, so 17,000 rows took many minutes
+                cell = Cell(ws, row=1, column=1, value=v)
+                cell.data_type = "s"
+                v = cell
+        row.append(v)
+    ws.append(row)
 
 
 def _cell_value(row: Any, key_or_getter) -> Any:

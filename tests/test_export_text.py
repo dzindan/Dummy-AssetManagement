@@ -6,6 +6,7 @@ can't hold failed the whole export."""
 import io
 import os
 import sys
+import time
 import unittest
 
 import openpyxl
@@ -29,6 +30,13 @@ class ExportTextTests(unittest.TestCase):
         self.assertEqual(cell["B2"].value, "PC-01")
         self.assertEqual(cell["C2"].value, 3)
         self.assertEqual(cell["A1"].value, "Remark")
+
+    def test_big_export_is_not_quadratic(self):
+        rows = [{str(c): "=x" if r % 50 == 0 and c == 3 else f"text {r}" for c in range(18)} for r in range(6000)]
+        start = time.monotonic()
+        ws = exports.build_workbook("t", [(str(c), str(c)) for c in range(18)], rows).active
+        self.assertLess(time.monotonic() - start, 15)  # was over a minute
+        self.assertEqual((ws.max_row, ws["D2"].value, ws["D2"].data_type, ws["D3"].value), (6001, "=x", "s", "text 1"))
 
 
 if __name__ == "__main__":

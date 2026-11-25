@@ -2233,6 +2233,11 @@ concurrency.
   spellings not seen before may need a manual alias added in Settings; the
   Cleaning Report flags anything that didn't auto-resolve.
 
+**SQLite in the exe** (2026-11-25): `build.spec` bundles `vendor/sqlite3.dll`
+(3.54.1, from sqlite.org, SHA3-256 checked) instead of Python 3.14's 3.50.4,
+which has the WAL-reset corruption bug (https://sqlite.org/wal.html). Running
+from source still uses Python's own. Drop it once Python ships >= 3.51.3.
+
 ## 9. Troubleshooting a rebuild that "didn't take"
 
 Two footguns to know about if you ever rebuild the exe yourself:

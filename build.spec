@@ -45,6 +45,15 @@ a = Analysis(
     noarchive=False,
 )
 
+# SQLite newer than the one Python 3.14 comes with (3.50.4 has the WAL-reset
+# database corruption bug, fixed in 3.51.3 - https://sqlite.org/wal.html).
+# vendor/sqlite3.dll = 3.54.1 from sqlite.org's sqlite-dll-win-x64-3540100.zip,
+# SHA3-256 checked. Drop this once Python itself ships >= 3.51.3.
+import os
+
+a.binaries = [b for b in a.binaries if os.path.basename(b[0]).lower() != "sqlite3.dll"]
+a.binaries.append(("sqlite3.dll", os.path.join(SPECPATH, "vendor", "sqlite3.dll"), "BINARY"))
+
 pyz = PYZ(a.pure)
 
 exe = EXE(
