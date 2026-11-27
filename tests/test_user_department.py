@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """Department of each user from their Aither branch code (user, 2026-11-25)."""
-import csv
 import io
 import os
 import sys
@@ -104,8 +103,9 @@ class UserDepartmentTests(unittest.TestCase):
             conn.commit()
         finally:
             conn.close()
-        got = {r["Serial Number"]: r["Department"] for r in csv.DictReader(io.StringIO(
-            self.client.get("/assets/export-assetexplorer").data.decode("utf-8-sig")))}
+        from tests.test_assetexplorer_export import read_export
+        got = {r["Org Serial Number"]: r["Department"]
+               for r in read_export(self.client.get("/assets/export-assetexplorer").data)}
         self.assertEqual(got, {"SERIAL1": "RETAIL DEPARTMENT", "SERIAL2": "SERVICE DEPARTMENT",
                                "SERIAL3": "TEXT IN POSITION", "SERIAL4": "TEXT IN POSITION"})
 

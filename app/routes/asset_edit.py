@@ -1,4 +1,4 @@
-from flask import Blueprint, Response, flash, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 
 from . import listing
 from .. import asset_os, assetexplorer
@@ -173,9 +173,9 @@ def export():
 
 @bp.route("/export-assetexplorer")
 def export_assetexplorer():
-    """Same rows as export() (filters + As of month), as a CSV laid out
-    for ManageEngine AssetExplorer's Import from CSV - see
-    app/assetexplorer.py for the field mapping."""
+    """Same rows as export() (filters + As of month), for ManageEngine
+    AssetExplorer's import: one .xlsx with a sheet per AE asset group, laid
+    out like the user's AE template - see app/assetexplorer.py."""
     filters = _filters_from_args()
     conn = get_connection()
     try:
@@ -185,8 +185,7 @@ def export_assetexplorer():
     finally:
         conn.close()
     name = dated_download_name(f"assetexplorer_import_as_of_{as_of}" if as_of else "assetexplorer_import")
-    return Response(assetexplorer.build_csv(rows, names), mimetype="text/csv",
-                    headers={"Content-Disposition": f'attachment; filename="{name[:-5]}.csv"'})
+    return send_workbook(assetexplorer.build_workbook(rows, names), name)
 
 
 @bp.route("/duplicates")

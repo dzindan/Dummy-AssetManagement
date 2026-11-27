@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """Operating System from Network Check scans (user, 2026-11-25): saved per PC
 serial, shown / filtered / exported in Manage Assets."""
-import csv
 import io
 import json
 import os
@@ -146,9 +145,9 @@ class AssetOsTests(unittest.TestCase):
 
     def test_exports(self):
         self._scan("ABC1234", WIN10)
-        rows = list(csv.DictReader(io.StringIO(
-            self.client.get("/assets/export-assetexplorer").data.decode("utf-8-sig"))))
-        self.assertEqual(sorted(r["Operating System"] for r in rows), ["", "", "Windows 10 Pro (10.0.19045)"])
+        from tests.test_assetexplorer_export import read_export
+        rows = read_export(self.client.get("/assets/export-assetexplorer").data)
+        self.assertEqual(sorted(r.get("Operating System", "") for r in rows), ["", "", "Windows 10 Pro (10.0.19045)"])
         ws = openpyxl.load_workbook(io.BytesIO(self.client.get("/assets/export").data)).active
         head = [c.value for c in ws[1]]
         col = head.index("OS")

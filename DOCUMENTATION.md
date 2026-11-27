@@ -731,17 +731,37 @@ those rows can be edited inline. Not done yet: pasting a block copied from Excel
 JS in `app/static/app.js`, styles in `style.css`. Tests:
 `tests/test_inline_edit.py`.
 
-**Export for AssetExplorer** (user's request 2026-11-23): a button next to
-Manage Assets' Export to Excel downloads the same rows (filters, sort, As of
-month) as a UTF-8 CSV for ManageEngine AssetExplorer's *Assets -> Import
-from CSV* (`app/assetexplorer.py`, route `asset_edit.export_assetexplorer`).
-Columns are named after AE's fields: Asset Name, Product Type (= Device),
-Product (= Model; blank -> "<DEVICE> - UNKNOWN MODEL"), Serial Number,
-Asset State, Site (= branch English name), Department (= the user's
-department, see below; else Position), User (= `FULL NAME(USER ID)`, user 2026-11-23; just the one
-that's filled if the other is blank/NA), IP Address, Operating System
-(last scan, see below), Description (AM
-status, handover date, remark, period - things AE has no field for).
+**Export for AssetExplorer** (user's request 2026-11-23; laid out like AE's
+own template since 2026-11-27): a button next to Manage Assets' Export to
+Excel downloads the same rows (filters, sort, As of month) as **one .xlsx
+with a sheet per AssetExplorer asset group**, named and laid out exactly like
+the import template the user exported from their AE (`XLSForAssets.xls`,
+kept out of git): Computers (45 columns), IT Assets (22), Components (18),
+Non IT Assets (18), Mobile Devices (29) - only the groups with rows
+(`app/assetexplorer.py` `GROUP_COLUMNS`, route
+`asset_edit.export_assetexplorer`). The user first asked for CSV; CSV has no
+sheets, so they agreed to the .xlsx.
+- Group by AM device (`DEVICE_GROUP`, user's pick 2026-11-27): PC, NOTEBOOK,
+  SERVER PC -> Computers; TABLET -> Mobile Devices; LCD, KEYBOARD, COMPUTER
+  MOUSE, RAM, SSD, PORTABLE HDD, HEADSET, WEBCAM, SPEAKER, MICROPHONE,
+  ADAPTER, ACCESSORIES -> Components; PAPER SHREDDER, CURRENCY COUNTER,
+  CURRENCY VERIFIER, BANKNOTE BANDING MACHINE, TABLET STAND -> Non IT Assets;
+  anything else (printers, phones, pinpads, CCTV, new devices...) -> IT Assets.
+- Filled: Product (= Model; blank -> "<DEVICE> - UNKNOWN MODEL"), Asset
+  Name, Location (= the report's Branch/Dept text), Asset State, User Login
+  Name (= the user ID, only when it is 3-10 digits - the reports' User ID
+  cells also hold WAREHOUSE, branch names, titles: 242 of 17 488 rows),
+  User (= `FULL NAME(USER ID)`, user 2026-11-23), Department (= the user's
+  department, see below; else Position), Site (= branch English name), Org
+  Serial Number (+ Serial Number on Mobile Devices), IP Address, Operating
+  System (Computers, last scan), Description (AM's device first - the
+  template has no Product Type column, the group is the sheet - then status,
+  handover date, remark, period). Every other template column is there,
+  blank. Mobile Devices has no Description column. Written with
+  `exports._append`: a branch's "=..." stays text, never a formula. A
+  column with nothing to say is a truly empty cell (None) - openpyxl writes
+  "" as an empty string cell, which an importer may read as a bad number /
+  date in Purchase Cost or the date columns.
 - Asset Name = `<branch no>-<device>-<serial>`; no serial -> `...-NOSN-<code>`
   (a hash of asset_key + model + user, so it stays the same next month - row
   ids don't); several rows with one name get `-2`, `-3`, worked out over all
@@ -751,8 +771,9 @@ status, handover date, remark, period - things AE has no field for).
   USING LOCAL/ITN / RENTAL / RGM / GM / DGM / CGM -> In Use; WAREHOUSE,
   RETURN -> In Store; BROKEN -> In Repair; LOST, SENT TO KOREAN -> Disposed;
   anything else -> In Use if the row has a user, else In Store.
-- Product Types / Sites must exist in AE (or be created by its import) -
-  AM's device names are used as-is, not AE's built-in type names.
+- Products / Sites must exist in AE (or be created by its import).
+- Measured on the dev PC's data (17 488 current rows): 2.5 s to read, 6 s to
+  write, 1.9 MB.
 Tests: `tests/test_assetexplorer_export.py`.
 
 **Department of a user** (user's request 2026-11-25): the unit of the

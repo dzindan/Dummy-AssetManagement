@@ -184,7 +184,7 @@
   <div class="actions" style="margin-top:0;">
     <a class="btn secondary" href="{{ url_for('asset_edit.export') }}?{{ request.query_string.decode() }}">Export to Excel</a>
     <a class="btn secondary" href="{{ url_for('asset_edit.export_assetexplorer') }}?{{ request.query_string.decode() }}"
-       title="CSV for ManageEngine AssetExplorer: Assets &rarr; Import from CSV">Export for AssetExplorer</a>
+       title="Excel for ManageEngine AssetExplorer's import: a sheet per AE group (Computers, IT Assets, Components...), laid out like AE's own template">Export for AssetExplorer</a>
     {% if not as_of %}
     <button type="button" class="danger" data-bulk-delete-trigger
       data-bulk-delete-url="{{ url_for('asset_edit.bulk_delete') }}"
