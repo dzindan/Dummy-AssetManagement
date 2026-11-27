@@ -2184,6 +2184,26 @@ concurrency.
 
 ---
 
+### Never to the internet (2026-11-27, security review)
+
+- `app/netguard.py` (`block_outbound_sockets`, from `create_app`): a Python
+  socket in this process connects / sends only to loopback, private (10.x,
+  172.16-31.x, 192.168.x, fc00::/7) or link-local addresses - a name is
+  resolved and every address must be. The internet is refused before a byte
+  goes (a library phoning home, a setting pointed outside). Server settings
+  are checked with `require_internal` when saved.
+- CUCM: `cucm.check_cucm_settings` on save and before every scan - the CUCM
+  host inside the network; RIS WSDL only a local file or `https://` on the
+  CUCM host itself (the session sends the AXL password to every URL zeep
+  fetches); zeep `forbid_entities` / `forbid_external`.
+- `app/safezip.py`: `openpyxl.load_workbook` wrapped - a workbook declaring
+  over 300 MB unpacked (zip bomb) is refused before it is read.
+- Content-Security-Policy on every response (`create_app` `_security_headers`):
+  scripts / images / fetch / form posts / frames only from this app
+  (`'unsafe-inline'` kept: the templates use inline handlers). Checked in
+  Chrome with a ReportingObserver: no violation on 12 pages.
+- `tests/test_netguard.py`.
+
 ## 8. Known limitations
 
 - **Login + role-based permissions.** The app requires a login (`app/auth.py`,

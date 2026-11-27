@@ -20,10 +20,11 @@ import requests
 from requests import Session
 from requests.adapters import HTTPAdapter
 from requests.auth import HTTPBasicAuth
-from zeep import Client
+from zeep import Client, Settings
 from zeep.cache import SqliteCache
 from zeep.transports import Transport
 
+from . import netguard
 from .db import get_connection, get_setting_on, log_activity, set_setting_on
 
 CUCM_PORT = 8443
@@ -64,6 +65,28 @@ def load_scan_prefixes() -> list[str]:
     if not raw.strip():
         return list(DEFAULT_SCAN_PREFIXES)
     return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+_HOST_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?")
+
+
+def check_cucm_settings(ip: str, riswsdl: str) -> None:
+    """CUCM gets the AXL user / password (2026-11-27): it must be a server inside the bank's network,
+    and the WSDL either a file on this PC or CUCM's own (the session sends the password to every URL
+    zeep fetches). Raises ValueError."""
+    ip, riswsdl = (ip or "").strip(), (riswsdl or "").strip()
+    if ip and not _HOST_RE.fullmatch(ip):
+        raise ValueError("CUCM IP / host name: letters, digits, '.' and '-' only.")
+    netguard.require_internal(ip, "CUCM")
+    if not riswsdl:
+        return
+    scheme = re.match(r"([a-z][a-z0-9+.-]*)://", riswsdl, re.I)
+    if scheme and scheme[1].lower() == "file":
+        return
+    if scheme or riswsdl.lower().startswith("//"):
+        if scheme is None or scheme[1].lower() != "https" or netguard.host_of(riswsdl).lower() != ip.lower():
+            raise ValueError("RIS WSDL: a file on this PC, or an https:// address on the CUCM server itself "
+                             f"({ip or 'its IP'}) - the CUCM password is sent with it.")
 
 
 def _effective_riswsdl(config: dict) -> str:
@@ -145,6 +168,7 @@ def cucm_rt_phones(model=255, name="", num="", ip="", max=1000):
     config = get_cucm_config()
     if not (config["ip"] and config["axluser"] and config["axlpassword"]):
         raise CucmNotConfigured("CUCM connection isn't configured yet - set it up in Settings first.")
+    check_cucm_settings(config["ip"], config["riswsdl"])   # a setting saved before this rule
     axluser = config["axluser"]
     axlpassword = config["axlpassword"]
     cucmhost = config["ip"]
@@ -174,7 +198,9 @@ def cucm_rt_phones(model=255, name="", num="", ip="", max=1000):
         session = pinned_session(cucmhost)
         session.auth = HTTPBasicAuth(axluser, axlpassword)
         transport = Transport(cache=SqliteCache(), session=session, timeout=5)
-        client = Client(wsdl=riswsdl, transport=transport)
+        # no XML entities / external references in what CUCM (or a WSDL file) sends (2026-11-27)
+        client = Client(wsdl=riswsdl, transport=transport,
+                        settings=Settings(forbid_entities=True, forbid_external=True))
         client.service._binding_options["address"] = (
             f"https://{cucmhost}:{CUCM_PORT}/realtimeservice2/services/RISService70")
 

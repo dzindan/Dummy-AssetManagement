@@ -13,7 +13,7 @@ from ..auth import (
     require_permission,
     set_security_question,
 )
-from ..cucm import CUCM_SETTING_KEYS, cert_pin, forget_cert_pin, get_cucm_config
+from ..cucm import CUCM_SETTING_KEYS, cert_pin, check_cucm_settings, forget_cert_pin, get_cucm_config
 from ..db import (
     backfill_unmapped,
     get_connection,
@@ -266,6 +266,11 @@ def save_cucm():
     same key/value settings table as everything else here, just prefixed
     (cucm_*) so it can't collide with any other feature's settings."""
     performed_by = current_username()
+    try:
+        check_cucm_settings(request.form.get("ip", ""), request.form.get("riswsdl", ""))
+    except ValueError as exc:
+        flash(f"Not saved: {exc}", "error")
+        return redirect(url_for("settings.index") + "#cucm-settings")
     conn = get_connection()
     try:
         old_ip = get_setting_on(conn, "cucm_ip", "") or ""

@@ -6,6 +6,7 @@ from flask import Flask, Response
 
 from .auth import register_auth
 from .csrf import register_csrf
+from . import netguard, safezip
 from .db import get_setting, init_db, set_setting
 from .handover import form_number
 from .paths import get_app_data_dir_status, get_bundle_dir, is_server_mode
@@ -43,6 +44,8 @@ border-radius:3px}}</style></head><body>
 
 def create_app(csrf: bool = True) -> Flask:
     """csrf=False: only for the tests, which post forms without a page."""
+    netguard.block_outbound_sockets()  # nothing in this process reaches the internet (netguard.py)
+    safezip.install()  # every openpyxl.load_workbook: a zip bomb refused (safezip.py)
     # Explicit, absolute template/static paths (rather than Flask's default
     # root_path-relative lookup) so this keeps working once PyInstaller
     # freezes the app into a single exe, where __file__-based resolution of
@@ -183,6 +186,12 @@ def create_app(csrf: bool = True) -> Flask:
         resp.headers.setdefault("X-Content-Type-Options", "nosniff")
         resp.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
         resp.headers.setdefault("Referrer-Policy", "same-origin")
+        # The browser loads scripts / fetches / images / form posts from this app only (2026-11-27):
+        # an injected script could neither load code from the internet nor send the page's data out.
+        resp.headers.setdefault("Content-Security-Policy", (
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'self' blob: data:; "
+            "form-action 'self'; frame-ancestors 'self'; base-uri 'self'; object-src 'none'"))
         return resp
 
     @app.context_processor
